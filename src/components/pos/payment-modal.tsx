@@ -37,6 +37,7 @@ const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }>
 export function PaymentModal({
   open,
   onOpenChange,
+  locationId,
   lines,
   subtotal,
   discount,
@@ -47,6 +48,7 @@ export function PaymentModal({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  locationId: string;
   lines: CartLine[];
   subtotal: number;
   discount: number;
@@ -98,7 +100,7 @@ export function PaymentModal({
     setBusy(true);
     try {
       const result = await createPosInvoice({
-        locationId: "",
+        locationId,
         customerId: customer?.id ?? null,
         discount,
         items: lines.map((l) => ({
