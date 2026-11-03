@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { F2, F3, F4, Plus, ScanBarcode, Search, Trash2, Truck, UserRound, Zap } from "lucide-react";
+import { Plus, ScanBarcode, Search, Trash2, Truck, UserRound, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
@@ -305,7 +305,8 @@ function PosPage() {
           {/* Quick tiles */}
           <div className="flex flex-wrap gap-1.5">
             <Button variant="outline" size="sm" className="gap-1.5 border-dashed" onClick={() => setQuickOpen(true)}>
-              <Zap className="h-3.5 w-3.5" /> Quick add <F2 label />
+              <Zap className="h-3.5 w-3.5" /> Quick add{" "}
+              <span className="rounded border px-1 font-mono text-[10px]">F2</span>
             </Button>
             {tiles.map((p) => (
               <button
@@ -460,7 +461,8 @@ function PosPage() {
               disabled={lines.length === 0}
               onClick={() => setPayOpen(true)}
             >
-              <F4 label /> Pay & print ({inr(total)})
+              <span className="rounded border border-primary-foreground/40 px-1 font-mono text-xs">F4</span>{" "}
+              Pay & print ({inr(total)})
             </Button>
             <Button
               variant="outline"
