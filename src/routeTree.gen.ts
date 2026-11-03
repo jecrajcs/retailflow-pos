@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CashDrawerRouteImport } from './routes/cash-drawer'
+import { Route as ManagerRouteImport } from './routes/manager'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +23,40 @@ const CashDrawerRoute = CashDrawerRouteImport.update({
   path: '/cash-drawer',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ManagerRoute = ManagerRouteImport.update({
+  id: '/manager',
+  path: '/manager',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/cash-drawer': typeof CashDrawerRoute
+  '/manager': typeof ManagerRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/cash-drawer': typeof CashDrawerRoute
+  '/manager': typeof ManagerRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/cash-drawer': typeof CashDrawerRoute
+  '/manager': typeof ManagerRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/cash-drawer'
+  fullPaths: '/' | '/cash-drawer' | '/manager'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/cash-drawer'
-  id: '__root__' | '/' | '/cash-drawer'
+  to: '/' | '/cash-drawer' | '/manager'
+  id: '__root__' | '/' | '/cash-drawer' | '/manager'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CashDrawerRoute: typeof CashDrawerRoute
+  ManagerRoute: typeof ManagerRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +75,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CashDrawerRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/manager': {
+      id: '/manager'
+      path: '/manager'
+      fullPath: '/manager'
+      preLoaderRoute: typeof ManagerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CashDrawerRoute: CashDrawerRoute,
+  ManagerRoute: ManagerRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
