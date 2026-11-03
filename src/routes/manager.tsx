@@ -347,7 +347,7 @@ function ManagerPage() {
 
 function EnrichmentQueue({ products }: { products: Product[] }) {
   const queryClient = useQueryClient();
-  const [drafts, setDrafts] = useState<Record<string, Partial<Product>>>({});
+  const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
 
   const saveMut = useMutation({
     mutationFn: async (p: Product) => {
@@ -385,7 +385,8 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
     );
   }
 
-  const field = (p: Product, key: keyof Product) => (drafts[p.id]?.[key] as string | undefined) ?? String((p[key] as string | number | null) ?? "");
+  const field = (p: Product, key: keyof Product) =>
+    drafts[p.id]?.[key] ?? String((p[key] as string | number | boolean | null) ?? "");
 
   return (
     <section className="overflow-x-auto rounded-lg border bg-card">
