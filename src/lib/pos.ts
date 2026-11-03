@@ -225,13 +225,13 @@ export async function createPosInvoice(input: {
 }): Promise<InvoiceResult> {
   const { data, error } = await supabase.rpc("create_pos_invoice", {
     p_location_id: input.locationId,
-    p_customer_id: input.customerId,
+    p_customer_id: (input.customerId ?? null) as unknown as string,
     p_discount: input.discount,
     p_items: input.items,
     p_payments: input.payments,
   });
   if (error) throw error;
-  return data as InvoiceResult;
+  return data as unknown as InvoiceResult;
 }
 
 export async function addPayment(input: {
@@ -412,7 +412,7 @@ export async function closeSession(input: {
     p_counted_cash: input.countedCash,
   });
   if (error) throw error;
-  return data as { cash_sales: number; expected_cash: number; difference: number };
+  return data as unknown as { cash_sales: number; expected_cash: number; difference: number };
 }
 
 export function computePaymentStatus(total: number, paid: number): "PAID" | "PARTIALLY_PAID" | "UNPAID" {

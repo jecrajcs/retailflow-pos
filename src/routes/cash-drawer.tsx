@@ -90,9 +90,15 @@ function CashDrawerPage() {
   const since = open?.opened_at ?? startOfToday();
   const { data: payments = [] } = usePaymentsSince(location?.id ?? null, since);
 
-  const byMode = useMemo(() => {
-    const map: Record<string, number> = { CASH: 0, UPI: 0, CARD: 0, CREDIT: 0 };
-    for (const p of payments) map[p.mode] = (map[p.mode] ?? 0) + p.amount;
+  const byMode: { CASH: number; UPI: number; CARD: number; CREDIT: number } = useMemo(() => {
+    const map: { CASH: number; UPI: number; CARD: number; CREDIT: number } = {
+      CASH: 0, UPI: 0, CARD: 0, CREDIT: 0,
+    };
+    for (const p of payments) {
+      if (p.mode === "CASH" || p.mode === "UPI" || p.mode === "CARD" || p.mode === "CREDIT") {
+        map[p.mode] += p.amount;
+      }
+    }
     return map;
   }, [payments]);
 

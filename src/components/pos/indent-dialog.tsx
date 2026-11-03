@@ -46,7 +46,7 @@ export function IndentDialog({
   const [busy, setBusy] = useState(false);
 
   if (!product) return null;
-  const from = fromId || warehouses[0]?.id || locations[0]?.id;
+  const from = fromId || warehouses[0]?.id || locations[0]?.id || "";
 
   const stockAt = (locId: string) =>
     inventory.find((i) => i.product_id === product.id && i.location_id === locId)?.quantity_on_hand ?? 0;
@@ -57,7 +57,7 @@ export function IndentDialog({
   );
 
   async function submit() {
-    if (!from || busy) return;
+    if (!product || !from || busy) return;
     setBusy(true);
     try {
       await requestIndent({

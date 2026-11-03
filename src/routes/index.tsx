@@ -65,7 +65,8 @@ function PosPage() {
   const location = locations.find((l) => l.id === locationId) ?? locations[0];
 
   useEffect(() => {
-    if (!locationId && locations.length > 0) setLocationId(locations[0].id);
+    const first = locations[0];
+    if (!locationId && first) setLocationId(first.id);
   }, [locationId, locations]);
 
   function changeLocation(id: string) {
@@ -213,7 +214,7 @@ function PosPage() {
           .filter(
             (i) =>
               i.location_id === location?.id &&
-              products.find((p) => p.id === i.product_id)?.min_stock > i.quantity_on_hand,
+              (products.find((p) => p.id === i.product_id)?.min_stock ?? 0) > i.quantity_on_hand,
           )
           .map((i) => i.product_id),
       ),
