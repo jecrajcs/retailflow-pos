@@ -409,7 +409,7 @@ export async function closeSession(input: {
     p_session_id: input.sessionId,
     p_cash_in: input.cashIn,
     p_cash_out: input.cashOut,
-    p_counted_cash: input.countedCash,
+    p_counted_cash: (input.countedCash ?? null) as unknown as number,
   });
   if (error) throw error;
   return data as unknown as { cash_sales: number; expected_cash: number; difference: number };

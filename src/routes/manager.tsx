@@ -355,16 +355,16 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
       const { error } = await supabase
         .from("products")
         .update({
-          barcode: d.barcode ?? p.barcode ?? null,
-          sku: d.sku ?? p.sku ?? null,
-          hsn: d.hsn ?? p.hsn ?? null,
-          purchase_cost: Number(d.purchase_cost ?? p.purchase_cost),
-          mrp: Number(d.mrp ?? p.mrp),
-          sale_price: Number(d.sale_price ?? p.sale_price),
-          uom_purchase: d.uom_purchase ?? p.uom_purchase,
-          uom_stock: d.uom_stock ?? p.uom_stock,
-          uom_sale: d.uom_sale ?? p.uom_sale,
-          min_stock: Number(d.min_stock ?? p.min_stock),
+          barcode: d["barcode"] ?? p.barcode ?? null,
+          sku: d["sku"] ?? p.sku ?? null,
+          hsn: d["hsn"] ?? p.hsn ?? null,
+          purchase_cost: Number(d["purchase_cost"] ?? p.purchase_cost),
+          mrp: Number(d["mrp"] ?? p.mrp),
+          sale_price: Number(d["sale_price"] ?? p.sale_price),
+          uom_purchase: d["uom_purchase"] ?? p.uom_purchase,
+          uom_stock: d["uom_stock"] ?? p.uom_stock,
+          uom_sale: d["uom_sale"] ?? p.uom_sale,
+          min_stock: Number(d["min_stock"] ?? p.min_stock),
           enrichment_status: "COMPLETE",
         })
         .eq("id", p.id);
