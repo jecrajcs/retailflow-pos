@@ -507,7 +507,51 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      add_payment: {
+        Args: { p_amount: number; p_invoice_id: string; p_mode: string }
+        Returns: undefined
+      }
+      close_cash_session: {
+        Args: {
+          p_cash_in: number
+          p_cash_out: number
+          p_counted_cash: number
+          p_session_id: string
+        }
+        Returns: Json
+      }
+      create_pos_invoice: {
+        Args: {
+          p_customer_id: string
+          p_discount: number
+          p_items: Json
+          p_location_id: string
+          p_payments: Json
+        }
+        Returns: Json
+      }
+      create_stock_adjustment: {
+        Args: {
+          p_location_id: string
+          p_product_id: string
+          p_quantity: number
+          p_reason: string
+          p_returnable: boolean
+        }
+        Returns: string
+      }
+      open_cash_session: {
+        Args: {
+          p_location_id: string
+          p_opened_by: string
+          p_opening_cash: number
+        }
+        Returns: string
+      }
+      receive_stock_transfer: {
+        Args: { p_transfer_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
