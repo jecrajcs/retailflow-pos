@@ -142,3 +142,22 @@
     color: var(--color-foreground);
   }
 }
+
+/* Thermal receipt printing: only the receipt sheet reaches the printer. */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #thermal-print,
+  #thermal-print * {
+    visibility: visible !important;
+  }
+  #thermal-print {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: var(--receipt-width, 58mm) !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+}
