@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { ScanBarcode, Vault, PackageSearch, type LucideIcon } from "lucide-react";
+import { Boxes, PackageSearch, ScanBarcode, Vault, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const links: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: "/", label: "Billing", icon: ScanBarcode },
+  { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/cash-drawer", label: "Cash Drawer", icon: Vault },
   { to: "/manager", label: "Manager", icon: PackageSearch },
 ];

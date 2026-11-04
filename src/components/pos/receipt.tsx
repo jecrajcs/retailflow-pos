@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { inr } from "@/lib/pos";
 import { cn } from "@/lib/utils";
 
 export interface ReceiptLine {
@@ -13,6 +12,9 @@ export interface ReceiptLine {
   total: number;
 }
 
+export type { ReceiptPayment } from "@/lib/pos";
+import { inr, type ReceiptPayment } from "@/lib/pos";
+
 export interface ReceiptData {
   invoiceNumber: string;
   locationName: string;
@@ -21,7 +23,7 @@ export interface ReceiptData {
   subtotal: number;
   discount: number;
   total: number;
-  payments: Array<{ mode: string; amount: number }>;
+  payments: ReceiptPayment[];
   createdAt: string;
 }
 
@@ -39,6 +41,7 @@ export function ReceiptDialog({
 
   const paid = data.payments.reduce((s, p) => s + p.amount, 0);
   const balance = Math.max(data.total - paid, 0);
+  const changeTotal = data.payments.reduce((s, p) => s + (p.change_given ?? 0), 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -116,15 +119,29 @@ export function ReceiptDialog({
             <span>{inr(data.total)}</span>
           </div>
           {data.payments.map((p, i) => (
-            <div key={i} className="flex justify-between">
-              <span>{p.mode}</span>
-              <span>{inr(p.amount)}</span>
+            <div key={i}>
+              <div className="flex justify-between">
+                <span>{p.mode}{p.tendered ? ` (tendered ${inr(p.tendered)})` : ""}</span>
+                <span>{inr(p.amount)}</span>
+              </div>
+              {(p.change_given ?? 0) > 0 && (
+                <div className="flex justify-between">
+                  <span>Change returned</span>
+                  <span>- {inr(p.change_given!)}</span>
+                </div>
+              )}
             </div>
           ))}
           {balance > 0 && (
             <div className="flex justify-between font-bold">
-              <span>BALANCE DUE</span>
+              <span>BALANCE DUE (UDHAR)</span>
               <span>{inr(balance)}</span>
+            </div>
+          )}
+          {changeTotal > 0 && (
+            <div className="mt-1 border-t border-dashed border-neutral-400 pt-1 text-center">
+              <div className="text-[10px] uppercase">Change to return</div>
+              <div className="text-base font-bold">₹ {inr(changeTotal).replace("₹", "")}</div>
             </div>
           )}
           <div className="my-1 border-t border-dashed border-neutral-400" />

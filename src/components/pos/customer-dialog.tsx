@@ -10,7 +10,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useCustomers, addCustomer, inr, type Customer } from "@/lib/pos";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { inr, useCustomers, addCustomer, type Customer } from "@/lib/pos";
+
+const AGE_GROUPS = ["Child", "Teen", "Adult", "Senior"];
+const GENDERS = ["Male", "Female", "Other"];
 
 export function CustomerDialog({
   open,
@@ -27,6 +37,8 @@ export function CustomerDialog({
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [creditLimit, setCreditLimit] = useState("");
+  const [ageGroup, setAgeGroup] = useState("Adult");
+  const [gender, setGender] = useState("");
   const [busy, setBusy] = useState(false);
 
   const filtered = useMemo(() => {
@@ -45,12 +57,16 @@ export function CustomerDialog({
         name: name.trim(),
         mobile: mobile.trim() || null,
         creditLimit: Number(creditLimit) || 0,
+        ageGroup,
+        gender: gender || null,
       });
       onSelect(created);
       onOpenChange(false);
       setName("");
       setMobile("");
       setCreditLimit("");
+      setAgeGroup("Adult");
+      setGender("");
       setAdding(false);
       setSearch("");
     } finally {
@@ -64,7 +80,7 @@ export function CustomerDialog({
         <DialogHeader>
           <DialogTitle>Customer</DialogTitle>
           <DialogDescription>
-            Search by name or mobile — phone number is optional.
+            Search by name or mobile — phone number is optional. Pick Walk-in to skip.
           </DialogDescription>
         </DialogHeader>
 
@@ -102,11 +118,18 @@ export function CustomerDialog({
                 <UserRound className="h-4 w-4 text-muted-foreground" />
                 {c.name}
                 {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
+                {c.visits > 0 && (
+                  <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                    {c.visits} visits
+                  </span>
+                )}
               </span>
-              {c.outstanding_balance > 0 && (
-                <span className="text-xs font-medium text-destructive">
-                  Due {inr(c.outstanding_balance)}
+              {c.outstanding_balance > 0 ? (
+                <span className="text-xs font-semibold text-destructive">
+                  ⚠️ Udhar due {inr(c.outstanding_balance)}
                 </span>
+              ) : (
+                <span className="text-[10px] font-medium text-success">Clear</span>
               )}
             </button>
           ))}
@@ -134,15 +157,47 @@ export function CustomerDialog({
                 />
               </div>
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="cust-credit">Credit limit (₹)</Label>
-              <Input
-                id="cust-credit"
-                type="number"
-                value={creditLimit}
-                onChange={(e) => setCreditLimit(e.target.value)}
-                placeholder="0"
-              />
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1">
+                <Label>Age group</Label>
+                <Select value={ageGroup} onValueChange={setAgeGroup}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AGE_GROUPS.map((g) => (
+                      <SelectItem key={g} value={g}>
+                        {g}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Gender</Label>
+                <Select value={gender} onValueChange={setGender}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="—" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GENDERS.map((g) => (
+                      <SelectItem key={g} value={g}>
+                        {g}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="cust-credit">Credit limit (₹)</Label>
+                <Input
+                  id="cust-credit"
+                  type="number"
+                  value={creditLimit}
+                  onChange={(e) => setCreditLimit(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
