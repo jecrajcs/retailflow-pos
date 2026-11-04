@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, ScanBarcode, Search, Trash2, Truck, UserRound, Zap } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  MapPin,
+  Plus,
+  ScanBarcode,
+  Search,
+  Trash2,
+  Truck,
+  UserRound,
+  Zap,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
@@ -22,6 +33,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   inr,
+  maxLineDiscount,
   useCustomers,
   useInventory,
   useLocations,
@@ -30,6 +42,7 @@ import {
   type Customer,
   type InvoiceResult,
   type Product,
+  type ReceiptPayment,
 } from "@/lib/pos";
 
 export const Route = createFileRoute("/")({
@@ -38,12 +51,14 @@ export const Route = createFileRoute("/")({
       { title: "RetailHub POS — Billing" },
       {
         name: "description",
-        content: "Fast single-screen POS billing with barcode scanning, split payments and multi-location stock.",
+        content:
+          "Fast customer-first POS billing with barcode scanning, rack locations, floor-price protection, split payments, cash tendered and change return.",
       },
       { property: "og:title", content: "RetailHub POS — Billing" },
       {
         property: "og:description",
-        content: "Fast single-screen POS billing with barcode scanning, split payments and multi-location stock.",
+        content:
+          "Fast customer-first POS billing with barcode scanning, rack locations, floor-price protection, split payments, cash tendered and change return.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -81,6 +96,7 @@ function PosPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [custOpen, setCustOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [quickPrefill, setQuickPrefill] = useState("");
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
@@ -96,8 +112,20 @@ function PosPage() {
     [lines],
   );
   const total = Math.max(subtotal - discount, 0);
+  /** Floor-price protection: qty × min allowed rate across the bill. */
+  const minTotal = useMemo(
+    () =>
+      lines.reduce(
+        (s, l) => s + l.quantity * (l.product.min_sale_price > 0 ? l.product.min_sale_price : 0),
+        0,
+      ),
+    [lines],
+  );
+  const maxBillDiscount = Math.max(subtotal - minTotal, 0);
 
   function addToCart(product: Product) {
+    // Customer-first: a new bill always starts with picking the customer.
+    if (lines.length === 0 && !customer) setCustOpen(true);
     setLines((prev) => {
       const existing = prev.find((l) => l.product.id === product.id);
       if (existing) {
@@ -126,6 +154,24 @@ function PosPage() {
     );
   }
 
+  function setLineDiscount(productId: string, value: number) {
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.product.id !== productId) return l;
+        const max = maxLineDiscount(l.unit_price, l.quantity, l.product.min_sale_price);
+        if (value > max + 0.001) {
+          toast.warning("Floor price protection", {
+            description: `Max discount on this line is ${inr(max)} (min allowed rate ${inr(
+              l.product.min_sale_price,
+            )}).`,
+          });
+          return { ...l, discount: max };
+        }
+        return { ...l, discount: Math.max(value, 0) };
+      }),
+    );
+  }
+
   function handleBarcodeSubmit() {
     const q = barcode.trim().toLowerCase();
     if (!q) return;
@@ -138,9 +184,15 @@ function PosPage() {
       barcodeRef.current?.focus();
     } else {
       toast.error("Item not found", {
-        description: "Press F2 (or the Quick add button) to bill it as a new loose item.",
+        description: "Press F2 to quick-add it — name & barcode are pre-filled from what you typed.",
       });
     }
+  }
+
+  function openQuickAdd() {
+    setQuickPrefill(barcode.trim());
+    if (barcode.trim()) setBarcode("");
+    setQuickOpen(true);
   }
 
   const searchResults = useMemo(() => {
@@ -164,7 +216,7 @@ function PosPage() {
         barcodeRef.current?.focus();
       } else if (e.key === "F2") {
         e.preventDefault();
-        setQuickOpen(true);
+        openQuickAdd();
       } else if (e.key === "F3") {
         e.preventDefault();
         setCustOpen(true);
@@ -176,9 +228,10 @@ function PosPage() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [lines.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines.length, barcode]);
 
-  function handlePaid(result: InvoiceResult, payments: Array<{ mode: string; amount: number }>) {
+  function handlePaid(result: InvoiceResult, payments: ReceiptPayment[]) {
     setReceipt({
       invoiceNumber: result.invoice_number,
       locationName: location?.name ?? "Store",
@@ -203,6 +256,7 @@ function PosPage() {
     void queryClient.invalidateQueries({ queryKey: ["inventory"] });
     void queryClient.invalidateQueries({ queryKey: ["customers"] });
     void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
+    void queryClient.invalidateQueries({ queryKey: ["cash-transactions"] });
     toast.success(`Bill ${result.invoice_number} saved`);
     barcodeRef.current?.focus();
   }
@@ -259,6 +313,42 @@ function PosPage() {
         </div>
       </div>
 
+      {/* Customer banner — demographics + udhar alert */}
+      <div className="border-b bg-muted/30 px-3 py-2">
+        {customer ? (
+          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border bg-card px-4 py-2.5">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <UserRound className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold leading-tight">{customer.name}</div>
+                <div className="text-xs text-muted-foreground">{customer.mobile ?? "No mobile"}</div>
+              </div>
+            </div>
+            <BannerStat label="Visits" value={String(customer.visits)} />
+            <BannerStat label="Age group" value={customer.age_group ?? "—"} />
+            <BannerStat label="Gender" value={customer.gender ?? "—"} />
+            <BannerStat label="Credit limit" value={customer.credit_limit > 0 ? inr(customer.credit_limit) : "—"} />
+            {customer.outstanding_balance > 0 ? (
+              <span className="ml-auto flex items-center gap-1.5 rounded-md bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
+                <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(customer.outstanding_balance)}
+              </span>
+            ) : (
+              <span className="ml-auto flex items-center gap-1.5 rounded-md bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
+                <CheckCircle2 className="h-4 w-4" /> Udhar Clear
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className="mx-auto flex max-w-[1600px] items-center gap-2 text-xs text-muted-foreground">
+            <UserRound className="h-3.5 w-3.5" />
+            New bill = customer first. Add the first item or press{" "}
+            <span className="rounded border px-1 font-mono">F3</span> to pick a customer — or choose Walk-in.
+          </div>
+        )}
+      </div>
+
       <main className="mx-auto flex w-full max-w-[1600px] flex-1 gap-4 p-3">
         {/* Left: scan + cart */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -289,8 +379,10 @@ function PosPage() {
                     <span className="flex items-center gap-2">
                       <Search className="h-3.5 w-3.5 text-muted-foreground" />
                       {p.name}
+                      {p.variant && <span className="text-xs text-muted-foreground">{p.variant}</span>}
                     </span>
                     <span className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <span className="font-mono">{p.rack_location ?? "—"}</span>
                       <span>{p.barcode ?? p.sku ?? "—"}</span>
                       <b className="text-foreground">{inr(p.sale_price)}</b>
                       <span className={cn(stockAt(p.id, location?.id) <= p.min_stock && "text-destructive")}>
@@ -305,7 +397,7 @@ function PosPage() {
 
           {/* Quick tiles */}
           <div className="flex flex-wrap gap-1.5">
-            <Button variant="outline" size="sm" className="gap-1.5 border-dashed" onClick={() => setQuickOpen(true)}>
+            <Button variant="outline" size="sm" className="gap-1.5 border-dashed" onClick={openQuickAdd}>
               <Zap className="h-3.5 w-3.5" /> Quick add{" "}
               <span className="rounded border px-1 font-mono text-[10px]">F2</span>
             </Button>
@@ -329,6 +421,7 @@ function PosPage() {
               <thead className="sticky top-0 bg-muted/70 text-xs uppercase text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left">Item</th>
+                  <th className="px-2 py-2 text-left">Rack</th>
                   <th className="px-2 py-2 text-right">Price</th>
                   <th className="px-2 py-2 text-center">Qty</th>
                   <th className="px-2 py-2 text-right">Disc</th>
@@ -339,17 +432,23 @@ function PosPage() {
               <tbody>
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
                       Scan an item or tap a quick tile to start the bill.
                     </td>
                   </tr>
                 )}
                 {lines.map((l) => {
                   const stock = stockAt(l.product.id, location?.id);
+                  const lineMax = maxLineDiscount(l.unit_price, l.quantity, l.product.min_sale_price);
                   return (
                     <tr key={l.product.id} className="border-t">
                       <td className="px-3 py-1.5">
-                        <div className="font-medium">{l.product.name}</div>
+                        <div className="font-medium">
+                          {l.product.name}
+                          {l.product.variant && (
+                            <span className="ml-1.5 text-xs text-muted-foreground">{l.product.variant}</span>
+                          )}
+                        </div>
                         {/* Multi-location stock badge + 1-click indent */}
                         <div className="mt-0.5 flex flex-wrap items-center gap-1">
                           {locations.map((loc) => {
@@ -380,6 +479,12 @@ function PosPage() {
                           </button>
                         </div>
                       </td>
+                      <td className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin className="h-3 w-3" />
+                          {l.product.rack_location ?? "—"}
+                        </span>
+                      </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{inr(l.unit_price)}</td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center justify-center gap-1">
@@ -409,7 +514,15 @@ function PosPage() {
                           <span className="w-10 text-[10px] text-muted-foreground">{l.uom}</span>
                         </div>
                       </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{inr(l.discount)}</td>
+                      <td className="px-2 py-1.5 text-right">
+                        <Input
+                          type="number"
+                          className="h-6 w-20 text-right text-xs tabular-nums"
+                          value={l.discount || ""}
+                          onChange={(e) => setLineDiscount(l.product.id, Number(e.target.value) || 0)}
+                          title={lineMax > 0 ? `Max ${inr(lineMax)} (min rate ${inr(l.product.min_sale_price)})` : "No discount allowed below floor price"}
+                        />
+                      </td>
                       <td className="px-2 py-1.5 text-right font-medium tabular-nums">
                         {inr(l.quantity * l.unit_price - l.discount)}
                       </td>
@@ -449,7 +562,15 @@ function PosPage() {
                   type="number"
                   className="h-7 w-24 text-right tabular-nums"
                   value={discount || ""}
-                  onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+                  onChange={(e) => {
+                    const v = Number(e.target.value) || 0;
+                    if (v > maxBillDiscount) {
+                      toast.warning("Floor price protection", {
+                        description: `Max bill discount is ${inr(maxBillDiscount)}.`,
+                      });
+                      setDiscount(maxBillDiscount);
+                    } else setDiscount(Math.max(v, 0));
+                  }}
                 />
               </div>
               <div className="flex justify-between border-t pt-2 text-lg font-bold">
@@ -479,7 +600,7 @@ function PosPage() {
           </div>
           {customer && customer.outstanding_balance > 0 && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
-              <div className="font-medium text-destructive">Outstanding due</div>
+              <div className="font-medium text-destructive">⚠️ Udhar due</div>
               <div className="tabular-nums">
                 {customer.name}: {inr(customer.outstanding_balance)}
               </div>
@@ -489,8 +610,9 @@ function PosPage() {
             <div className="mb-1 flex items-center gap-1 font-medium text-foreground">
               <Plus className="h-3 w-3" /> Shortcuts
             </div>
-            F1 scan · F2 quick add · F3 customer · F4 pay · Enter adds scanned item. Cart items show
-            live stock of every location; “indent” requests warehouse transfer in one click.
+            F1 scan · F2 quick add (pre-fills what you typed) · F3 customer · F4 pay · Enter adds scanned
+            item. Line discount stops at the item's min allowed rate; bill discount stops at the floor-price
+            total.
           </div>
         </div>
       </main>
@@ -503,6 +625,7 @@ function PosPage() {
         subtotal={subtotal}
         discount={discount}
         onDiscountChange={setDiscount}
+        minTotal={minTotal}
         customer={customer}
         onPickCustomer={() => setCustOpen(true)}
         onPaid={handlePaid}
@@ -516,7 +639,11 @@ function PosPage() {
         open={quickOpen}
         onOpenChange={setQuickOpen}
         locationId={location?.id ?? ""}
-        onAdded={(p) => addToCart(p)}
+        prefill={quickPrefill}
+        onAdded={(p) => {
+          addToCart(p);
+          barcodeRef.current?.focus();
+        }}
       />
       <IndentDialog
         open={!!indentProduct}
@@ -526,6 +653,15 @@ function PosPage() {
         locations={locations}
       />
       <ReceiptDialog open={!!receipt} onOpenChange={(o) => !o && setReceipt(null)} data={receipt} />
+    </div>
+  );
+}
+
+function BannerStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
+      <div className="text-sm font-semibold">{value}</div>
     </div>
   );
 }

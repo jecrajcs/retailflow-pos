@@ -1,7 +1,16 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, CreditCard, LockKeyhole, QrCode, Vault, Wallet } from "lucide-react";
+import {
+  ArrowDownCircle,
+  ArrowUpCircle,
+  Banknote,
+  CreditCard,
+  LockKeyhole,
+  QrCode,
+  Vault,
+  Wallet,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -27,9 +36,12 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import {
+  CASH_TXN_REASONS,
   closeSession,
   inr,
+  logCashTxn,
   openSession,
+  useCashTransactions,
   useLocations,
   usePaymentsSince,
   type CashSession,
@@ -41,12 +53,14 @@ export const Route = createFileRoute("/cash-drawer")({
       { title: "RetailHub POS — Cash Drawer" },
       {
         name: "description",
-        content: "Open and close cash drawer shifts with automatic cash sales reconciliation.",
+        content:
+          "Open and close cash drawer shifts with a full cash in/out history — shop expenses, tea & snacks, vendor payments, change top-ups and reconciliation.",
       },
       { property: "og:title", content: "RetailHub POS — Cash Drawer" },
       {
         property: "og:description",
-        content: "Open and close cash drawer shifts with automatic cash sales reconciliation.",
+        content:
+          "Open and close cash drawer shifts with a full cash in/out history — shop expenses, tea & snacks, vendor payments, change top-ups and reconciliation.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -89,6 +103,7 @@ function CashDrawerPage() {
   const open = sessions.find((s) => s.status === "OPEN");
   const since = open?.opened_at ?? startOfToday();
   const { data: payments = [] } = usePaymentsSince(location?.id ?? null, since);
+  const { data: txns = [] } = useCashTransactions(location?.id ?? null, since);
 
   const byMode: { CASH: number; UPI: number; CARD: number; CREDIT: number } = useMemo(() => {
     const map: { CASH: number; UPI: number; CARD: number; CREDIT: number } = {
@@ -102,9 +117,18 @@ function CashDrawerPage() {
     return map;
   }, [payments]);
 
+  const txnIn = useMemo(() => txns.filter((t) => t.direction === "IN").reduce((s, t) => s + t.amount, 0), [txns]);
+  const txnOut = useMemo(() => txns.filter((t) => t.direction === "OUT").reduce((s, t) => s + t.amount, 0), [txns]);
+
   const expectedCash = open
     ? open.opening_cash + byMode.CASH + open.cash_in - open.cash_out
     : 0;
+
+  function refresh() {
+    void queryClient.invalidateQueries({ queryKey: ["cash-sessions"] });
+    void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
+    void queryClient.invalidateQueries({ queryKey: ["cash-transactions"] });
+  }
 
   function pickLocation(id: string) {
     setLocationId(id);
@@ -152,72 +176,161 @@ function CashDrawerPage() {
                     value={inr(byMode.UPI + byMode.CARD + byMode.CREDIT)}
                   />
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <SummaryCard
+                    label="Cash in (logged)"
+                    value={inr(open.cash_in)}
+                    icon={ArrowDownCircle}
+                    className="text-success"
+                  />
+                  <SummaryCard
+                    label="Cash out (logged)"
+                    value={inr(open.cash_out)}
+                    icon={ArrowUpCircle}
+                    className="text-destructive"
+                  />
+                </div>
+                <QuickLogForm
+                  locationId={location?.id ?? ""}
+                  sessionId={open.id}
+                  onLogged={refresh}
+                />
                 <CloseShiftCard
                   session={open}
                   expectedCash={expectedCash}
                   cashSales={byMode.CASH}
-                  onClosed={() => {
-                    void queryClient.invalidateQueries({ queryKey: ["cash-sessions"] });
-                    void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
-                  }}
+                  onClosed={refresh}
                 />
               </>
             ) : (
               <OpenShiftCard
                 locationId={location?.id ?? ""}
                 cashSalesToday={byMode.CASH}
-                onOpened={() => {
-                  void queryClient.invalidateQueries({ queryKey: ["cash-sessions"] });
-                  void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
-                }}
+                onOpened={refresh}
               />
             )}
           </TabsContent>
 
           <TabsContent value="detailed" className="mt-3 space-y-4">
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
               <SummaryCard label="Cash" value={inr(byMode.CASH)} />
               <SummaryCard label="UPI" value={inr(byMode.UPI)} />
               <SummaryCard label="Card" value={inr(byMode.CARD)} />
               <SummaryCard label="Credit" value={inr(byMode.CREDIT)} />
+              <SummaryCard label="Cash out (expenses)" value={inr(txnOut)} />
             </div>
 
-            <section className="rounded-lg border bg-card">
+            <QuickLogForm
+              locationId={location?.id ?? ""}
+              sessionId={open?.id ?? null}
+              onLogged={refresh}
+            />
+
+            <section className="overflow-hidden rounded-lg border bg-card">
+              <div className="flex items-center justify-between border-b px-3 py-2 text-sm font-medium">
+                <span>Cash in / out history</span>
+                <span className="text-xs text-muted-foreground">
+                  In {inr(txnIn)} · Out {inr(txnOut)} · Net {inr(txnIn - txnOut)}
+                </span>
+              </div>
+              <div className="max-h-72 overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Time</TableHead>
+                      <TableHead>Direction</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {txns.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-muted-foreground">
+                          No cash in/out events logged yet today.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {txns.map((t) => (
+                      <TableRow key={t.id}>
+                        <TableCell className="text-xs">
+                          {new Date(t.created_at).toLocaleString("en-IN", { timeStyle: "short" })}
+                        </TableCell>
+                        <TableCell>
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium",
+                              t.direction === "IN"
+                                ? "bg-success/15 text-success"
+                                : "bg-destructive/15 text-destructive",
+                            )}
+                          >
+                            {t.direction === "IN" ? (
+                              <ArrowDownCircle className="h-3 w-3" />
+                            ) : (
+                              <ArrowUpCircle className="h-3 w-3" />
+                            )}
+                            {t.direction === "IN" ? "Cash In" : "Cash Out"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-sm">{t.reason}</TableCell>
+                        <TableCell
+                          className={cn(
+                            "text-right font-medium tabular-nums",
+                            t.direction === "IN" ? "text-success" : "text-destructive",
+                          )}
+                        >
+                          {t.direction === "IN" ? "+" : "−"} {inr(t.amount)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </section>
+
+            <section className="overflow-hidden rounded-lg border bg-card">
               <div className="border-b px-3 py-2 text-sm font-medium">
                 Payments since {new Date(since).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
               </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Time</TableHead>
-                    <TableHead>Mode</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {payments.length === 0 && (
+              <div className="max-h-72 overflow-auto">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={3} className="text-center text-muted-foreground">
-                        No payments yet.
-                      </TableCell>
+                      <TableHead>Time</TableHead>
+                      <TableHead>Mode</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Change returned</TableHead>
                     </TableRow>
-                  )}
-                  {payments.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="text-xs">
-                        {new Date(p.created_at).toLocaleString("en-IN", { timeStyle: "short" })}
-                      </TableCell>
-                      <TableCell>
-                        <ModeChip mode={p.mode} />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{inr(p.amount)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {payments.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-muted-foreground">
+                          No payments yet.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {payments.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="text-xs">
+                          {new Date(p.created_at).toLocaleString("en-IN", { timeStyle: "short" })}
+                        </TableCell>
+                        <TableCell>
+                          <ModeChip mode={p.mode} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{inr(p.amount)}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {p.change_given ? inr(p.change_given) : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </section>
 
-            <section className="rounded-lg border bg-card">
+            <section className="overflow-hidden rounded-lg border bg-card">
               <div className="border-b px-3 py-2 text-sm font-medium">Shift history</div>
               <Table>
                 <TableHeader>
@@ -226,6 +339,8 @@ function CashDrawerPage() {
                     <TableHead>By</TableHead>
                     <TableHead className="text-right">Opening</TableHead>
                     <TableHead className="text-right">Cash sales</TableHead>
+                    <TableHead className="text-right">In</TableHead>
+                    <TableHead className="text-right">Out</TableHead>
                     <TableHead className="text-right">Closing</TableHead>
                     <TableHead className="text-right">Diff</TableHead>
                   </TableRow>
@@ -233,7 +348,7 @@ function CashDrawerPage() {
                 <TableBody>
                   {sessions.filter((s) => s.status === "CLOSED").length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      <TableCell colSpan={8} className="text-center text-muted-foreground">
                         No closed shifts yet.
                       </TableCell>
                     </TableRow>
@@ -241,8 +356,7 @@ function CashDrawerPage() {
                   {sessions
                     .filter((s) => s.status === "CLOSED")
                     .map((s) => {
-                      const expected =
-                        s.opening_cash + s.cash_sales + s.cash_in - s.cash_out;
+                      const expected = s.opening_cash + s.cash_sales + s.cash_in - s.cash_out;
                       const diff = (s.closing_cash ?? expected) - expected;
                       return (
                         <TableRow key={s.id}>
@@ -252,6 +366,8 @@ function CashDrawerPage() {
                           <TableCell>{s.opened_by}</TableCell>
                           <TableCell className="text-right tabular-nums">{inr(s.opening_cash)}</TableCell>
                           <TableCell className="text-right tabular-nums">{inr(s.cash_sales)}</TableCell>
+                          <TableCell className="text-right tabular-nums text-success">{inr(s.cash_in)}</TableCell>
+                          <TableCell className="text-right tabular-nums text-destructive">{inr(s.cash_out)}</TableCell>
                           <TableCell className="text-right tabular-nums">{inr(s.closing_cash ?? 0)}</TableCell>
                           <TableCell
                             className={cn(
@@ -274,18 +390,123 @@ function CashDrawerPage() {
   );
 }
 
-function SummaryCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function SummaryCard({
+  label,
+  value,
+  highlight,
+  icon: Icon,
+  className,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  icon?: typeof Banknote;
+  className?: string;
+}) {
   return (
     <div
       className={cn(
         "rounded-lg border bg-card p-3",
         highlight && "border-primary/40 bg-primary/5",
+        className,
       )}
     >
       <div className="flex items-center gap-1.5 text-[10px] uppercase text-muted-foreground">
-        <Vault className="h-3 w-3" /> {label}
+        {Icon ? <Icon className="h-3 w-3" /> : <Vault className="h-3 w-3" />} {label}
       </div>
       <div className="mt-1 text-lg font-bold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function QuickLogForm({
+  locationId,
+  sessionId,
+  onLogged,
+}: {
+  locationId: string;
+  sessionId: string | null;
+  onLogged: () => void;
+}) {
+  const [direction, setDirection] = useState<"IN" | "OUT">("OUT");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState<string>(CASH_TXN_REASONS[0]);
+  const [busy, setBusy] = useState(false);
+
+  async function log() {
+    if (!locationId || busy) return;
+    if (!(Number(amount) > 0)) {
+      toast.error("Enter the amount");
+      return;
+    }
+    setBusy(true);
+    try {
+      await logCashTxn({
+        sessionId,
+        locationId,
+        direction,
+        amount: Number(amount),
+        reason,
+      });
+      toast.success(`Cash ${direction === "IN" ? "in" : "out"} of ${inr(Number(amount))} logged`, {
+        description: reason,
+      });
+      setAmount("");
+      onLogged();
+    } catch (e) {
+      toast.error("Could not log the entry", { description: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border bg-card p-3">
+      <div className="mb-2 text-sm font-medium">Log a cash movement</div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1">
+          <Label>Direction</Label>
+          <Select value={direction} onValueChange={(v) => setDirection(v as "IN" | "OUT")}>
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="IN">Cash In</SelectItem>
+              <SelectItem value="OUT">Cash Out</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="txn-amount">Amount (₹)</Label>
+          <Input
+            id="txn-amount"
+            type="number"
+            className="w-28"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="0"
+            onKeyDown={(e) => e.key === "Enter" && log()}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>Reason</Label>
+          <Select value={reason} onValueChange={setReason}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CASH_TXN_REASONS.map((r) => (
+                <SelectItem key={r} value={r}>
+                  {r}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={log} disabled={busy || !sessionId}>
+          {sessionId ? "Log entry" : "Open a shift first"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -341,8 +562,8 @@ function OpenShiftCard({
       <div className="mb-3 text-sm">
         <div className="font-medium">No open shift</div>
         <div className="text-muted-foreground">
-          Cash sales today so far (no shift): {inr(cashSalesToday)}. Open a shift to start
-          drawer reconciliation.
+          Cash sales today so far (no shift): {inr(cashSalesToday)}. Open a shift to start drawer
+          reconciliation and cash in/out logging.
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-2">
@@ -379,8 +600,6 @@ function CloseShiftCard({
   cashSales: number;
   onClosed: () => void;
 }) {
-  const [cashIn, setCashIn] = useState("");
-  const [cashOut, setCashOut] = useState("");
   const [counted, setCounted] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -388,10 +607,11 @@ function CloseShiftCard({
     if (busy) return;
     setBusy(true);
     try {
+      // cash_in / cash_out stay null — the shift already tracks them from the logged history.
       const result = await closeSession({
         sessionId: session.id,
-        cashIn: Number(cashIn) || 0,
-        cashOut: Number(cashOut) || 0,
+        cashIn: null,
+        cashOut: null,
         countedCash: counted === "" ? null : Number(counted),
       });
       const diff = result.difference;
@@ -421,18 +641,13 @@ function CloseShiftCard({
             {new Date(session.opened_at).toLocaleString("en-IN", { timeStyle: "short" })} ·{" "}
             {session.opened_by}
           </div>
-          <div className="text-muted-foreground">Cash sales: {inr(cashSales)}</div>
+          <div className="text-muted-foreground">
+            Cash sales: {inr(cashSales)} · Cash in {inr(session.cash_in)} · Cash out{" "}
+            {inr(session.cash_out)}
+          </div>
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <div className="space-y-1">
-          <Label htmlFor="cash-in">Cash in (₹)</Label>
-          <Input id="cash-in" type="number" value={cashIn} onChange={(e) => setCashIn(e.target.value)} placeholder="0" />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="cash-out">Cash out (₹)</Label>
-          <Input id="cash-out" type="number" value={cashOut} onChange={(e) => setCashOut(e.target.value)} placeholder="0" />
-        </div>
         <div className="space-y-1">
           <Label htmlFor="counted">Counted cash (₹)</Label>
           <Input
@@ -441,6 +656,7 @@ function CloseShiftCard({
             value={counted}
             onChange={(e) => setCounted(e.target.value)}
             placeholder={String(expectedCash.toFixed(2))}
+            onKeyDown={(e) => e.key === "Enter" && close()}
           />
         </div>
         <Button variant="destructive" onClick={close} disabled={busy}>
