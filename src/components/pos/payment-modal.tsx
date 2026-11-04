@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Banknote, CreditCard, QrCode, Trash2, UserRound, Wallet } from "lucide-react";
+import { ArrowDownToLine, Banknote, CreditCard, QrCode, Trash2, UserRound, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,14 +25,23 @@ import {
   type Customer,
   type InvoiceResult,
   type PaymentMode,
+  type PaymentSplitInput,
 } from "@/lib/pos";
 
 const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }> = [
   { value: "CASH", label: "Cash", icon: Banknote },
   { value: "UPI", label: "UPI", icon: QrCode },
   { value: "CARD", label: "Card", icon: CreditCard },
-  { value: "CREDIT", label: "Customer Credit", icon: Wallet },
+  { value: "CREDIT", label: "Udhar (Customer Credit)", icon: Wallet },
 ];
+
+const NOTES = [100, 200, 500, 2000];
+
+interface Split {
+  mode: PaymentMode;
+  amount: string;
+  tendered: string;
+}
 
 export function PaymentModal({
   open,
@@ -42,6 +51,7 @@ export function PaymentModal({
   subtotal,
   discount,
   onDiscountChange,
+  minTotal,
   customer,
   onPickCustomer,
   onPaid,
@@ -53,19 +63,20 @@ export function PaymentModal({
   subtotal: number;
   discount: number;
   onDiscountChange: (value: number) => void;
+  /** Sum of qty × floor (min allowed) price — bill discount cannot go below this. */
+  minTotal: number;
   customer: Customer | null;
   onPickCustomer: () => void;
-  onPaid: (result: InvoiceResult, payments: Array<{ mode: string; amount: number }>) => void;
+  onPaid: (result: InvoiceResult, payments: PaymentSplitInput[]) => void;
 }) {
+  const maxDiscount = Math.max(subtotal - minTotal, 0);
   const total = Math.max(subtotal - discount, 0);
-  const [splits, setSplits] = useState<Array<{ mode: PaymentMode; amount: string }>>([
-    { mode: "CASH", amount: "" },
-  ]);
+  const [splits, setSplits] = useState<Split[]>([{ mode: "CASH", amount: "", tendered: "" }]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setSplits([{ mode: "CASH", amount: String(total.toFixed(2)) }]);
+      setSplits([{ mode: "CASH", amount: String(total.toFixed(2)), tendered: "" }]);
       setBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -77,11 +88,27 @@ export function PaymentModal({
   );
   const remaining = Math.max(total - paid, 0);
 
+  const cashDue = useMemo(
+    () =>
+      splits
+        .filter((s) => s.mode === "CASH")
+        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
+    [splits],
+  );
+  const cashTendered = useMemo(
+    () =>
+      splits
+        .filter((s) => s.mode === "CASH")
+        .reduce((sum, s) => sum + (Number(s.tendered) || 0), 0),
+    [splits],
+  );
+  const change = Math.max(cashTendered - cashDue, 0);
+
   const upiAmount = splits
     .filter((s) => s.mode === "UPI")
     .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
 
-  function updateSplit(index: number, patch: Partial<{ mode: PaymentMode; amount: string }>) {
+  function updateSplit(index: number, patch: Partial<Split>) {
     setSplits((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   }
 
@@ -92,13 +119,28 @@ export function PaymentModal({
       return;
     }
     if (valid.some((s) => s.mode === "CREDIT") && !customer) {
-      toast.error("Customer Credit needs a customer", {
+      toast.error("Udhar needs a registered customer", {
         description: "Tap the customer chip to pick or add one first.",
       });
       return;
     }
     setBusy(true);
     try {
+      let changeLeft = change;
+      const payments: PaymentSplitInput[] = valid.map((s) => {
+        const amount = Number(s.amount);
+        if (s.mode === "CASH") {
+          const given = Math.min(changeLeft, amount);
+          changeLeft -= given;
+          return {
+            amount,
+            mode: s.mode,
+            tendered: Number(s.tendered) || amount,
+            change_given: given,
+          };
+        }
+        return { amount, mode: s.mode };
+      });
       const result = await createPosInvoice({
         locationId,
         customerId: customer?.id ?? null,
@@ -111,9 +153,9 @@ export function PaymentModal({
           discount: l.discount,
           total: l.quantity * l.unit_price - l.discount,
         })),
-        payments: valid.map((s) => ({ amount: Number(s.amount), mode: s.mode })),
+        payments,
       });
-      onPaid(result, valid.map((s) => ({ amount: Number(s.amount), mode: s.mode })));
+      onPaid(result, payments);
       onOpenChange(false);
     } catch (e) {
       toast.error("Billing failed", { description: String(e) });
@@ -128,7 +170,7 @@ export function PaymentModal({
         <DialogHeader>
           <DialogTitle>Collect payment</DialogTitle>
           <DialogDescription>
-            Split across cash, UPI, card or customer credit.
+            Split across cash, UPI, card or customer credit. Cash asks for tendered amount and shows change.
           </DialogDescription>
         </DialogHeader>
 
@@ -143,8 +185,17 @@ export function PaymentModal({
               type="number"
               className="mt-0.5 h-7 text-center text-sm"
               value={discount || ""}
-              onChange={(e) => onDiscountChange(Number(e.target.value) || 0)}
+              onChange={(e) => {
+                const v = Number(e.target.value) || 0;
+                if (v > maxDiscount) {
+                  toast.warning(`Max discount ${inr(maxDiscount)}`, {
+                    description: "Floor price (min allowed rate) protection is on.",
+                  });
+                  onDiscountChange(maxDiscount);
+                } else onDiscountChange(v);
+              }}
             />
+            <div className="text-[9px] text-muted-foreground">max {inr(maxDiscount)}</div>
           </div>
           <div className="rounded-lg border-2 border-primary bg-primary/5 p-2">
             <div className="text-[10px] uppercase text-muted-foreground">Payable</div>
@@ -162,46 +213,74 @@ export function PaymentModal({
           <UserRound className="h-4 w-4" />
           {customer
             ? `${customer.name}${customer.credit_limit > 0 ? ` · credit limit ${inr(customer.credit_limit)}` : ""}`
-            : "Walk-in — tap to attach a customer (needed for credit)"}
+            : "Walk-in — tap to attach a customer (needed for Udhar)"}
         </button>
 
         <div className="space-y-2">
           {splits.map((s, i) => {
             const Icon = MODES.find((m) => m.value === s.mode)?.icon ?? Banknote;
             return (
-              <div key={i} className="flex items-center gap-2">
-                <div className="flex h-9 w-9 items-center justify-center rounded-md border bg-muted/40">
-                  <Icon className="h-4 w-4" />
-                </div>
-                <Select
-                  value={s.mode}
-                  onValueChange={(v) => updateSplit(i, { mode: v as PaymentMode })}
-                >
-                  <SelectTrigger className="w-44">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MODES.map((m) => (
-                      <SelectItem key={m.value} value={m.value}>
-                        {m.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  type="number"
-                  className="text-right"
-                  value={s.amount}
-                  onChange={(e) => updateSplit(i, { amount: e.target.value })}
-                />
-                {splits.length > 1 && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setSplits((prev) => prev.filter((_, j) => j !== i))}
+              <div key={i} className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-md border bg-muted/40">
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <Select
+                    value={s.mode}
+                    onValueChange={(v) => updateSplit(i, { mode: v as PaymentMode })}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                    <SelectTrigger className="w-44">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MODES.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number"
+                    className="text-right"
+                    value={s.amount}
+                    onChange={(e) => updateSplit(i, { amount: e.target.value })}
+                  />
+                  {splits.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setSplits((prev) => prev.filter((_, j) => j !== i))}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+                {s.mode === "CASH" && (
+                  <div className="flex items-center gap-1.5 pl-11">
+                    <Input
+                      type="number"
+                      className="h-8 w-32 text-right"
+                      placeholder="Cash tendered"
+                      value={s.tendered}
+                      onChange={(e) => updateSplit(i, { tendered: e.target.value })}
+                    />
+                    {NOTES.map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => updateSplit(i, { tendered: String((Number(s.tendered) || 0) + n) })}
+                        className="rounded-md border bg-card px-2 py-1 text-xs font-medium tabular-nums hover:border-primary/40 hover:bg-accent"
+                      >
+                        +₹{n}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => updateSplit(i, { tendered: String(cashDue.toFixed(2)) })}
+                      className="rounded-md border bg-primary/10 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/15"
+                    >
+                      Exact
+                    </button>
+                  </div>
                 )}
               </div>
             );
@@ -210,7 +289,7 @@ export function PaymentModal({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setSplits((prev) => [...prev, { mode: "UPI", amount: "" }])}
+              onClick={() => setSplits((prev) => [...prev, { mode: "UPI", amount: "", tendered: "" }])}
             >
               + Add split
             </Button>
@@ -239,6 +318,28 @@ export function PaymentModal({
               <div className="text-xs text-muted-foreground">
                 Any UPI app · shows in customer's scanner
               </div>
+            </div>
+          </div>
+        )}
+
+        {cashDue > 0 && (
+          <div
+            className={cn(
+              "flex items-center justify-between rounded-lg border-2 p-3",
+              change > 0 ? "border-warning/50 bg-warning/10" : "border-border bg-muted/40",
+            )}
+          >
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <ArrowDownToLine className="h-5 w-5" />
+              {change > 0 ? "Change to return" : "Cash tendered"}
+            </div>
+            <div
+              className={cn(
+                "text-3xl font-bold tabular-nums",
+                change > 0 ? "text-warning" : "text-foreground",
+              )}
+            >
+              {inr(change > 0 ? change : cashTendered)}
             </div>
           </div>
         )}

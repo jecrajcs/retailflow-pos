@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CashDrawerRouteImport } from './routes/cash-drawer'
+import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as ManagerRouteImport } from './routes/manager'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const CashDrawerRoute = CashDrawerRouteImport.update({
   path: '/cash-drawer',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InventoryRoute = InventoryRouteImport.update({
+  id: '/inventory',
+  path: '/inventory',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ManagerRoute = ManagerRouteImport.update({
   id: '/manager',
   path: '/manager',
@@ -32,30 +38,34 @@ const ManagerRoute = ManagerRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/cash-drawer': typeof CashDrawerRoute
+  '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/cash-drawer': typeof CashDrawerRoute
+  '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/cash-drawer': typeof CashDrawerRoute
+  '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/cash-drawer' | '/manager'
+  fullPaths: '/' | '/cash-drawer' | '/inventory' | '/manager'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/cash-drawer' | '/manager'
-  id: '__root__' | '/' | '/cash-drawer' | '/manager'
+  to: '/' | '/cash-drawer' | '/inventory' | '/manager'
+  id: '__root__' | '/' | '/cash-drawer' | '/inventory' | '/manager'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CashDrawerRoute: typeof CashDrawerRoute
+  InventoryRoute: typeof InventoryRoute
   ManagerRoute: typeof ManagerRoute
 }
 
@@ -75,6 +85,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CashDrawerRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/inventory': {
+      id: '/inventory'
+      path: '/inventory'
+      fullPath: '/inventory'
+      preLoaderRoute: typeof InventoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/manager': {
       id: '/manager'
       path: '/manager'
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CashDrawerRoute: CashDrawerRoute,
+  InventoryRoute: InventoryRoute,
   ManagerRoute: ManagerRoute,
 }
 export const routeTree = rootRouteImport
