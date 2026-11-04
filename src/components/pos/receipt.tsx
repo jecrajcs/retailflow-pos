@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { inr } from "@/lib/pos";
 import { cn } from "@/lib/utils";
 
 export interface ReceiptLine {
