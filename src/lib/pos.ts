@@ -85,6 +85,13 @@ export interface CartLine {
   discount: number;
 }
 
+export interface ReceiptPayment {
+  mode: string;
+  amount: number;
+  tendered?: number;
+  change_given?: number;
+}
+
 export type PaymentMode = "CASH" | "UPI" | "CARD" | "CREDIT";
 
 export const inr = (n: number | null | undefined) =>
