@@ -302,7 +302,7 @@ export async function createPosInvoice(input: {
     p_customer_id: (input.customerId ?? null) as unknown as string,
     p_discount: input.discount,
     p_items: input.items,
-    p_payments: input.payments,
+    p_payments: input.payments as unknown as Json,
   });
   if (error) throw error;
   return data as unknown as InvoiceResult;

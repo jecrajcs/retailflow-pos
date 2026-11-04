@@ -13,12 +13,8 @@ export interface ReceiptLine {
   total: number;
 }
 
-export interface ReceiptPayment {
-  mode: string;
-  amount: number;
-  tendered?: number;
-  change_given?: number;
-}
+export type { ReceiptPayment } from "@/lib/pos";
+import { inr, type ReceiptPayment } from "@/lib/pos";
 
 export interface ReceiptData {
   invoiceNumber: string;
