@@ -18,9 +18,12 @@ export interface Product {
   barcode: string | null;
   hsn: string | null;
   category: string | null;
+  variant: string | null;
+  rack_location: string | null;
   purchase_cost: number;
   mrp: number;
   sale_price: number;
+  min_sale_price: number;
   uom_purchase: string;
   uom_stock: string;
   uom_sale: string;
@@ -38,6 +41,7 @@ export interface Customer {
   gender: string | null;
   credit_limit: number;
   outstanding_balance: number;
+  visits: number;
 }
 
 export interface StockTransfer {
@@ -63,6 +67,16 @@ export interface CashSession {
   closed_at: string | null;
 }
 
+export interface CashTxnRow {
+  id: string;
+  session_id: string | null;
+  location_id: string;
+  direction: "IN" | "OUT";
+  amount: number;
+  reason: string;
+  created_at: string;
+}
+
 export interface CartLine {
   product: Product;
   quantity: number;
@@ -86,6 +100,31 @@ export const PAYMENT_STATUS_LABEL: Record<string, string> = {
 };
 
 export const REASONS = ["PEST", "TORN", "EXPIRED", "SPOILAGE"] as const;
+
+export const UOMS = [
+  "Pcs", "Kg", "Meter", "Pouch", "Pack", "Roll", "Jar", "Box", "Bottle",
+  "Unit", "Litre", "PKT", "BAG",
+] as const;
+
+export const CATEGORIES = [
+  "FMCG", "Grocery", "Snacks", "Dairy", "Beverages", "Personal Care",
+  "Cosmetics", "Household", "Spices", "Pan", "Toffee", "Other",
+] as const;
+
+export const CASH_TXN_REASONS = [
+  "Shop expense",
+  "Tea & snacks",
+  "Vendor payment",
+  "Freight / maal bhada",
+  "Change top-up",
+  "Other",
+] as const;
+
+/** Largest discount possible on a line without breaking the floor (min selling) price. */
+export function maxLineDiscount(unitPrice: number, quantity: number, minSalePrice: number) {
+  const floor = minSalePrice > 0 ? minSalePrice : 0;
+  return Math.max(quantity * unitPrice - quantity * floor, 0);
+}
 
 export function useLocations() {
   return useQuery<Location[]>({
@@ -148,6 +187,25 @@ export function useCustomers() {
   });
 }
 
+/** Cash in/out events at one location since a timestamp. */
+export function useCashTransactions(locationId: string | null, since: string | null) {
+  return useQuery<CashTxnRow[]>({
+    enabled: !!locationId && !!since,
+    queryKey: ["cash-transactions", locationId, since],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_transactions")
+        .select("*")
+        .eq("location_id", locationId!)
+        .gte("created_at", since!)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      return (data ?? []) as CashTxnRow[];
+    },
+  });
+}
+
 export interface InvoiceItemRow {
   id: string;
   invoice_id: string;
@@ -180,6 +238,8 @@ export interface PaymentRow {
   invoice_id: string;
   amount: number;
   mode: string;
+  tendered: number | null;
+  change_given: number | null;
   created_at: string;
 }
 
@@ -191,7 +251,7 @@ export function usePaymentsSince(locationId: string | null, since: string | null
     queryFn: async () => {
       const { data, error } = await supabase
         .from("payments")
-        .select("id, invoice_id, amount, mode, created_at, invoices!inner(location_id)")
+        .select("id, invoice_id, amount, mode, tendered, change_given, created_at, invoices!inner(location_id)")
         .eq("invoices.location_id", locationId!)
         .gte("created_at", since!);
       if (error) throw error;
@@ -209,6 +269,13 @@ export interface InvoiceResult {
   paid: number;
 }
 
+export interface PaymentSplitInput {
+  amount: number;
+  mode: string;
+  tendered?: number;
+  change_given?: number;
+}
+
 export async function createPosInvoice(input: {
   locationId: string;
   customerId: string | null;
@@ -221,7 +288,7 @@ export async function createPosInvoice(input: {
     discount: number;
     total: number;
   }>;
-  payments: Array<{ amount: number; mode: string }>;
+  payments: PaymentSplitInput[];
 }): Promise<InvoiceResult> {
   const { data, error } = await supabase.rpc("create_pos_invoice", {
     p_location_id: input.locationId,
@@ -247,9 +314,31 @@ export async function addPayment(input: {
   if (error) throw error;
 }
 
+export async function logCashTxn(input: {
+  sessionId: string | null;
+  locationId: string;
+  direction: "IN" | "OUT";
+  amount: number;
+  reason: string;
+}) {
+  const { error } = await supabase.rpc("log_cash_txn", {
+    p_session_id: (input.sessionId ?? null) as unknown as string,
+    p_location_id: input.locationId,
+    p_direction: input.direction,
+    p_amount: input.amount,
+    p_reason: input.reason,
+  });
+  if (error) throw error;
+}
+
 export async function quickAddProduct(input: {
   name: string;
+  barcode?: string | null;
+  variant?: string | null;
+  category?: string | null;
+  rackLocation?: string | null;
   salePrice: number;
+  minSalePrice?: number;
   purchaseCost: number;
   mrp: number;
   uom: string;
@@ -260,9 +349,14 @@ export async function quickAddProduct(input: {
     .from("products")
     .insert({
       name: input.name,
+      barcode: input.barcode || null,
+      variant: input.variant || null,
+      category: input.category || null,
+      rack_location: input.rackLocation || null,
       purchase_cost: input.purchaseCost,
       mrp: input.mrp,
       sale_price: input.salePrice,
+      min_sale_price: input.minSalePrice ?? 0,
       uom_sale: input.uom,
       uom_stock: input.uom,
       uom_purchase: input.uom,
@@ -286,6 +380,8 @@ export async function addCustomer(input: {
   name: string;
   mobile: string | null;
   creditLimit: number;
+  ageGroup?: string | null;
+  gender?: string | null;
 }): Promise<Customer> {
   const { data, error } = await supabase
     .from("customers")
@@ -293,6 +389,8 @@ export async function addCustomer(input: {
       name: input.name,
       mobile: input.mobile || null,
       credit_limit: input.creditLimit,
+      age_group: input.ageGroup || null,
+      gender: input.gender || null,
     })
     .select()
     .single();
@@ -401,14 +499,14 @@ export async function openSession(input: {
 
 export async function closeSession(input: {
   sessionId: string;
-  cashIn: number;
-  cashOut: number;
+  cashIn: number | null;
+  cashOut: number | null;
   countedCash: number | null;
 }): Promise<{ cash_sales: number; expected_cash: number; difference: number }> {
   const { data, error } = await supabase.rpc("close_cash_session", {
     p_session_id: input.sessionId,
-    p_cash_in: input.cashIn,
-    p_cash_out: input.cashOut,
+    p_cash_in: (input.cashIn ?? null) as unknown as number,
+    p_cash_out: (input.cashOut ?? null) as unknown as number,
     p_counted_cash: (input.countedCash ?? null) as unknown as number,
   });
   if (error) throw error;
