@@ -64,6 +64,51 @@ export type Database = {
           },
         ]
       }
+      cash_transactions: {
+        Row: {
+          amount: number
+          created_at: string
+          direction: string
+          id: string
+          location_id: string
+          reason: string
+          session_id: string | null
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          direction: string
+          id?: string
+          location_id: string
+          reason?: string
+          session_id?: string | null
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          direction?: string
+          id?: string
+          location_id?: string
+          reason?: string
+          session_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cash_transactions_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cash_transactions_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "cash_drawer_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           age_group: string | null
@@ -75,6 +120,7 @@ export type Database = {
           name: string
           notes: string | null
           outstanding_balance: number
+          visits: number
         }
         Insert: {
           age_group?: string | null
@@ -86,6 +132,7 @@ export type Database = {
           name: string
           notes?: string | null
           outstanding_balance?: number
+          visits?: number
         }
         Update: {
           age_group?: string | null
@@ -97,6 +144,7 @@ export type Database = {
           name?: string
           notes?: string | null
           outstanding_balance?: number
+          visits?: number
         }
         Relationships: []
       }
@@ -277,27 +325,33 @@ export type Database = {
       payments: {
         Row: {
           amount: number
+          change_given: number | null
           created_at: string
           customer_id: string | null
           id: string
           invoice_id: string
           mode: string
+          tendered: number | null
         }
         Insert: {
           amount: number
+          change_given?: number | null
           created_at?: string
           customer_id?: string | null
           id?: string
           invoice_id: string
           mode?: string
+          tendered?: number | null
         }
         Update: {
           amount?: number
+          change_given?: number | null
           created_at?: string
           customer_id?: string | null
           id?: string
           invoice_id?: string
           mode?: string
+          tendered?: number | null
         }
         Relationships: [
           {
@@ -326,15 +380,18 @@ export type Database = {
           hsn: string | null
           id: string
           is_loose: boolean
+          min_sale_price: number
           min_stock: number
           mrp: number
           name: string
           purchase_cost: number
+          rack_location: string | null
           sale_price: number
           sku: string | null
           uom_purchase: string
           uom_sale: string
           uom_stock: string
+          variant: string | null
         }
         Insert: {
           barcode?: string | null
@@ -345,15 +402,18 @@ export type Database = {
           hsn?: string | null
           id?: string
           is_loose?: boolean
+          min_sale_price?: number
           min_stock?: number
           mrp?: number
           name: string
           purchase_cost?: number
+          rack_location?: string | null
           sale_price?: number
           sku?: string | null
           uom_purchase?: string
           uom_sale?: string
           uom_stock?: string
+          variant?: string | null
         }
         Update: {
           barcode?: string | null
@@ -364,15 +424,18 @@ export type Database = {
           hsn?: string | null
           id?: string
           is_loose?: boolean
+          min_sale_price?: number
           min_stock?: number
           mrp?: number
           name?: string
           purchase_cost?: number
+          rack_location?: string | null
           sale_price?: number
           sku?: string | null
           uom_purchase?: string
           uom_sale?: string
           uom_stock?: string
+          variant?: string | null
         }
         Relationships: []
       }
@@ -537,6 +600,16 @@ export type Database = {
           p_quantity: number
           p_reason: string
           p_returnable: boolean
+        }
+        Returns: string
+      }
+      log_cash_txn: {
+        Args: {
+          p_amount: number
+          p_direction: string
+          p_location_id: string
+          p_reason: string
+          p_session_id: string
         }
         Returns: string
       }
