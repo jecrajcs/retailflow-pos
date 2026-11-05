@@ -22,6 +22,13 @@
       "when": 1793788973084,
       "tag": "0002_pos_ops_enhancements",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793847790730,
+      "tag": "0003_stock_ledger_and_denominations",
+      "breakpoints": true
     }
   ]
 }
