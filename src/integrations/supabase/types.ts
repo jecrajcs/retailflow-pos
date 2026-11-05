@@ -21,11 +21,13 @@ export type Database = {
           cash_sales: number
           closed_at: string | null
           closing_cash: number | null
+          closing_denominations: Json | null
           id: string
           location_id: string
           opened_at: string
           opened_by: string
           opening_cash: number
+          opening_denominations: Json | null
           status: string
         }
         Insert: {
@@ -34,11 +36,13 @@ export type Database = {
           cash_sales?: number
           closed_at?: string | null
           closing_cash?: number | null
+          closing_denominations?: Json | null
           id?: string
           location_id: string
           opened_at?: string
           opened_by?: string
           opening_cash?: number
+          opening_denominations?: Json | null
           status?: string
         }
         Update: {
@@ -47,11 +51,13 @@ export type Database = {
           cash_sales?: number
           closed_at?: string | null
           closing_cash?: number | null
+          closing_denominations?: Json | null
           id?: string
           location_id?: string
           opened_at?: string
           opened_by?: string
           opening_cash?: number
+          opening_denominations?: Json | null
           status?: string
         }
         Relationships: [
@@ -384,6 +390,7 @@ export type Database = {
           min_stock: number
           mrp: number
           name: string
+          preferred_supplier: string | null
           purchase_cost: number
           rack_location: string | null
           sale_price: number
@@ -406,6 +413,7 @@ export type Database = {
           min_stock?: number
           mrp?: number
           name: string
+          preferred_supplier?: string | null
           purchase_cost?: number
           rack_location?: string | null
           sale_price?: number
@@ -428,6 +436,7 @@ export type Database = {
           min_stock?: number
           mrp?: number
           name?: string
+          preferred_supplier?: string | null
           purchase_cost?: number
           rack_location?: string | null
           sale_price?: number
@@ -480,6 +489,54 @@ export type Database = {
           },
           {
             foreignKeyName: "stock_adjustments_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stock_movements: {
+        Row: {
+          created_at: string
+          id: string
+          location_id: string
+          movement_type: string
+          product_id: string
+          quantity_delta: number
+          quantity_on_hand: number
+          reference: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          location_id: string
+          movement_type?: string
+          product_id: string
+          quantity_delta: number
+          quantity_on_hand: number
+          reference?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          location_id?: string
+          movement_type?: string
+          product_id?: string
+          quantity_delta?: number
+          quantity_on_hand?: number
+          reference?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_movements_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_product_id_fkey"
             columns: ["product_id"]
             isOneToOne: false
             referencedRelation: "products"
@@ -574,15 +631,26 @@ export type Database = {
         Args: { p_amount: number; p_invoice_id: string; p_mode: string }
         Returns: undefined
       }
-      close_cash_session: {
-        Args: {
-          p_cash_in: number
-          p_cash_out: number
-          p_counted_cash: number
-          p_session_id: string
-        }
-        Returns: Json
-      }
+      close_cash_session:
+        | {
+            Args: {
+              p_cash_in: number
+              p_cash_out: number
+              p_counted_cash: number
+              p_session_id: string
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_cash_in: number
+              p_cash_out: number
+              p_closing_denominations?: Json
+              p_counted_cash: number
+              p_session_id: string
+            }
+            Returns: Json
+          }
       create_pos_invoice: {
         Args: {
           p_customer_id: string
@@ -613,14 +681,24 @@ export type Database = {
         }
         Returns: string
       }
-      open_cash_session: {
-        Args: {
-          p_location_id: string
-          p_opened_by: string
-          p_opening_cash: number
-        }
-        Returns: string
-      }
+      open_cash_session:
+        | {
+            Args: {
+              p_location_id: string
+              p_opened_by: string
+              p_opening_cash: number
+            }
+            Returns: string
+          }
+        | {
+            Args: {
+              p_location_id: string
+              p_opened_by: string
+              p_opening_cash: number
+              p_opening_denominations?: Json
+            }
+            Returns: string
+          }
       receive_stock_transfer: {
         Args: { p_transfer_id: string }
         Returns: undefined

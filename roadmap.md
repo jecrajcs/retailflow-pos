@@ -1,12 +1,15 @@
 # Roadmap
 
-- [x] DB: products (variant, rack, floor price), customers (visits), payments (tendered/change), cash_transactions log, function updates
-- [x] lib/pos.ts: types, hooks (cash txn), mutations (logCashTxn, quickAdd full fields, addCustomer demographics)
-- [x] AppNav: Billing, Inventory, Cash Drawer, Manager tabs
-- [x] /inventory route: SKU/rack/4-location stock/min/reorder status + 1-click transfer request
-- [x] Billing: customer-first auto-dialog, customer banner (visits, age, gender, udhar), rack chip per line, line & bill discount floor guard, F2 prefill from scan box
-- [x] QuickAdd: variant/category/UOM/rack/cost/sell/min-sell full form with prefill
-- [x] Payment modal: cash tendered + currency chips + live big Change display; credit only registered customer
-- [x] Receipt: change return printed
-- [x] Cash Drawer: full cash in/out history log with reasons, quick log form, pre-filled shift close
-- [ ] Verify: Playwright end-to-end billing flow (build OK कॉन्फर्म है)
+## Full redesign (60-30-10 Material) + Excel integration
+- [x] DB: products variant/rack/min price, customers visits, payments tendered/change, cash_transactions, function updates
+- [x] lib/pos.ts, AppNav 4 tabs, /inventory, POS customer-first banner, F2 prefill, floor guards, payment modal, receipt, cash history
+- [ ] DB: stock_movements ledger table + inventory triggers (SALE/ADJUSTMENT/TRANSFER/OPENING via GUC), backfill opening rows; cash_drawer_sessions opening/closing_denominations jsonb + function updates
+- [ ] Import Excel data: 464 SKUs (prices/rack/min stock/supplier), opening+current stock, 24 customers with udhar/visits; drop demo seed products
+- [ ] Design system: 60-30-10 slate canvas/cards, #5B5CE2 primary, emerald/amber/rose/sky semantics (styles.css)
+- [ ] lib/pos.ts: stock movement hooks, auto-SKU (SKU-YYMMDD-XXX) in quickAdd, legacy stock adjustment mutation, xlsx import/export helpers
+- [ ] POS screen: inline customer-first section (search/add/walk-in inline), scan lock till customer resolved, new-bill button, left grid / right quick tiles, big F4 Pay
+- [ ] Quick-add: auto-SKU, numeric→barcode / text→name smart prefill, minimal fields, PENDING flag
+- [ ] Inventory: stock movement register tab, legacy/opening stock entry flow, Excel export (stock register, reorder list)
+- [ ] Cash drawer: denomination-wise shift open/close counting, express/detailed
+- [ ] Manager: Excel import (catalog, opening stock, customers incl. old udhar) + exports (daily sales register)
+- [ ] Tests + Playwright end-to-end billing verify
