@@ -5,17 +5,18 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Design system definition.
+ * RetailHub POS design system — 60-30-10 modern material.
  *
- * The @theme inline block maps CSS custom properties to Tailwind utility
- * classes (e.g. --color-primary -> bg-primary, text-primary).
+ * 60% base canvas: matte neutral slate (background)
+ * 30% surface containers: elevated cards (card, 1px slate border, rounded)
+ * 10% primary accent: bright blue-violet #5B5CE2 for primary actions
  *
- * The :root and .dark blocks define the actual color values using oklch.
- * All colors MUST use oklch format.
+ * Semantics: success = emerald-600 (F4 Pay / checkout / payment done)
+ *            warning = amber-500 (F2 quick add / pending enrichment)
+ *            destructive = rose-600 (udhar due alerts / risk)
+ *            info = sky-500 (location & multi-stock info)
  *
- * To add a new semantic color:
- * 1. Add the variable to :root (light value) and .dark (dark value)
- * 2. Register it in @theme inline as --color-<name>: var(--<name>)
+ * All colors use oklch. Components must use semantic tokens only.
  */
 
 @theme inline {
@@ -44,6 +45,7 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -61,79 +63,95 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "DM Sans", ui-sans-serif, sans-serif;
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
+  --radius: 0.75rem;
+  /* 60% base canvas — matte slate-50 */
+  --background: oklch(0.984 0.003 247.858);
+  --foreground: oklch(0.208 0.042 265.755);
+  /* 30% surfaces — white elevated cards on slate-200 borders */
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
+  --card-foreground: oklch(0.208 0.042 265.755);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
+  --popover-foreground: oklch(0.208 0.042 265.755);
+  /* 10% accent — blue-violet #5B5CE2 */
+  --primary: oklch(0.558 0.194 277.03);
+  --primary-foreground: oklch(0.985 0.005 277);
+  --secondary: oklch(0.955 0.008 247.9);
+  --secondary-foreground: oklch(0.29 0.042 265.8);
+  --muted: oklch(0.955 0.008 247.9);
   --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
+  --accent: oklch(0.955 0.008 247.9);
   --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.984 0.003 247.858);
-  --success: oklch(0.6 0.15 155);
-  --warning: oklch(0.72 0.15 75);
+  /* rose-600 */
+  --destructive: oklch(0.586 0.253 17.585);
+  --destructive-foreground: oklch(0.985 0.005 17);
+  /* emerald-600 */
+  --success: oklch(0.596 0.145 163.225);
+  /* amber-500 */
+  --warning: oklch(0.769 0.188 70.08);
+  /* sky-500 */
+  --info: oklch(0.685 0.169 237.323);
   --border: oklch(0.929 0.013 255.508);
   --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --ring: oklch(0.558 0.194 277.03);
+  --chart-1: oklch(0.558 0.194 277.03);
+  --chart-2: oklch(0.596 0.145 163.225);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.685 0.169 237.323);
+  --chart-5: oklch(0.586 0.253 17.585);
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-primary: oklch(0.558 0.194 277.03);
+  --sidebar-primary-foreground: oklch(0.985 0.005 277);
+  --sidebar-accent: oklch(0.955 0.008 247.9);
   --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
   --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
+  --sidebar-ring: oklch(0.558 0.194 277.03);
 }
 
 .dark {
+  /* 60% base canvas — matte slate-950 */
   --background: oklch(0.129 0.042 264.695);
   --foreground: oklch(0.984 0.003 247.858);
+  /* 30% surfaces — slate-900 cards on slate-800 borders */
   --card: oklch(0.208 0.042 265.755);
   --card-foreground: oklch(0.984 0.003 247.858);
   --popover: oklch(0.208 0.042 265.755);
   --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
+  /* 10% accent — brighter blue-violet for dark canvas */
+  --primary: oklch(0.655 0.19 277.1);
+  --primary-foreground: oklch(0.985 0.005 277);
   --secondary: oklch(0.279 0.041 260.031);
   --secondary-foreground: oklch(0.984 0.003 247.858);
   --muted: oklch(0.279 0.041 260.031);
   --muted-foreground: oklch(0.704 0.04 256.788);
   --accent: oklch(0.279 0.041 260.031);
   --accent-foreground: oklch(0.984 0.003 247.858);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --destructive: oklch(0.645 0.24 17);
+  --destructive-foreground: oklch(0.985 0.005 17);
+  --success: oklch(0.696 0.15 163.2);
+  --warning: oklch(0.828 0.189 84.429);
+  --info: oklch(0.746 0.16 237.3);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  --ring: oklch(0.655 0.19 277.1);
+  --chart-1: oklch(0.655 0.19 277.1);
+  --chart-2: oklch(0.696 0.15 163.2);
+  --chart-3: oklch(0.828 0.189 84.429);
+  --chart-4: oklch(0.746 0.16 237.3);
+  --chart-5: oklch(0.645 0.24 17);
   --sidebar: oklch(0.208 0.042 265.755);
   --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.655 0.19 277.1);
+  --sidebar-primary-foreground: oklch(0.985 0.005 277);
   --sidebar-accent: oklch(0.279 0.041 260.031);
   --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --sidebar-ring: oklch(0.655 0.19 277.1);
 }
 
 @layer base {
@@ -144,7 +162,22 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
   }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+
+  input, select, textarea, button {
+    font-family: var(--font-sans);
+  }
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Thermal receipt printing: only the receipt sheet reaches the printer. */

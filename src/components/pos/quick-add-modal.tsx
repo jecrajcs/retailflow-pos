@@ -18,7 +18,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CATEGORIES, UOMS, quickAddProduct, type Product } from "@/lib/pos";
+import {
+  CATEGORIES,
+  UOMS,
+  categoryIcon,
+  generateSku,
+  inr,
+  quickAddProduct,
+  type Product,
+} from "@/lib/pos";
 
 export function QuickAddModal({
   open,
@@ -34,6 +42,7 @@ export function QuickAddModal({
   prefill?: string;
   onAdded: (product: Product) => void;
 }) {
+  const [sku, setSku] = useState("");
   const [name, setName] = useState("");
   const [barcode, setBarcode] = useState("");
   const [variant, setVariant] = useState("");
@@ -49,8 +58,11 @@ export function QuickAddModal({
 
   useEffect(() => {
     if (open) {
-      setName(prefill?.trim() ?? "");
-      setBarcode(prefill?.trim() ?? "");
+      // Smart prefill: digits look like a barcode, anything else is a name.
+      const text = (prefill ?? "").trim();
+      const isNumeric = /^\d{4,}$/.test(text);
+      setName(isNumeric ? "" : text);
+      setBarcode(isNumeric ? text : "");
       setVariant("");
       setCategory("");
       setRack("");
@@ -61,6 +73,7 @@ export function QuickAddModal({
       setMrp("");
       setOpeningQty("");
       setBusy(false);
+      if (open) generateSku().then(setSku).catch(() => setSku(""));
     }
   }, [open, prefill]);
 
@@ -73,6 +86,7 @@ export function QuickAddModal({
     try {
       const product = await quickAddProduct({
         name: name.trim(),
+        sku,
         barcode: barcode.trim() || null,
         variant: variant.trim() || null,
         category: category.trim() || null,
@@ -87,7 +101,11 @@ export function QuickAddModal({
       });
       onAdded(product);
       onOpenChange(false);
-      toast.success(`${product.name} added`, { description: `Rack ${product.rack_location ?? "—"} · ${inrFmt(saleNum)}/${uom}` });
+      toast.success(`${product.name} added — ${sku}`, {
+        description: `Rack ${product.rack_location ?? "—"} · ${inr(saleNum)}/${uom} · Catalog details flagged PENDING for the Manager queue.`,
+      });
+    } catch (e) {
+      toast.error("Could not save item", { description: String(e) });
     } finally {
       setBusy(false);
     }
@@ -98,20 +116,25 @@ export function QuickAddModal({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <Zap className="h-4 w-4 text-primary" /> Quick add item
+            <Zap className="h-4 w-4 text-warning" /> Quick add item
           </DialogTitle>
           <DialogDescription>
-            Name & price are enough — press <Kbd>Enter</Kbd> to save & add to bill. Everything else can be
-            completed later from the Catalog Queue.
+            SKU khud generate ho gaya hai — sirf naam & rate bharein aur{" "}
+            <Kbd>Enter</Kbd> dabaein. Baaki details baad mein Manager ke Catalog Queue se complete
+            honge.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="grid grid-cols-[1fr_1fr] gap-2">
+          <div className="grid grid-cols-[auto_1fr_1fr] gap-2">
+            <div className="space-y-1">
+              <Label htmlFor="qa-sku">SKU (auto)</Label>
+              <Input id="qa-sku" readOnly value={sku} className="w-40 bg-muted font-mono text-xs" />
+            </div>
             <div className="space-y-1">
               <Label htmlFor="qa-name">Item name *</Label>
               <Input
-                autoFocus
+                autoFocus={!barcode}
                 id="qa-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -122,6 +145,7 @@ export function QuickAddModal({
             <div className="space-y-1">
               <Label htmlFor="qa-barcode">Barcode</Label>
               <Input
+                autoFocus={!!barcode}
                 id="qa-barcode"
                 value={barcode}
                 onChange={(e) => setBarcode(e.target.value)}
@@ -152,7 +176,9 @@ export function QuickAddModal({
               />
               <datalist id="qa-category-list">
                 {CATEGORIES.map((c) => (
-                  <option key={c} value={c} />
+                  <option key={c} value={c}>
+                    {categoryIcon(c)} {c}
+                  </option>
                 ))}
               </datalist>
             </div>
@@ -243,16 +269,12 @@ export function QuickAddModal({
           </div>
 
           <Button className="w-full" onClick={handleSave} disabled={!name.trim() || !salePrice || busy}>
-            Save & add to bill{salePrice ? ` — ${inrFmt(saleNum)}/${uom}` : ""}
+            Save & add to bill{salePrice ? ` — ${inr(saleNum)}/${uom}` : ""}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
-}
-
-function inrFmt(n: number) {
-  return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function Kbd({ children }: { children: string }) {
