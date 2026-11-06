@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 
@@ -642,8 +643,6 @@ export interface SheetData {
 
 /** Write a multi-sheet Excel workbook and trigger a browser download. */
 export function exportSheets(filename: string, sheets: SheetData[]) {
-  const XLSX = (globalThis as { XLSXLib?: typeof import("xlsx") }).XLSXLib;
-  if (!XLSX) throw new Error("xlsx missing");
   const wb = XLSX.utils.book_new();
   for (const s of sheets) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s.rows), s.name.slice(0, 31));
@@ -653,8 +652,6 @@ export function exportSheets(filename: string, sheets: SheetData[]) {
 
 /** Parse an uploaded .xlsx/.xls/.csv file into sheet name + row objects. */
 export async function parseWorkbookFile(file: File): Promise<SheetData[]> {
-  const XLSX = (globalThis as { XLSXLib?: typeof import("xlsx") }).XLSXLib;
-  if (!XLSX) throw new Error("xlsx missing");
   const wb = XLSX.read(await file.arrayBuffer());
   return wb.SheetNames.map((n) => ({
     name: n,
