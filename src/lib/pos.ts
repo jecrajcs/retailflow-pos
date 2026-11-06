@@ -344,6 +344,7 @@ export async function logCashTxn(input: {
 
 export async function quickAddProduct(input: {
   name: string;
+  sku?: string;
   barcode?: string | null;
   variant?: string | null;
   category?: string | null;
@@ -356,10 +357,12 @@ export async function quickAddProduct(input: {
   locationId: string;
   openingQty: number;
 }): Promise<Product> {
+  const sku = input.sku ?? (await generateSku());
   const { data, error } = await supabase
     .from("products")
     .insert({
       name: input.name,
+      sku,
       barcode: input.barcode || null,
       variant: input.variant || null,
       category: input.category || null,
@@ -498,11 +501,13 @@ export async function openSession(input: {
   locationId: string;
   openedBy: string;
   openingCash: number;
+  openingDenominations?: Record<number, number> | null;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("open_cash_session", {
     p_location_id: input.locationId,
     p_opened_by: input.openedBy,
     p_opening_cash: input.openingCash,
+    p_opening_denominations: (input.openingDenominations ?? null) as unknown as Json,
   });
   if (error) throw error;
   return data as string;
@@ -513,12 +518,14 @@ export async function closeSession(input: {
   cashIn: number | null;
   cashOut: number | null;
   countedCash: number | null;
+  closingDenominations?: Record<number, number> | null;
 }): Promise<{ cash_sales: number; expected_cash: number; difference: number }> {
   const { data, error } = await supabase.rpc("close_cash_session", {
     p_session_id: input.sessionId,
     p_cash_in: (input.cashIn ?? null) as unknown as number,
     p_cash_out: (input.cashOut ?? null) as unknown as number,
     p_counted_cash: (input.countedCash ?? null) as unknown as number,
+    p_closing_denominations: (input.closingDenominations ?? null) as unknown as Json,
   });
   if (error) throw error;
   return data as unknown as { cash_sales: number; expected_cash: number; difference: number };
@@ -528,4 +535,181 @@ export function computePaymentStatus(total: number, paid: number): "PAID" | "PAR
   if (paid >= total) return "PAID";
   if (paid > 0) return "PARTIALLY_PAID";
   return "UNPAID";
+}
+
+/* ------------------------- stock movement ledger ------------------------- */
+
+export interface StockMovement {
+  id: string;
+  product_id: string;
+  location_id: string;
+  movement_type: string;
+  quantity_delta: number;
+  quantity_on_hand: number;
+  reference: string | null;
+  created_at: string;
+}
+
+/** Full movement register for one location (or all locations). */
+export function useStockMovements(locationId: string | null, limit = 400) {
+  return useQuery<StockMovement[]>({
+    enabled: !!locationId,
+    queryKey: ["stock-movements", locationId, limit],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("stock_movements")
+        .select("*, products(name), locations(name)")
+        .eq("location_id", locationId!)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as unknown as StockMovement[];
+    },
+  });
+}
+
+/** Every movement of one product — used by the per-item history drawer. */
+export function useProductMovements(productId: string | null, limit = 200) {
+  return useQuery<StockMovement[]>({
+    enabled: !!productId,
+    queryKey: ["stock-movements-product", productId, limit],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("stock_movements")
+        .select("*, locations(name)")
+        .eq("product_id", productId!)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as unknown as StockMovement[];
+    },
+  });
+}
+
+/* ----------------------- auto-SKU & legacy stock ------------------------- */
+
+/** SKU-YYMMDD-XXX, counted from today's existing quick-add SKUs. */
+export async function generateSku(): Promise<string> {
+  const d = new Date();
+  const prefix = `SKU-${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, "0")}${String(
+    d.getDate(),
+  ).padStart(2, "0")}-`;
+  const { count, error } = await supabase
+    .from("products")
+    .select("sku", { count: "exact", head: true })
+    .like("sku", `${prefix}%`);
+  if (error) throw error;
+  return `${prefix}${String((count ?? 0) + 1).padStart(3, "0")}`;
+}
+
+/**
+ * Legacy / opening stock entry: set an item's on-hand quantity to a counted
+ * value without re-recording old sales. Creates a single corrective
+ * adjustment (delta) that the ledger records as an ADJUSTMENT movement.
+ */
+export async function legacyStockSet(input: {
+  productId: string;
+  locationId: string;
+  currentQty: number;
+  targetQty: number;
+}): Promise<void> {
+  const delta = input.currentQty - input.targetQty;
+  if (delta === 0) return;
+  await createAdjustment({
+    productId: input.productId,
+    locationId: input.locationId,
+    quantity: delta,
+    reason: "OPENING / CORRECTION",
+    returnable: false,
+  });
+}
+
+/* ----------------------------- denominations ----------------------------- */
+
+export const DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1] as const;
+
+export function denomTotal(counts: Record<string, number> | null | undefined): number {
+  if (!counts) return 0;
+  return Object.entries(counts).reduce((s, [v, c]) => s + Number(v) * (Number(c) || 0), 0);
+}
+
+/* --------------------------- excel import/export -------------------------- */
+
+export interface SheetData {
+  name: string;
+  rows: Array<Record<string, unknown>>;
+}
+
+/** Write a multi-sheet Excel workbook and trigger a browser download. */
+export function exportSheets(filename: string, sheets: SheetData[]) {
+  const XLSX = (globalThis as { XLSXLib?: typeof import("xlsx") }).XLSXLib;
+  if (!XLSX) throw new Error("xlsx missing");
+  const wb = XLSX.utils.book_new();
+  for (const s of sheets) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s.rows), s.name.slice(0, 31));
+  }
+  XLSX.writeFile(wb, filename);
+}
+
+/** Parse an uploaded .xlsx/.xls/.csv file into sheet name + row objects. */
+export async function parseWorkbookFile(file: File): Promise<SheetData[]> {
+  const XLSX = (globalThis as { XLSXLib?: typeof import("xlsx") }).XLSXLib;
+  if (!XLSX) throw new Error("xlsx missing");
+  const wb = XLSX.read(await file.arrayBuffer());
+  return wb.SheetNames.map((n) => ({
+    name: n,
+    rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: null }),
+  }));
+}
+
+/** Normalize a spreadsheet header for flexible column matching. */
+export function normHeader(h: string): string {
+  return h.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function pickField(row: Record<string, unknown>, candidates: string[]): unknown {
+  const keys = Object.keys(row);
+  for (const cand of candidates) {
+    const hit = keys.find((k) => normHeader(k) === cand);
+    if (hit != null && row[hit] !== null && row[hit] !== "") return row[hit];
+  }
+  return null;
+}
+
+/* ------------------------------ category tiles --------------------------- */
+
+export const CATEGORY_ICONS: Record<string, string> = {
+  Snacks: "🍿",
+  FMCG: "🧴",
+  Grocery: "🛒",
+  Dairy: "🥛",
+  Beverages: "🥤",
+  "Personal Care": "🧼",
+  Cosmetics: "💄",
+  Cosmatics: "💄",
+  Household: "🧹",
+  Spices: "🌶️",
+  Pan: "🫖",
+  Toffee: "🍬",
+  Electrical: "💡",
+  "Electrical Lighting": "💡",
+  "Electrical Fitting": "🔌",
+  Electricals: "💡",
+  Stationery: "✏️",
+  Stationary: "✏️",
+  Toys: "🧸",
+  Garments: "👕",
+  Plastic: "🪣",
+  Metal: "🥄",
+  Sports: "🏏",
+  Smoking: "🚬",
+  Crackers: "🎆",
+  General: "📦",
+  "General Store": "📦",
+  Other: "🛍️",
+};
+
+export function categoryIcon(category: string | null | undefined): string {
+  if (!category) return "🛍️";
+  return CATEGORY_ICONS[category] ?? CATEGORY_ICONS[category.toLowerCase()] ?? "🛍️";
 }
