@@ -23,6 +23,7 @@ import { IndentDialog } from "@/components/pos/indent-dialog";
 import { ReceiptDialog, type ReceiptData } from "@/components/pos/receipt";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -32,6 +33,8 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
+  addCustomer,
+  categoryIcon,
   inr,
   maxLineDiscount,
   useCustomers,
@@ -69,6 +72,8 @@ export const Route = createFileRoute("/")({
 
 const LS_KEY = "pos-location-id";
 
+type CustomerMode = "unset" | "chosen" | "walkin";
+
 function PosPage() {
   const queryClient = useQueryClient();
   const { data: locations = [] } = useLocations();
@@ -91,6 +96,7 @@ function PosPage() {
 
   const [lines, setLines] = useState<CartLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  const [customerMode, setCustomerMode] = useState<CustomerMode>("unset");
   const [barcode, setBarcode] = useState("");
   const [discount, setDiscount] = useState(0);
   const [payOpen, setPayOpen] = useState(false);
@@ -100,6 +106,7 @@ function PosPage() {
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
+  const custSearchRef = useRef<HTMLInputElement>(null);
 
   const stockAt = useCallback(
     (productId: string, locId: string | undefined) =>
@@ -123,9 +130,31 @@ function PosPage() {
   );
   const maxBillDiscount = Math.max(subtotal - minTotal, 0);
 
+  /** New bill starts here: clear everything and put focus on the customer search. */
+  function startNewBill() {
+    setLines([]);
+    setCustomer(null);
+    setCustomerMode("unset");
+    setDiscount(0);
+    setBarcode("");
+    setPayOpen(false);
+    setTimeout(() => custSearchRef.current?.focus(), 30);
+  }
+
+  function resolveCustomer(c: Customer | null) {
+    setCustomer(c);
+    setCustomerMode(c ? "chosen" : "walkin");
+    void queryClient.invalidateQueries({ queryKey: ["customers"] });
+    setTimeout(() => barcodeRef.current?.focus(), 30);
+  }
+
   function addToCart(product: Product) {
-    // Customer-first: a new bill always starts with picking the customer.
-    if (lines.length === 0 && !customer) setCustOpen(true);
+    if (customerMode === "unset") {
+      toast.error("Customer pehle chunein", {
+        description: "Search, add or pick Walk-in above — then scan items.",
+      });
+      return;
+    }
     setLines((prev) => {
       const existing = prev.find((l) => l.product.id === product.id);
       if (existing) {
@@ -173,6 +202,10 @@ function PosPage() {
   }
 
   function handleBarcodeSubmit() {
+    if (customerMode === "unset") {
+      toast.error("Customer pehle chunein");
+      return;
+    }
     const q = barcode.trim().toLowerCase();
     if (!q) return;
     const hit =
@@ -190,6 +223,10 @@ function PosPage() {
   }
 
   function openQuickAdd() {
+    if (customerMode === "unset") {
+      toast.error("Customer pehle chunein");
+      return;
+    }
     setQuickPrefill(barcode.trim());
     if (barcode.trim()) setBarcode("");
     setQuickOpen(true);
@@ -213,7 +250,8 @@ function PosPage() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "F1") {
         e.preventDefault();
-        barcodeRef.current?.focus();
+        if (customerMode === "unset") custSearchRef.current?.focus();
+        else barcodeRef.current?.focus();
       } else if (e.key === "F2") {
         e.preventDefault();
         openQuickAdd();
@@ -224,12 +262,15 @@ function PosPage() {
         e.preventDefault();
         if (lines.length > 0) setPayOpen(true);
         else toast.error("Bill is empty");
+      } else if (e.key === "F5") {
+        e.preventDefault();
+        startNewBill();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines.length, barcode]);
+  }, [lines.length, barcode, customerMode]);
 
   function handlePaid(result: InvoiceResult, payments: ReceiptPayment[]) {
     setReceipt({
@@ -251,14 +292,16 @@ function PosPage() {
     });
     setLines([]);
     setCustomer(null);
+    setCustomerMode("unset");
     setDiscount(0);
     setPayOpen(false);
     void queryClient.invalidateQueries({ queryKey: ["inventory"] });
     void queryClient.invalidateQueries({ queryKey: ["customers"] });
     void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
     void queryClient.invalidateQueries({ queryKey: ["cash-transactions"] });
+    void queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
     toast.success(`Bill ${result.invoice_number} saved`);
-    barcodeRef.current?.focus();
+    setTimeout(() => custSearchRef.current?.focus(), 30);
   }
 
   const lowStockIds = useMemo(
@@ -275,76 +318,96 @@ function PosPage() {
     [inventory, location?.id, products],
   );
 
-  const tiles = useMemo(() => products.slice(0, 10), [products]);
+  const tiles = useMemo(() => products.slice(0, 12), [products]);
+  const customerUnset = customerMode === "unset";
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <AppNav active="/" />
 
-      {/* Store selector + customer chip */}
-      <div className="flex items-center gap-2 border-b bg-card px-3 py-2">
+      {/* Store selector + New Bill */}
+      <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
         <Select value={location?.id ?? ""} onValueChange={changeLocation}>
-          <SelectTrigger className="w-64">
+          <SelectTrigger className="w-60">
             <SelectValue placeholder="Select store" />
           </SelectTrigger>
           <SelectContent>
             {locations.map((l) => (
               <SelectItem key={l.id} value={l.id}>
-                {l.name} ({l.type})
+                <span className="flex items-center gap-1.5">
+                  <span className="rounded bg-info/10 px-1 py-0.5 font-mono text-[10px] text-info">
+                    {l.code}
+                  </span>
+                  {l.name}
+                </span>
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        <Button className="gap-1.5" onClick={startNewBill}>
+          <Plus className="h-4 w-4" /> New Bill
+          <span className="rounded border border-primary-foreground/40 px-1 font-mono text-[10px]">F5</span>
+        </Button>
         <button
           onClick={() => setCustOpen(true)}
           className={cn(
-            "flex items-center gap-2 rounded-md border px-3 py-2 text-sm",
-            customer ? "border-primary/40 bg-primary/5" : "border-dashed text-muted-foreground",
+            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm",
+            customerMode === "chosen"
+              ? "border-primary/40 bg-primary/5"
+              : "border-dashed text-muted-foreground",
           )}
         >
           <UserRound className="h-4 w-4" />
-          {customer ? customer.name : "Walk-in customer"}
+          {customerMode === "chosen" ? customer?.name : customerMode === "walkin" ? "Walk-in customer" : "No customer yet"}
         </button>
-        <div className="ml-auto text-xs text-muted-foreground">
-          <span className="rounded border px-1.5 py-0.5 font-mono">F1</span> scan ·{" "}
-          <span className="rounded border px-1.5 py-0.5 font-mono">F2</span> quick add ·{" "}
-          <span className="rounded border px-1.5 py-0.5 font-mono">F3</span> customer ·{" "}
-          <span className="rounded border px-1.5 py-0.5 font-mono">F4</span> pay
-        </div>
       </div>
 
-      {/* Customer banner — demographics + udhar alert */}
-      <div className="border-b bg-muted/30 px-3 py-2">
-        {customer ? (
-          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-1.5 rounded-lg border bg-card px-4 py-2.5">
+      {/* Customer-first inline section — the bill cannot start before this is resolved */}
+      <div className="border-b bg-muted/40 px-3 py-2">
+        {customerUnset ? (
+          <InlineCustomerSection
+            customers={customers}
+            searchRef={custSearchRef}
+            onSelect={resolveCustomer}
+          />
+        ) : (
+          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-1.5 rounded-xl border bg-card px-4 py-2.5 shadow-sm">
             <div className="flex items-center gap-2.5">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
                 <UserRound className="h-5 w-5" />
               </div>
               <div>
-                <div className="text-sm font-semibold leading-tight">{customer.name}</div>
-                <div className="text-xs text-muted-foreground">{customer.mobile ?? "No mobile"}</div>
+                <div className="text-sm font-semibold leading-tight">
+                  {customer?.name ?? "Walk-in customer"}
+                </div>
+                <div className="text-xs text-muted-foreground">{customer?.mobile ?? "No mobile"}</div>
               </div>
             </div>
-            <BannerStat label="Visits" value={String(customer.visits)} />
-            <BannerStat label="Age group" value={customer.age_group ?? "—"} />
-            <BannerStat label="Gender" value={customer.gender ?? "—"} />
-            <BannerStat label="Credit limit" value={customer.credit_limit > 0 ? inr(customer.credit_limit) : "—"} />
-            {customer.outstanding_balance > 0 ? (
-              <span className="ml-auto flex items-center gap-1.5 rounded-md bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
-                <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(customer.outstanding_balance)}
-              </span>
-            ) : (
-              <span className="ml-auto flex items-center gap-1.5 rounded-md bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
-                <CheckCircle2 className="h-4 w-4" /> Udhar Clear
+            {customer && (
+              <>
+                <BannerStat label="Visits" value={String(customer.visits)} />
+                <BannerStat label="Age group" value={customer.age_group ?? "—"} />
+                <BannerStat label="Gender" value={customer.gender ?? "—"} />
+                <BannerStat
+                  label="Credit limit"
+                  value={customer.credit_limit > 0 ? inr(customer.credit_limit) : "—"}
+                />
+                {customer.outstanding_balance > 0 ? (
+                  <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
+                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(customer.outstanding_balance)}
+                  </span>
+                ) : (
+                  <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
+                    <CheckCircle2 className="h-4 w-4" /> Udhar Clear
+                  </span>
+                )}
+              </>
+            )}
+            {customerMode === "walkin" && (
+              <span className="ml-auto rounded-lg bg-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">
+                Walk-in — udhar N/A
               </span>
             )}
-          </div>
-        ) : (
-          <div className="mx-auto flex max-w-[1600px] items-center gap-2 text-xs text-muted-foreground">
-            <UserRound className="h-3.5 w-3.5" />
-            New bill = customer first. Add the first item or press{" "}
-            <span className="rounded border px-1 font-mono">F3</span> to pick a customer — or choose Walk-in.
           </div>
         )}
       </div>
@@ -356,15 +419,23 @@ function PosPage() {
             <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               ref={barcodeRef}
-              autoFocus
-              className="h-11 pl-8 text-base"
-              placeholder="Scan barcode or type item name / SKU…"
+              disabled={customerUnset}
+              className={cn(
+                "h-11 pl-8 text-base",
+                customerUnset && "opacity-50",
+                !customerUnset && "ring-2 ring-ring/40",
+              )}
+              placeholder={
+                customerUnset
+                  ? "Customer choose karne ke baad scan enable hoga…"
+                  : "Scan barcode or type item name / SKU…"
+              }
               value={barcode}
               onChange={(e) => setBarcode(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleBarcodeSubmit()}
             />
             {searchResults.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
+              <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border bg-popover shadow-md">
                 {searchResults.map((p) => (
                   <button
                     key={p.id}
@@ -382,8 +453,8 @@ function PosPage() {
                       {p.variant && <span className="text-xs text-muted-foreground">{p.variant}</span>}
                     </span>
                     <span className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="font-mono">{p.rack_location ?? "—"}</span>
-                      <span>{p.barcode ?? p.sku ?? "—"}</span>
+                      <span className="rounded bg-info/10 px-1 py-0.5 font-mono text-info">{p.rack_location ?? "—"}</span>
+                      <span className="font-mono">{p.barcode ?? p.sku ?? "—"}</span>
                       <b className="text-foreground">{inr(p.sale_price)}</b>
                       <span className={cn(stockAt(p.id, location?.id) <= p.min_stock && "text-destructive")}>
                         {stockAt(p.id, location?.id)} {p.uom_stock}
@@ -395,30 +466,10 @@ function PosPage() {
             )}
           </div>
 
-          {/* Quick tiles */}
-          <div className="flex flex-wrap gap-1.5">
-            <Button variant="outline" size="sm" className="gap-1.5 border-dashed" onClick={openQuickAdd}>
-              <Zap className="h-3.5 w-3.5" /> Quick add{" "}
-              <span className="rounded border px-1 font-mono text-[10px]">F2</span>
-            </Button>
-            {tiles.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => addToCart(p)}
-                className="flex flex-col items-start rounded-md border bg-card px-2.5 py-1.5 text-left text-xs hover:border-primary/40 hover:bg-accent"
-              >
-                <span className="max-w-36 truncate font-medium">{p.name}</span>
-                <span className="text-muted-foreground">
-                  {inr(p.sale_price)}/{p.uom_sale} · {stockAt(p.id, location?.id)}
-                </span>
-              </button>
-            ))}
-          </div>
-
           {/* Cart grid */}
-          <div className="flex-1 overflow-y-auto rounded-lg border bg-card">
+          <div className="flex-1 overflow-y-auto rounded-xl border bg-card shadow-sm">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-muted/70 text-xs uppercase text-muted-foreground">
+              <thead className="sticky top-0 bg-muted/80 text-xs uppercase text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left">Item</th>
                   <th className="px-2 py-2 text-left">Rack</th>
@@ -433,7 +484,9 @@ function PosPage() {
                 {lines.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
-                      Scan an item or tap a quick tile to start the bill.
+                      {customerUnset
+                        ? "Customer choose karein — phir scan ya quick tile se bill shuru karein."
+                        : "Scan an item or tap a quick tile to start the bill."}
                     </td>
                   </tr>
                 )}
@@ -462,7 +515,7 @@ function PosPage() {
                                     ? stock <= l.product.min_stock
                                       ? "bg-destructive/15 text-destructive"
                                       : "bg-success/15 text-success"
-                                    : "bg-muted text-muted-foreground",
+                                    : "bg-info/10 text-info",
                                 )}
                                 title={`${loc.name}: ${q} ${l.product.uom_stock}`}
                               >
@@ -520,7 +573,11 @@ function PosPage() {
                           className="h-6 w-20 text-right text-xs tabular-nums"
                           value={l.discount || ""}
                           onChange={(e) => setLineDiscount(l.product.id, Number(e.target.value) || 0)}
-                          title={lineMax > 0 ? `Max ${inr(lineMax)} (min rate ${inr(l.product.min_sale_price)})` : "No discount allowed below floor price"}
+                          title={
+                            lineMax > 0
+                              ? `Max ${inr(lineMax)} (min rate ${inr(l.product.min_sale_price)})`
+                              : "No discount allowed below floor price"
+                          }
                         />
                       </td>
                       <td className="px-2 py-1.5 text-right font-medium tabular-nums">
@@ -544,9 +601,42 @@ function PosPage() {
           </div>
         </div>
 
-        {/* Right: totals */}
+        {/* Right: quick tiles + totals */}
         <div className="flex w-80 flex-col gap-3">
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border bg-card p-3 shadow-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase text-muted-foreground">Quick items</span>
+              <Button variant="outline" size="sm" className="gap-1 border-dashed" onClick={openQuickAdd}>
+                <Zap className="h-3.5 w-3.5" /> Quick add
+                <span className="rounded border px-1 font-mono text-[10px]">F2</span>
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {tiles.map((p) => (
+                <button
+                  key={p.id}
+                  disabled={customerUnset}
+                  onClick={() => addToCart(p)}
+                  className={cn(
+                    "flex items-start gap-1.5 rounded-lg border bg-background px-2 py-1.5 text-left text-xs hover:border-primary/40 hover:bg-accent",
+                    customerUnset && "opacity-50",
+                  )}
+                >
+                  <span aria-hidden className="text-sm leading-none">
+                    {categoryIcon(p.category)}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block max-w-32 truncate font-medium">{p.name}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {inr(p.sale_price)}/{p.uom_sale} · {stockAt(p.id, location?.id)} left
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-card p-4 shadow-sm">
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Items</span>
@@ -573,46 +663,36 @@ function PosPage() {
                   }}
                 />
               </div>
-              <div className="flex justify-between border-t pt-2 text-lg font-bold">
+              <div className="flex justify-between border-t pt-2 font-display text-xl font-bold">
                 <span>Total</span>
                 <span className="tabular-nums">{inr(total)}</span>
               </div>
             </div>
             <Button
-              className="mt-4 h-12 w-full text-base"
+              size="lg"
+              className="mt-4 h-14 w-full bg-success text-base text-success-foreground hover:bg-success/90"
               disabled={lines.length === 0}
               onClick={() => setPayOpen(true)}
             >
-              <span className="rounded border border-primary-foreground/40 px-1 font-mono text-xs">F4</span>{" "}
+              <span className="rounded border border-success-foreground/40 px-1 font-mono text-xs">F4</span>
               Pay & print ({inr(total)})
             </Button>
-            <Button
-              variant="outline"
-              className="mt-2 w-full"
-              onClick={() => {
-                setLines([]);
-                setDiscount(0);
-                toast.info("Bill cleared");
-              }}
-            >
-              Clear bill
-            </Button>
           </div>
+
           {customer && customer.outstanding_balance > 0 && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
               <div className="font-medium text-destructive">⚠️ Udhar due</div>
               <div className="tabular-nums">
                 {customer.name}: {inr(customer.outstanding_balance)}
               </div>
             </div>
           )}
-          <div className="rounded-lg border bg-card p-3 text-xs text-muted-foreground">
+          <div className="rounded-xl border bg-card p-3 text-xs text-muted-foreground">
             <div className="mb-1 flex items-center gap-1 font-medium text-foreground">
               <Plus className="h-3 w-3" /> Shortcuts
             </div>
-            F1 scan · F2 quick add (pre-fills what you typed) · F3 customer · F4 pay · Enter adds scanned
-            item. Line discount stops at the item's min allowed rate; bill discount stops at the floor-price
-            total.
+            F1 scan · F2 quick add · F3 customer · F4 pay · F5 new bill · Enter adds scanned item. Floor
+            price (min allowed rate) protects every line and bill discount.
           </div>
         </div>
       </main>
@@ -633,7 +713,7 @@ function PosPage() {
       <CustomerDialog
         open={custOpen}
         onOpenChange={setCustOpen}
-        onSelect={(c) => setCustomer(c)}
+        onSelect={(c) => resolveCustomer(c)}
       />
       <QuickAddModal
         open={quickOpen}
@@ -653,6 +733,181 @@ function PosPage() {
         locations={locations}
       />
       <ReceiptDialog open={!!receipt} onOpenChange={(o) => !o && setReceipt(null)} data={receipt} />
+    </div>
+  );
+}
+
+/**
+ * Inline customer-first picker shown on every new bill: search by name or
+ * mobile, add a customer in three fields, or pick Walk-in — no modal.
+ */
+function InlineCustomerSection({
+  customers,
+  searchRef,
+  onSelect,
+}: {
+  customers: Customer[];
+  searchRef: React.RefObject<HTMLInputElement | null>;
+  onSelect: (c: Customer | null) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [ageGroup, setAgeGroup] = useState("Adult");
+  const [gender, setGender] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const results = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    return customers
+      .filter((c) => c.name.toLowerCase().includes(q) || (c.mobile ?? "").includes(q))
+      .slice(0, 6);
+  }, [customers, search]);
+
+  async function handleAdd() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      const created = await addCustomer({
+        name: name.trim(),
+        mobile: mobile.trim() || null,
+        creditLimit: 0,
+        ageGroup,
+        gender: gender || null,
+      });
+      onSelect(created);
+    } catch (e) {
+      toast.error("Could not save customer", { description: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-[1600px] rounded-xl border bg-card p-3 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-72 flex-1">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            ref={searchRef}
+            autoFocus
+            className="pl-8"
+            placeholder="Customer ka naam ya mobile search karein…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <Button
+          variant="outline"
+          className="gap-1.5"
+          onClick={() => {
+            setAdding((a) => !a);
+            if (!adding) setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
+          }}
+        >
+          <Plus className="h-4 w-4" /> New customer
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => onSelect(null)}
+          className="gap-1.5"
+          title="Bill without a registered customer — udhar unavailable"
+        >
+          <UserRound className="h-4 w-4" /> Walk-in customer
+        </Button>
+      </div>
+
+      {adding && (
+        <div className="mt-2 grid gap-2 rounded-lg border bg-muted/40 p-3 md:grid-cols-[1fr_1fr_auto]">
+          <div className="space-y-1">
+            <Label htmlFor="ic-name">Name *</Label>
+            <Input
+              id="ic-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Customer name"
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="ic-mobile">Mobile (optional)</Label>
+            <Input
+              id="ic-mobile"
+              value={mobile}
+              onChange={(e) => setMobile(e.target.value)}
+              placeholder="10-digit number"
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            />
+          </div>
+          <div className="flex items-end gap-2">
+            <Select value={ageGroup} onValueChange={setAgeGroup}>
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["Child", "Teen", "Adult", "Senior"].map((g) => (
+                  <SelectItem key={g} value={g}>
+                    {g}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={gender} onValueChange={setGender}>
+              <SelectTrigger className="w-28">
+                <SelectValue placeholder="Gender" />
+              </SelectTrigger>
+              <SelectContent>
+                {["Male", "Female", "Other"].map((g) => (
+                  <SelectItem key={g} value={g}>
+                    {g}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={handleAdd} disabled={!name.trim() || busy}>
+              Save & start bill
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
+          {results.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => onSelect(c)}
+              className="flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent"
+            >
+              <span className="flex items-center gap-2">
+                <UserRound className="h-4 w-4 text-muted-foreground" />
+                <span className="font-medium">{c.name}</span>
+                {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
+                {c.visits > 0 && (
+                  <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                    {c.visits} visits
+                  </span>
+                )}
+              </span>
+              {c.outstanding_balance > 0 ? (
+                <span className="text-xs font-semibold text-destructive">
+                  ⚠️ Udhar {inr(c.outstanding_balance)}
+                </span>
+              ) : (
+                <span className="text-[10px] font-medium text-success">Clear</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      {!adding && results.length === 0 && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Bill customer ke bina start nahi hota — upar se search karein, naya customer add karein, ya
+          Walk-in chunein.
+        </p>
+      )}
     </div>
   );
 }
