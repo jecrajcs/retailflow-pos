@@ -655,7 +655,7 @@ export async function parseWorkbookFile(file: File): Promise<SheetData[]> {
   const wb = XLSX.read(await file.arrayBuffer());
   return wb.SheetNames.map((n) => ({
     name: n,
-    rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: null }),
+    rows: XLSX.utils.sheet_to_json(wb.Sheets[n]!, { defval: null }),
   }));
 }
 
