@@ -32,6 +32,7 @@ export interface Product {
   min_stock: number;
   is_loose: boolean;
   enrichment_status: string;
+  preferred_supplier: string | null;
 }
 
 export interface Customer {
@@ -66,6 +67,8 @@ export interface CashSession {
   status: string;
   opened_at: string;
   closed_at: string | null;
+  opening_denominations: Record<string, number> | null;
+  closing_denominations: Record<string, number> | null;
 }
 
 export interface CashTxnRow {
