@@ -515,15 +515,13 @@ function PosPage() {
                 Walk-in — udhar N/A
               </span>
             )}
-            {customerMode !== "unset" && (
-              <Button variant="outline" size="sm" className="ml-auto" onClick={() => {
-                setCustomer(null);
-                setCustomerMode("unset");
-                setTimeout(() => custSearchRef.current?.focus(), 30);
-              }}>
-                Change customer
-              </Button>
-            )}
+            <Button variant="outline" size="sm" className="ml-auto" onClick={() => {
+              setCustomer(null);
+              setCustomerMode("unset");
+              setTimeout(() => custSearchRef.current?.focus(), 30);
+            }}>
+              Change customer
+            </Button>
           </div>
         )}
       </div>
@@ -883,6 +881,7 @@ function InlineCustomerSection({
   const [ageGroup, setAgeGroup] = useState("Adult");
   const [gender, setGender] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -891,6 +890,24 @@ function InlineCustomerSection({
       .filter((c) => c.name.toLowerCase().includes(q) || (c.mobile ?? "").includes(q))
       .slice(0, 6);
   }, [customers, search]);
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" && results.length) {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % results.length);
+    } else if (event.key === "ArrowUp" && results.length) {
+      event.preventDefault();
+      setActiveIndex((index) => (index - 1 + results.length) % results.length);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (results[activeIndex]) onSelect(results[activeIndex]);
+      else {
+        setAdding(true);
+        setName(search.trim());
+        setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
+      }
+    }
+  }
 
   async function handleAdd() {
     if (!name.trim() || busy) return;
@@ -923,6 +940,7 @@ function InlineCustomerSection({
             placeholder="Customer ka naam ya mobile search karein…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
           />
         </div>
         <Button
@@ -1001,11 +1019,11 @@ function InlineCustomerSection({
 
       {results.length > 0 && (
         <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((c) => (
+          {results.map((c, index) => (
             <button
               key={c.id}
               onClick={() => onSelect(c)}
-              className="flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent"
+              className={cn("flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent", activeIndex === index && "border-primary bg-accent")}
             >
               <span className="flex items-center gap-2">
                 <UserRound className="h-4 w-4 text-muted-foreground" />
@@ -1017,9 +1035,9 @@ function InlineCustomerSection({
                   </span>
                 )}
               </span>
-              {c.outstanding_balance > 0 ? (
+              {(c.mobile && familySummary(customers, c.mobile).outstanding > 0) ? (
                 <span className="text-xs font-semibold text-destructive">
-                  ⚠️ Udhar {inr(c.outstanding_balance)}
+                  ⚠️ Family due {inr(familySummary(customers, c.mobile).outstanding)}
                 </span>
               ) : (
                 <span className="text-[10px] font-medium text-success">Clear</span>

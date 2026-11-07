@@ -38,6 +38,8 @@ import { cn } from "@/lib/utils";
 import {
   CASH_TXN_REASONS,
   closeSession,
+  DENOMINATIONS,
+  denomTotal,
   inr,
   logCashTxn,
   openSession,
@@ -537,6 +539,7 @@ function OpenShiftCard({
 }) {
   const [operator, setOperator] = useState("");
   const [openingCash, setOpeningCash] = useState("");
+  const [openingCounts, setOpeningCounts] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
 
   async function open() {
@@ -546,7 +549,8 @@ function OpenShiftCard({
       await openSession({
         locationId,
         openedBy: operator.trim() || "Operator",
-        openingCash: Number(openingCash) || 0,
+        openingCash: denomTotal(openingCounts) || Number(openingCash) || 0,
+        openingDenominations: openingCounts,
       });
       toast.success("Shift opened");
       onOpened();
@@ -570,6 +574,12 @@ function OpenShiftCard({
         <div className="space-y-1">
           <Label htmlFor="op-name">Operator</Label>
           <Input id="op-name" value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="Name" />
+        </div>
+        <div className="basis-full">
+          <DenominationFields counts={openingCounts} onChange={(counts) => {
+            setOpeningCounts(counts);
+            setOpeningCash(String(denomTotal(counts)));
+          }} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="op-cash">Opening cash (₹)</Label>
@@ -601,6 +611,7 @@ function CloseShiftCard({
   onClosed: () => void;
 }) {
   const [counted, setCounted] = useState("");
+  const [closingCounts, setClosingCounts] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
 
   async function close() {
@@ -612,7 +623,8 @@ function CloseShiftCard({
         sessionId: session.id,
         cashIn: null,
         cashOut: null,
-        countedCash: counted === "" ? null : Number(counted),
+        countedCash: Object.keys(closingCounts).length ? denomTotal(closingCounts) : counted === "" ? null : Number(counted),
+        closingDenominations: closingCounts,
       });
       const diff = result.difference;
       if (Math.abs(diff) > 0.01) {
@@ -659,9 +671,48 @@ function CloseShiftCard({
             onKeyDown={(e) => e.key === "Enter" && close()}
           />
         </div>
+        <div className="basis-full">
+          <DenominationFields counts={closingCounts} onChange={(counts) => {
+            setClosingCounts(counts);
+            setCounted(String(denomTotal(counts)));
+          }} />
+        </div>
         <Button variant="destructive" onClick={close} disabled={busy}>
           Close shift
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function DenominationFields({
+  counts,
+  onChange,
+}: {
+  counts: Record<string, number>;
+  onChange: (counts: Record<string, number>) => void;
+}) {
+  return (
+    <div className="rounded-md border bg-muted/30 p-3">
+      <div className="mb-2 flex items-center justify-between text-sm font-medium">
+        <span>Notes & coins count</span>
+        <span className="tabular-nums">Total {inr(denomTotal(counts))}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+        {DENOMINATIONS.map((value) => (
+          <label key={value} className="space-y-1 text-xs text-muted-foreground">
+            <span>₹{value}</span>
+            <Input
+              type="number"
+              min="0"
+              inputMode="numeric"
+              aria-label={`Count of ₹${value} notes or coins`}
+              className="h-9 text-right tabular-nums"
+              value={counts[String(value)] ?? ""}
+              onChange={(event) => onChange({ ...counts, [value]: Math.max(0, Number(event.target.value) || 0) })}
+            />
+          </label>
+        ))}
       </div>
     </div>
   );
