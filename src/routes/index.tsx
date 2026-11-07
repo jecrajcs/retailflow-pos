@@ -152,6 +152,9 @@ function PosPage() {
     [lines],
   );
   const maxBillDiscount = Math.max(subtotal - minTotal, 0);
+  const discountEntryValue = discountMode === "PERCENT" && subtotal > 0
+    ? ((discount / subtotal) * 100).toFixed(2)
+    : discount || "";
 
   /** New bill starts here: clear everything and put focus on the customer search. */
   function startNewBill() {
@@ -512,14 +515,16 @@ function PosPage() {
             <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               ref={barcodeRef}
-              disabled={customerUnset}
+              disabled={customerUnset || !locationId}
               className={cn(
                 "h-11 pl-8 text-base",
                 customerUnset && "opacity-50",
                 !customerUnset && "ring-2 ring-ring/40",
               )}
               placeholder={
-                customerUnset
+                !locationId
+                  ? "Select the billing store to enable scanning…"
+                  : customerUnset
                   ? "Customer choose karne ke baad scan enable hoga…"
                   : "Scan barcode or type item name / SKU…"
               }
@@ -708,7 +713,7 @@ function PosPage() {
               {tiles.map((p) => (
                 <button
                   key={p.id}
-                  disabled={customerUnset}
+                  disabled={customerUnset || !locationId}
                   onClick={() => addToCart(p)}
                   className={cn(
                     "flex items-start gap-1.5 rounded-lg border bg-background px-2 py-1.5 text-left text-xs hover:border-primary/40 hover:bg-accent",
@@ -741,20 +746,27 @@ function PosPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Discount</span>
-                <Input
-                  type="number"
-                  className="h-7 w-24 text-right tabular-nums"
-                  value={discount || ""}
-                  onChange={(e) => {
-                    const v = Number(e.target.value) || 0;
-                    if (v > maxBillDiscount) {
-                      toast.warning("Floor price protection", {
-                        description: `Max bill discount is ${inr(maxBillDiscount)}.`,
-                      });
-                      setDiscount(maxBillDiscount);
-                    } else setDiscount(Math.max(v, 0));
-                  }}
-                />
+                <div className="flex items-center gap-1">
+                  <Select value={discountMode} onValueChange={(value) => setDiscountMode(value as "AMOUNT" | "PERCENT")}>
+                    <SelectTrigger className="h-7 w-20"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AMOUNT">₹</SelectItem>
+                      <SelectItem value="PERCENT">%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number"
+                    className="h-7 w-24 text-right tabular-nums"
+                    value={discountEntryValue}
+                    onChange={(e) => {
+                      const value = discountFromInput(subtotal, Number(e.target.value) || 0, discountMode);
+                      if (value > maxBillDiscount) {
+                        toast.warning("Floor price protection", { description: `Maximum allowed bill discount is ${inr(maxBillDiscount)}.` });
+                        setDiscount(maxBillDiscount);
+                      } else setDiscount(value);
+                    }}
+                  />
+                </div>
               </div>
               <div className="flex justify-between border-t pt-2 font-display text-xl font-bold">
                 <span>Total</span>
@@ -798,6 +810,7 @@ function PosPage() {
         subtotal={subtotal}
         discount={discount}
         onDiscountChange={setDiscount}
+        businessDate={businessDate}
         minTotal={minTotal}
         customer={customer}
         onPickCustomer={() => setCustOpen(true)}
