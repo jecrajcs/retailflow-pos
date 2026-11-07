@@ -41,6 +41,11 @@ import {
   useLocations,
   useInventory,
   useProducts,
+  exportSheets,
+  parseWorkbookFile,
+  pickField,
+  normHeader,
+  useInventory,
   type Product,
   type StockTransfer,
 } from "@/lib/pos";
@@ -350,6 +355,157 @@ function ManagerPage() {
         </Tabs>
       </main>
     </div>
+  );
+}
+
+function SpreadsheetTools({
+  products,
+  locations,
+  locationId,
+}: {
+  products: Product[];
+  locations: Array<{ id: string; name: string; code: string; type: string }>;
+  locationId: string;
+}) {
+  const { data: inventory = [] } = useInventory();
+  const [kind, setKind] = useState<"products" | "customers" | "stock">("products");
+  const [busy, setBusy] = useState(false);
+
+  function downloadTemplate(template: "products" | "customers" | "stock") {
+    const examples: Record<typeof template, Record<string, unknown>> = {
+      products: { name: "Sample item", sku: "SKU-001", barcode: "8900000000000", category: "Grocery", variant: "1kg", hsn: "", purchase_cost: 50, mrp: 75, sale_price: 70, min_sale_price: 60, min_stock: 5, uom_purchase: "Pcs", uom_stock: "Pcs", uom_sale: "Pcs", rack_location: "Rack S1" },
+      customers: { name: "Customer name", mobile: "", age_group: "Adult", gender: "", credit_limit: 0, outstanding_balance: 0, visits: 0 },
+      stock: { sku: "SKU-001", location_code: "OUTLET1", quantity_on_hand: 10 },
+    };
+    exportSheets(`retailhub-${template}-template.xlsx`, [{ name: template, rows: [examples[template]] }]);
+  }
+
+  async function importFile(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const sheets = await parseWorkbookFile(file);
+      const rows = sheets.flatMap((sheet) => sheet.rows);
+      if (kind === "products") {
+        let imported = 0;
+        for (const row of rows) {
+          const name = String(pickField(row, ["name", "productname", "item"]) ?? "").trim();
+          if (!name) continue;
+          const { error } = await supabase.from("products").insert({
+            name,
+            sku: String(pickField(row, ["sku", "productsku"]) ?? "") || null,
+            barcode: String(pickField(row, ["barcode", "ean"]) ?? "") || null,
+            hsn: String(pickField(row, ["hsn", "hsncode"]) ?? "") || null,
+            category: String(pickField(row, ["category"]) ?? "") || null,
+            variant: String(pickField(row, ["variant", "size"]) ?? "") || null,
+            rack_location: String(pickField(row, ["racklocation", "rack"]) ?? "") || null,
+            purchase_cost: Number(pickField(row, ["purchasecost", "cost"])) || 0,
+            mrp: Number(pickField(row, ["mrp"])) || 0,
+            sale_price: Number(pickField(row, ["saleprice", "sellingprice"])) || 0,
+            min_sale_price: Number(pickField(row, ["minsaleprice", "floorprice"])) || 0,
+            min_stock: Number(pickField(row, ["minstock", "reorderlevel"])) || 0,
+            uom_purchase: String(pickField(row, ["uompurchase"]) ?? "Pcs"),
+            uom_stock: String(pickField(row, ["uomstock", "uom"]) ?? "Pcs"),
+            uom_sale: String(pickField(row, ["uomsale", "uom"]) ?? "Pcs"),
+          });
+          if (error) throw error;
+          imported++;
+        }
+        toast.success(`${imported} products imported`);
+      } else if (kind === "customers") {
+        const payload = rows.map((row) => ({
+          name: String(pickField(row, ["name", "customername"]) ?? "").trim(),
+          mobile: String(pickField(row, ["mobile", "phone", "phonenumber"]) ?? "") || null,
+          age_group: String(pickField(row, ["agegroup"]) ?? "") || null,
+          gender: String(pickField(row, ["gender"]) ?? "") || null,
+          credit_limit: Number(pickField(row, ["creditlimit"])) || 0,
+          outstanding_balance: Number(pickField(row, ["outstandingbalance", "udhar", "due"])) || 0,
+          visits: Number(pickField(row, ["visits"])) || 0,
+        })).filter((row) => row.name);
+        const { error } = await supabase.from("customers").insert(payload);
+        if (error) throw error;
+        toast.success(`${payload.length} customers imported`);
+      } else {
+        const existingProducts = [...products];
+        let imported = 0;
+        for (const row of rows) {
+          const sku = String(pickField(row, ["sku", "productsku"]) ?? "");
+          const code = String(pickField(row, ["locationcode", "location"]) ?? "");
+          const product = existingProducts.find((item) => item.sku === sku || item.barcode === sku);
+          const location = locations.find((item) => item.code === code || item.id === code) ?? locations.find((item) => item.id === locationId);
+          const quantity = Number(pickField(row, ["quantityonhand", "quantity", "openingstock", "stock"])) || 0;
+          if (!product || !location) continue;
+          const { error } = await supabase.from("inventory").upsert({ product_id: product.id, location_id: location.id, quantity_on_hand: quantity }, { onConflict: "product_id,location_id" });
+          if (error) throw error;
+          imported++;
+        }
+        toast.success(`${imported} location stock rows imported`);
+      }
+    } catch (error) {
+      toast.error("Spreadsheet import failed", { description: String(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportRegister(type: "stock" | "reorder" | "sales") {
+    try {
+      if (type === "sales") {
+        const { data, error } = await supabase.from("invoices").select("invoice_number,business_date,created_at,total_amount,discount_amount,paid_amount,balance_amount,payment_status,customers(name),locations(name)").order("created_at", { ascending: false }).limit(5000);
+        if (error) throw error;
+        exportSheets("retailhub-daily-sales-register.xlsx", [{ name: "Sales", rows: data ?? [] }]);
+        return;
+      }
+      const rows = products.flatMap((product) => locations.map((location) => ({
+        sku: product.sku,
+        name: product.name,
+        rack_location: product.rack_location,
+        location: location.name,
+        location_code: location.code,
+        quantity_on_hand: inventory.find((row) => row.product_id === product.id && row.location_id === location.id)?.quantity_on_hand ?? 0,
+        min_stock: product.min_stock,
+        reorder_status: (inventory.find((row) => row.product_id === product.id && row.location_id === location.id)?.quantity_on_hand ?? 0) <= 0 ? "OUT OF STOCK" : (inventory.find((row) => row.product_id === product.id && row.location_id === location.id)?.quantity_on_hand ?? 0) <= product.min_stock ? "REORDER NOW" : "IN STOCK",
+      }))).filter((row) => type !== "reorder" || row.reorder_status !== "IN STOCK");
+      exportSheets(type === "stock" ? "retailhub-stock-register.xlsx" : "retailhub-reorder-list.xlsx", [{ name: type === "stock" ? "Stock Register" : "Reorder", rows }]);
+    } catch (error) {
+      toast.error("Export failed", { description: String(error) });
+    }
+  }
+
+  return (
+    <section className="space-y-4 rounded-lg border bg-card p-4">
+      <div>
+        <h2 className="font-semibold">Spreadsheet import & export</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Download a template, fill it in Excel or CSV, then upload the completed file.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {(["products", "customers", "stock"] as const).map((template) => (
+          <div key={template} className="flex items-center justify-between gap-2 rounded-md border p-3">
+            <span className="capitalize">{template === "stock" ? "Opening stock" : template}</span>
+            <Button variant="outline" size="sm" onClick={() => downloadTemplate(template)}><Download className="h-4 w-4" /> Template</Button>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+        <Select value={kind} onValueChange={(value) => setKind(value as typeof kind)}>
+          <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="products">Products</SelectItem>
+            <SelectItem value="customers">Customers</SelectItem>
+            <SelectItem value="stock">Opening stock</SelectItem>
+          </SelectContent>
+        </Select>
+        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground">
+          <Upload className="h-4 w-4" /> {busy ? "Importing…" : "Upload spreadsheet"}
+          <input className="sr-only" type="file" accept=".xlsx,.xls,.csv" disabled={busy} onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-2 border-t pt-4">
+        <Button variant="outline" onClick={() => void exportRegister("stock")}><Download className="h-4 w-4" /> Stock register</Button>
+        <Button variant="outline" onClick={() => void exportRegister("reorder")}><Download className="h-4 w-4" /> Reorder list</Button>
+        <Button variant="outline" onClick={() => void exportRegister("sales")}><Download className="h-4 w-4" /> Daily sales register</Button>
+      </div>
+    </section>
   );
 }
 
