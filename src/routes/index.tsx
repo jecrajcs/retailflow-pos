@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
 import {
   AlertTriangle,
+  CalendarDays,
   CheckCircle2,
   MapPin,
   Plus,
@@ -32,10 +34,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   addCustomer,
   categoryIcon,
+  discountFromInput,
+  familySummary,
   inr,
+  matchesProductSearch,
   maxLineDiscount,
   useCustomers,
   useInventory,
@@ -73,6 +80,20 @@ export const Route = createFileRoute("/")({
 const LS_KEY = "pos-location-id";
 
 type CustomerMode = "unset" | "chosen" | "walkin";
+type HeldBill = {
+  id: string;
+  customer: Customer | null;
+  customerMode: CustomerMode;
+  lines: CartLine[];
+  discount: number;
+  locationId: string;
+  businessDate: string;
+};
+
+function todayBusinessDate() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
 
 function PosPage() {
   const queryClient = useQueryClient();
@@ -81,15 +102,14 @@ function PosPage() {
   const { data: inventory = [] } = useInventory();
   const { data: customers = [] } = useCustomers();
 
-  const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
-  const location = locations.find((l) => l.id === locationId) ?? locations[0];
-
-  useEffect(() => {
-    const first = locations[0];
-    if (!locationId && first) setLocationId(first.id);
-  }, [locationId, locations]);
+  const [locationId, setLocationId] = useState("");
+  const location = locations.find((l) => l.id === locationId);
 
   function changeLocation(id: string) {
+    if (lines.length > 0 && id !== locationId) {
+      toast.warning("Current bill is active", { description: "Hold or finish this bill before changing the store." });
+      return;
+    }
     setLocationId(id);
     localStorage.setItem(LS_KEY, id);
   }
@@ -99,6 +119,9 @@ function PosPage() {
   const [customerMode, setCustomerMode] = useState<CustomerMode>("unset");
   const [barcode, setBarcode] = useState("");
   const [discount, setDiscount] = useState(0);
+  const [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
+  const [businessDate, setBusinessDate] = useState(todayBusinessDate);
+  const [heldBills, setHeldBills] = useState<HeldBill[]>([]);
   const [payOpen, setPayOpen] = useState(false);
   const [custOpen, setCustOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -129,6 +152,9 @@ function PosPage() {
     [lines],
   );
   const maxBillDiscount = Math.max(subtotal - minTotal, 0);
+  const discountEntryValue = discountMode === "PERCENT" && subtotal > 0
+    ? ((discount / subtotal) * 100).toFixed(2)
+    : discount || "";
 
   /** New bill starts here: clear everything and put focus on the customer search. */
   function startNewBill() {
@@ -136,6 +162,7 @@ function PosPage() {
     setCustomer(null);
     setCustomerMode("unset");
     setDiscount(0);
+    setBusinessDate(todayBusinessDate());
     setBarcode("");
     setPayOpen(false);
     setTimeout(() => custSearchRef.current?.focus(), 30);
@@ -149,10 +176,18 @@ function PosPage() {
   }
 
   function addToCart(product: Product) {
+    if (!locationId) {
+      toast.error("Select the store first");
+      return;
+    }
     if (customerMode === "unset") {
       toast.error("Customer pehle chunein", {
         description: "Search, add or pick Walk-in above — then scan items.",
       });
+      return;
+    }
+    if (stockAt(product.id, locationId) <= 0) {
+      toast.error("Out of stock at this store", { description: `Choose another store or request a transfer for ${product.name}.` });
       return;
     }
     setLines((prev) => {
@@ -176,6 +211,10 @@ function PosPage() {
   }
 
   function setQuantity(productId: string, quantity: number) {
+    if (quantity > stockAt(productId, locationId)) {
+      toast.warning(`Only ${stockAt(productId, locationId)} in stock at this store`);
+      quantity = stockAt(productId, locationId);
+    }
     setLines((prev) =>
       quantity <= 0
         ? prev.filter((l) => l.product.id !== productId)
@@ -216,9 +255,8 @@ function PosPage() {
       setBarcode("");
       barcodeRef.current?.focus();
     } else {
-      toast.error("Item not found", {
-        description: "Press F2 to quick-add it — name & barcode are pre-filled from what you typed.",
-      });
+      setQuickPrefill(barcode.trim());
+      setQuickOpen(true);
     }
   }
 
@@ -232,16 +270,39 @@ function PosPage() {
     setQuickOpen(true);
   }
 
+  function holdCurrentBill() {
+    if (customerMode === "unset") {
+      toast.error("Choose a customer or Walk-in before holding this bill");
+      return;
+    }
+    setHeldBills((current) => [...current, {
+      id: crypto.randomUUID(), customer, customerMode, lines, discount, locationId, businessDate,
+    }]);
+    startNewBill();
+  }
+
+  function switchToHeldBill(id: string) {
+    const held = heldBills.find((bill) => bill.id === id);
+    if (!held) return;
+    if (customerMode !== "unset" && (lines.length > 0 || customer || discount > 0)) {
+      setHeldBills((current) => [...current, {
+        id: crypto.randomUUID(), customer, customerMode, lines, discount, locationId, businessDate,
+      }]);
+    }
+    setLines(held.lines);
+    setCustomer(held.customer);
+    setCustomerMode(held.customerMode);
+    setDiscount(held.discount);
+    setLocationId(held.locationId);
+    setBusinessDate(held.businessDate);
+    setHeldBills((current) => current.filter((bill) => bill.id !== id));
+  }
+
   const searchResults = useMemo(() => {
     const q = barcode.trim().toLowerCase();
     if (q.length < 2) return [];
     return products
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.barcode?.toLowerCase().includes(q) ||
-          p.sku?.toLowerCase().includes(q),
-      )
+      .filter((p) => matchesProductSearch(p, q))
       .slice(0, 8);
   }, [barcode, products]);
 
@@ -320,6 +381,9 @@ function PosPage() {
 
   const tiles = useMemo(() => products.slice(0, 12), [products]);
   const customerUnset = customerMode === "unset";
+  const familyDue = customer?.mobile
+    ? familySummary(customers, customer.mobile)
+    : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -327,9 +391,9 @@ function PosPage() {
 
       {/* Store selector + New Bill */}
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
-        <Select value={location?.id ?? ""} onValueChange={changeLocation}>
+        <Select value={locationId} onValueChange={changeLocation}>
           <SelectTrigger className="w-60">
-            <SelectValue placeholder="Select store" />
+            <SelectValue placeholder="Select billing store…" />
           </SelectTrigger>
           <SelectContent>
             {locations.map((l) => (
@@ -348,6 +412,9 @@ function PosPage() {
           <Plus className="h-4 w-4" /> New Bill
           <span className="rounded border border-primary-foreground/40 px-1 font-mono text-[10px]">F5</span>
         </Button>
+        <Button variant="outline" onClick={holdCurrentBill} disabled={!locationId || customerMode === "unset"}>
+          Hold bill
+        </Button>
         <button
           onClick={() => setCustOpen(true)}
           className={cn(
@@ -360,6 +427,38 @@ function PosPage() {
           <UserRound className="h-4 w-4" />
           {customerMode === "chosen" ? customer?.name : customerMode === "walkin" ? "Walk-in customer" : "No customer yet"}
         </button>
+      </div>
+
+      <div className="flex min-h-11 items-center gap-2 overflow-x-auto border-b bg-background px-3 py-1.5">
+        <span className="shrink-0 text-xs font-semibold text-muted-foreground">BILLS</span>
+        <Button variant="secondary" size="sm" className="shrink-0">Current bill</Button>
+        {heldBills.map((bill, index) => (
+          <Button key={bill.id} variant="outline" size="sm" className="shrink-0" onClick={() => switchToHeldBill(bill.id)}>
+            {bill.customer?.name ?? "Walk-in"} · {bill.lines.length} items · Hold {index + 1}
+          </Button>
+        ))}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <span className="text-xs text-muted-foreground">Bill date</span>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <CalendarDays className="h-4 w-4" /> {format(new Date(`${businessDate}T12:00:00`), "dd MMM yyyy")}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="single"
+                selected={new Date(`${businessDate}T12:00:00`)}
+                onSelect={(date) => {
+                  if (!date) return;
+                  setBusinessDate(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`);
+                }}
+                initialFocus
+                className="pointer-events-auto"
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
 
       {/* Customer-first inline section — the bill cannot start before this is resolved */}
@@ -394,12 +493,20 @@ function PosPage() {
                 />
                 {customer.outstanding_balance > 0 ? (
                   <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
-                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(customer.outstanding_balance)}
+                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(familyDue?.outstanding ?? customer.outstanding_balance)}
                   </span>
                 ) : (
                   <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
                     <CheckCircle2 className="h-4 w-4" /> Udhar Clear
                   </span>
+                )}
+                {familyDue && familyDue.members.length > 1 && (
+                  <details className="basis-full border-t pt-2 text-xs">
+                    <summary className="cursor-pointer font-medium">Family account · {inr(familyDue.outstanding)} total due · {familyDue.members.length} members</summary>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+                      {familyDue.members.map((member) => <span key={member.id}>{member.name}: {inr(member.outstanding_balance)}</span>)}
+                    </div>
+                  </details>
                 )}
               </>
             )}
@@ -408,6 +515,13 @@ function PosPage() {
                 Walk-in — udhar N/A
               </span>
             )}
+            <Button variant="outline" size="sm" className="ml-auto" onClick={() => {
+              setCustomer(null);
+              setCustomerMode("unset");
+              setTimeout(() => custSearchRef.current?.focus(), 30);
+            }}>
+              Change customer
+            </Button>
           </div>
         )}
       </div>
@@ -419,14 +533,16 @@ function PosPage() {
             <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               ref={barcodeRef}
-              disabled={customerUnset}
+              disabled={customerUnset || !locationId}
               className={cn(
                 "h-11 pl-8 text-base",
                 customerUnset && "opacity-50",
                 !customerUnset && "ring-2 ring-ring/40",
               )}
               placeholder={
-                customerUnset
+                !locationId
+                  ? "Select the billing store to enable scanning…"
+                  : customerUnset
                   ? "Customer choose karne ke baad scan enable hoga…"
                   : "Scan barcode or type item name / SKU…"
               }
@@ -615,7 +731,7 @@ function PosPage() {
               {tiles.map((p) => (
                 <button
                   key={p.id}
-                  disabled={customerUnset}
+                  disabled={customerUnset || !locationId}
                   onClick={() => addToCart(p)}
                   className={cn(
                     "flex items-start gap-1.5 rounded-lg border bg-background px-2 py-1.5 text-left text-xs hover:border-primary/40 hover:bg-accent",
@@ -648,20 +764,27 @@ function PosPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Discount</span>
-                <Input
-                  type="number"
-                  className="h-7 w-24 text-right tabular-nums"
-                  value={discount || ""}
-                  onChange={(e) => {
-                    const v = Number(e.target.value) || 0;
-                    if (v > maxBillDiscount) {
-                      toast.warning("Floor price protection", {
-                        description: `Max bill discount is ${inr(maxBillDiscount)}.`,
-                      });
-                      setDiscount(maxBillDiscount);
-                    } else setDiscount(Math.max(v, 0));
-                  }}
-                />
+                <div className="flex items-center gap-1">
+                  <Select value={discountMode} onValueChange={(value) => setDiscountMode(value as "AMOUNT" | "PERCENT")}>
+                    <SelectTrigger className="h-7 w-20"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AMOUNT">₹</SelectItem>
+                      <SelectItem value="PERCENT">%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number"
+                    className="h-7 w-24 text-right tabular-nums"
+                    value={discountEntryValue}
+                    onChange={(e) => {
+                      const value = discountFromInput(subtotal, Number(e.target.value) || 0, discountMode);
+                      if (value > maxBillDiscount) {
+                        toast.warning("Floor price protection", { description: `Maximum allowed bill discount is ${inr(maxBillDiscount)}.` });
+                        setDiscount(maxBillDiscount);
+                      } else setDiscount(value);
+                    }}
+                  />
+                </div>
               </div>
               <div className="flex justify-between border-t pt-2 font-display text-xl font-bold">
                 <span>Total</span>
@@ -705,6 +828,7 @@ function PosPage() {
         subtotal={subtotal}
         discount={discount}
         onDiscountChange={setDiscount}
+        businessDate={businessDate}
         minTotal={minTotal}
         customer={customer}
         onPickCustomer={() => setCustOpen(true)}
@@ -757,6 +881,7 @@ function InlineCustomerSection({
   const [ageGroup, setAgeGroup] = useState("Adult");
   const [gender, setGender] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -765,6 +890,24 @@ function InlineCustomerSection({
       .filter((c) => c.name.toLowerCase().includes(q) || (c.mobile ?? "").includes(q))
       .slice(0, 6);
   }, [customers, search]);
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" && results.length) {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % results.length);
+    } else if (event.key === "ArrowUp" && results.length) {
+      event.preventDefault();
+      setActiveIndex((index) => (index - 1 + results.length) % results.length);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (results[activeIndex]) onSelect(results[activeIndex]);
+      else {
+        setAdding(true);
+        setName(search.trim());
+        setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
+      }
+    }
+  }
 
   async function handleAdd() {
     if (!name.trim() || busy) return;
@@ -797,6 +940,7 @@ function InlineCustomerSection({
             placeholder="Customer ka naam ya mobile search karein…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
           />
         </div>
         <Button
@@ -875,11 +1019,11 @@ function InlineCustomerSection({
 
       {results.length > 0 && (
         <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((c) => (
+          {results.map((c, index) => (
             <button
               key={c.id}
               onClick={() => onSelect(c)}
-              className="flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent"
+              className={cn("flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent", activeIndex === index && "border-primary bg-accent")}
             >
               <span className="flex items-center gap-2">
                 <UserRound className="h-4 w-4 text-muted-foreground" />
@@ -891,9 +1035,9 @@ function InlineCustomerSection({
                   </span>
                 )}
               </span>
-              {c.outstanding_balance > 0 ? (
+              {(c.mobile && familySummary(customers, c.mobile).outstanding > 0) ? (
                 <span className="text-xs font-semibold text-destructive">
-                  ⚠️ Udhar {inr(c.outstanding_balance)}
+                  ⚠️ Family due {inr(familySummary(customers, c.mobile).outstanding)}
                 </span>
               ) : (
                 <span className="text-[10px] font-medium text-success">Clear</span>

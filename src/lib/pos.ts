@@ -47,6 +47,12 @@ export interface Customer {
   visits: number;
 }
 
+export interface CustomerFamily {
+  mobile: string;
+  members: Customer[];
+  outstanding: number;
+}
+
 export interface StockTransfer {
   id: string;
   from_location_id: string;
@@ -136,6 +142,65 @@ export const CASH_TXN_REASONS = [
 export function maxLineDiscount(unitPrice: number, quantity: number, minSalePrice: number) {
   const floor = minSalePrice > 0 ? minSalePrice : 0;
   return Math.max(quantity * unitPrice - quantity * floor, 0);
+}
+
+export function familySummary(customers: Customer[], mobile: string): CustomerFamily {
+  const members = customers.filter((customer) => customer.mobile === mobile);
+  return {
+    mobile,
+    members,
+    outstanding: members.reduce((sum, member) => sum + member.outstanding_balance, 0),
+  };
+}
+
+const HINDI_SEARCH_ALIASES: Record<string, string[]> = {
+  bucket: ["balti", "baalti", "बाल्टी"],
+  balti: ["bucket", "बाल्टी"],
+  broom: ["jhadu", "jhaadu", "झाड़ू"],
+  jhadu: ["broom", "झाड़ू"],
+  soap: ["sabun", "साबुन"],
+  sabun: ["soap", "साबुन"],
+  rice: ["chawal", "चावल"],
+  chawal: ["rice", "चावल"],
+};
+
+function editDistance(a: string, b: string): number {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= a.length; row++) {
+    let diagonal = previous[0] ?? 0;
+    previous[0] = row;
+    for (let col = 1; col <= b.length; col++) {
+      const above = previous[col] ?? 0;
+      previous[col] = Math.min(
+        above + 1,
+        (previous[col - 1] ?? 0) + 1,
+        diagonal + (a[row - 1] === b[col - 1] ? 0 : 1),
+      );
+      diagonal = above;
+    }
+  }
+  return previous[b.length] ?? 0;
+}
+
+/** In-memory phonetic + typo-tolerant search across catalog fields. */
+export function matchesProductSearch(product: Product, query: string): boolean {
+  const q = query.trim().toLocaleLowerCase();
+  if (!q) return true;
+  const fields = [product.name, product.sku, product.barcode, product.category, product.variant]
+    .filter((field): field is string => !!field)
+    .map((field) => field.toLocaleLowerCase());
+  const aliases = HINDI_SEARCH_ALIASES[q] ?? [];
+  if (fields.some((field) => field.includes(q) || aliases.some((alias) => field.includes(alias)))) {
+    return true;
+  }
+  if (q.length < 4) return false;
+  return fields.some((field) =>
+    field.split(/\s+/).some((word) => word.length >= 4 && editDistance(word, q) <= 1),
+  );
+}
+
+export function discountFromInput(subtotal: number, value: number, mode: "AMOUNT" | "PERCENT") {
+  return mode === "PERCENT" ? (subtotal * Math.max(0, value)) / 100 : Math.max(0, value);
 }
 
 export function useLocations() {
@@ -292,6 +357,7 @@ export async function createPosInvoice(input: {
   locationId: string;
   customerId: string | null;
   discount: number;
+  businessDate: string;
   items: Array<{
     product_id: string;
     quantity: number;
@@ -308,6 +374,7 @@ export async function createPosInvoice(input: {
     p_discount: input.discount,
     p_items: input.items,
     p_payments: input.payments as unknown as Json,
+    p_business_date: input.businessDate,
   });
   if (error) throw error;
   return data as unknown as InvoiceResult;
