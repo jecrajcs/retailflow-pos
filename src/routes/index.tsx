@@ -385,9 +385,9 @@ function PosPage() {
 
       {/* Store selector + New Bill */}
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
-        <Select value={location?.id ?? ""} onValueChange={changeLocation}>
+        <Select value={locationId} onValueChange={changeLocation}>
           <SelectTrigger className="w-60">
-            <SelectValue placeholder="Select store" />
+            <SelectValue placeholder="Select billing store…" />
           </SelectTrigger>
           <SelectContent>
             {locations.map((l) => (
@@ -406,6 +406,9 @@ function PosPage() {
           <Plus className="h-4 w-4" /> New Bill
           <span className="rounded border border-primary-foreground/40 px-1 font-mono text-[10px]">F5</span>
         </Button>
+        <Button variant="outline" onClick={holdCurrentBill} disabled={!locationId || customerMode === "unset"}>
+          Hold bill
+        </Button>
         <button
           onClick={() => setCustOpen(true)}
           className={cn(
@@ -418,6 +421,38 @@ function PosPage() {
           <UserRound className="h-4 w-4" />
           {customerMode === "chosen" ? customer?.name : customerMode === "walkin" ? "Walk-in customer" : "No customer yet"}
         </button>
+      </div>
+
+      <div className="flex min-h-11 items-center gap-2 overflow-x-auto border-b bg-background px-3 py-1.5">
+        <span className="shrink-0 text-xs font-semibold text-muted-foreground">BILLS</span>
+        <Button variant="secondary" size="sm" className="shrink-0">Current bill</Button>
+        {heldBills.map((bill, index) => (
+          <Button key={bill.id} variant="outline" size="sm" className="shrink-0" onClick={() => switchToHeldBill(bill.id)}>
+            {bill.customer?.name ?? "Walk-in"} · {bill.lines.length} items · Hold {index + 1}
+          </Button>
+        ))}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <span className="text-xs text-muted-foreground">Bill date</span>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <CalendarDays className="h-4 w-4" /> {format(new Date(`${businessDate}T12:00:00`), "dd MMM yyyy")}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="end">
+              <Calendar
+                mode="single"
+                selected={new Date(`${businessDate}T12:00:00`)}
+                onSelect={(date) => {
+                  if (!date) return;
+                  setBusinessDate(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`);
+                }}
+                initialFocus
+                className="pointer-events-auto"
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
 
       {/* Customer-first inline section — the bill cannot start before this is resolved */}
