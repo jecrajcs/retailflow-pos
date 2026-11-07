@@ -381,6 +381,9 @@ function PosPage() {
 
   const tiles = useMemo(() => products.slice(0, 12), [products]);
   const customerUnset = customerMode === "unset";
+  const familyDue = customer?.mobile
+    ? familySummary(customers, customer.mobile)
+    : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -490,12 +493,20 @@ function PosPage() {
                 />
                 {customer.outstanding_balance > 0 ? (
                   <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
-                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(customer.outstanding_balance)}
+                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE: {inr(familyDue?.outstanding ?? customer.outstanding_balance)}
                   </span>
                 ) : (
                   <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
                     <CheckCircle2 className="h-4 w-4" /> Udhar Clear
                   </span>
+                )}
+                {familyDue && familyDue.members.length > 1 && (
+                  <details className="basis-full border-t pt-2 text-xs">
+                    <summary className="cursor-pointer font-medium">Family account · {inr(familyDue.outstanding)} total due · {familyDue.members.length} members</summary>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+                      {familyDue.members.map((member) => <span key={member.id}>{member.name}: {inr(member.outstanding_balance)}</span>)}
+                    </div>
+                  </details>
                 )}
               </>
             )}
@@ -503,6 +514,15 @@ function PosPage() {
               <span className="ml-auto rounded-lg bg-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">
                 Walk-in — udhar N/A
               </span>
+            )}
+            {customerMode !== "unset" && (
+              <Button variant="outline" size="sm" className="ml-auto" onClick={() => {
+                setCustomer(null);
+                setCustomerMode("unset");
+                setTimeout(() => custSearchRef.current?.focus(), 30);
+              }}>
+                Change customer
+              </Button>
             )}
           </div>
         )}
