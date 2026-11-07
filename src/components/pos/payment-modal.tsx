@@ -74,6 +74,7 @@ export function PaymentModal({
   const maxDiscount = Math.max(subtotal - minTotal, 0);
   const total = Math.max(subtotal - discount, 0);
   const [splits, setSplits] = useState<Split[]>([{ mode: "CASH", amount: "", tendered: "" }]);
+  const [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -184,20 +185,28 @@ export function PaymentModal({
           </div>
           <div className="rounded-lg border bg-muted/40 p-2">
             <div className="text-[10px] uppercase text-muted-foreground">Discount</div>
-            <Input
-              type="number"
-              className="mt-0.5 h-7 text-center text-sm"
-              value={discount || ""}
-              onChange={(e) => {
-                const v = Number(e.target.value) || 0;
-                if (v > maxDiscount) {
-                  toast.warning(`Max discount ${inr(maxDiscount)}`, {
-                    description: "Floor price (min allowed rate) protection is on.",
-                  });
-                  onDiscountChange(maxDiscount);
-                } else onDiscountChange(v);
-              }}
-            />
+            <div className="mt-0.5 flex gap-1">
+              <Select value={discountMode} onValueChange={(value) => setDiscountMode(value as "AMOUNT" | "PERCENT")}>
+                <SelectTrigger className="h-7 w-16"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="AMOUNT">₹</SelectItem>
+                  <SelectItem value="PERCENT">%</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                type="number"
+                className="h-7 text-center text-sm"
+                value={discountMode === "PERCENT" && subtotal > 0 ? ((discount / subtotal) * 100).toFixed(2) : discount || ""}
+                onChange={(e) => {
+                  const entered = Number(e.target.value) || 0;
+                  const value = discountMode === "PERCENT" ? (subtotal * entered) / 100 : entered;
+                  if (value > maxDiscount) {
+                    toast.warning(`Max discount ${inr(maxDiscount)}`, { description: "Floor price protection is on." });
+                    onDiscountChange(maxDiscount);
+                  } else onDiscountChange(Math.max(0, value));
+                }}
+              />
+            </div>
             <div className="text-[9px] text-muted-foreground">max {inr(maxDiscount)}</div>
           </div>
           <div className="rounded-lg border-2 border-primary bg-primary/5 p-2">
