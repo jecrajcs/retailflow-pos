@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
 import {
   AlertTriangle,
+  CalendarDays,
   CheckCircle2,
   MapPin,
   Plus,
@@ -32,10 +34,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   addCustomer,
   categoryIcon,
+  discountFromInput,
+  familySummary,
   inr,
+  matchesProductSearch,
   maxLineDiscount,
   useCustomers,
   useInventory,
@@ -73,6 +80,20 @@ export const Route = createFileRoute("/")({
 const LS_KEY = "pos-location-id";
 
 type CustomerMode = "unset" | "chosen" | "walkin";
+type HeldBill = {
+  id: string;
+  customer: Customer | null;
+  customerMode: CustomerMode;
+  lines: CartLine[];
+  discount: number;
+  locationId: string;
+  businessDate: string;
+};
+
+function todayBusinessDate() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
 
 function PosPage() {
   const queryClient = useQueryClient();
@@ -81,15 +102,14 @@ function PosPage() {
   const { data: inventory = [] } = useInventory();
   const { data: customers = [] } = useCustomers();
 
-  const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
-  const location = locations.find((l) => l.id === locationId) ?? locations[0];
-
-  useEffect(() => {
-    const first = locations[0];
-    if (!locationId && first) setLocationId(first.id);
-  }, [locationId, locations]);
+  const [locationId, setLocationId] = useState("");
+  const location = locations.find((l) => l.id === locationId);
 
   function changeLocation(id: string) {
+    if (lines.length > 0 && id !== locationId) {
+      toast.warning("Current bill is active", { description: "Hold or finish this bill before changing the store." });
+      return;
+    }
     setLocationId(id);
     localStorage.setItem(LS_KEY, id);
   }
@@ -99,6 +119,9 @@ function PosPage() {
   const [customerMode, setCustomerMode] = useState<CustomerMode>("unset");
   const [barcode, setBarcode] = useState("");
   const [discount, setDiscount] = useState(0);
+  const [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
+  const [businessDate, setBusinessDate] = useState(todayBusinessDate);
+  const [heldBills, setHeldBills] = useState<HeldBill[]>([]);
   const [payOpen, setPayOpen] = useState(false);
   const [custOpen, setCustOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -136,6 +159,7 @@ function PosPage() {
     setCustomer(null);
     setCustomerMode("unset");
     setDiscount(0);
+    setBusinessDate(todayBusinessDate());
     setBarcode("");
     setPayOpen(false);
     setTimeout(() => custSearchRef.current?.focus(), 30);
@@ -149,10 +173,18 @@ function PosPage() {
   }
 
   function addToCart(product: Product) {
+    if (!locationId) {
+      toast.error("Select the store first");
+      return;
+    }
     if (customerMode === "unset") {
       toast.error("Customer pehle chunein", {
         description: "Search, add or pick Walk-in above — then scan items.",
       });
+      return;
+    }
+    if (stockAt(product.id, locationId) <= 0) {
+      toast.error("Out of stock at this store", { description: `Choose another store or request a transfer for ${product.name}.` });
       return;
     }
     setLines((prev) => {
@@ -176,6 +208,10 @@ function PosPage() {
   }
 
   function setQuantity(productId: string, quantity: number) {
+    if (quantity > stockAt(productId, locationId)) {
+      toast.warning(`Only ${stockAt(productId, locationId)} in stock at this store`);
+      quantity = stockAt(productId, locationId);
+    }
     setLines((prev) =>
       quantity <= 0
         ? prev.filter((l) => l.product.id !== productId)
@@ -216,9 +252,8 @@ function PosPage() {
       setBarcode("");
       barcodeRef.current?.focus();
     } else {
-      toast.error("Item not found", {
-        description: "Press F2 to quick-add it — name & barcode are pre-filled from what you typed.",
-      });
+      setQuickPrefill(barcode.trim());
+      setQuickOpen(true);
     }
   }
 
@@ -232,16 +267,39 @@ function PosPage() {
     setQuickOpen(true);
   }
 
+  function holdCurrentBill() {
+    if (customerMode === "unset") {
+      toast.error("Choose a customer or Walk-in before holding this bill");
+      return;
+    }
+    setHeldBills((current) => [...current, {
+      id: crypto.randomUUID(), customer, customerMode, lines, discount, locationId, businessDate,
+    }]);
+    startNewBill();
+  }
+
+  function switchToHeldBill(id: string) {
+    const held = heldBills.find((bill) => bill.id === id);
+    if (!held) return;
+    if (customerMode !== "unset" && (lines.length > 0 || customer || discount > 0)) {
+      setHeldBills((current) => [...current, {
+        id: crypto.randomUUID(), customer, customerMode, lines, discount, locationId, businessDate,
+      }]);
+    }
+    setLines(held.lines);
+    setCustomer(held.customer);
+    setCustomerMode(held.customerMode);
+    setDiscount(held.discount);
+    setLocationId(held.locationId);
+    setBusinessDate(held.businessDate);
+    setHeldBills((current) => current.filter((bill) => bill.id !== id));
+  }
+
   const searchResults = useMemo(() => {
     const q = barcode.trim().toLowerCase();
     if (q.length < 2) return [];
     return products
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.barcode?.toLowerCase().includes(q) ||
-          p.sku?.toLowerCase().includes(q),
-      )
+      .filter((p) => matchesProductSearch(p, q))
       .slice(0, 8);
   }, [barcode, products]);
 
