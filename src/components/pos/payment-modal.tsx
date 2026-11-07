@@ -47,6 +47,7 @@ export function PaymentModal({
   open,
   onOpenChange,
   locationId,
+  businessDate,
   lines,
   subtotal,
   discount,
@@ -59,6 +60,7 @@ export function PaymentModal({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   locationId: string;
+  businessDate: string;
   lines: CartLine[];
   subtotal: number;
   discount: number;
@@ -145,6 +147,7 @@ export function PaymentModal({
         locationId,
         customerId: customer?.id ?? null,
         discount,
+        businessDate,
         items: lines.map((l) => ({
           product_id: l.product.id,
           quantity: l.quantity,
