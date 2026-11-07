@@ -244,6 +244,7 @@ export type Database = {
       invoices: {
         Row: {
           balance_amount: number
+          business_date: string
           created_at: string
           customer_id: string | null
           discount_amount: number
@@ -256,6 +257,7 @@ export type Database = {
         }
         Insert: {
           balance_amount?: number
+          business_date?: string
           created_at?: string
           customer_id?: string | null
           discount_amount?: number
@@ -268,6 +270,7 @@ export type Database = {
         }
         Update: {
           balance_amount?: number
+          business_date?: string
           created_at?: string
           customer_id?: string | null
           discount_amount?: number
@@ -651,16 +654,28 @@ export type Database = {
             }
             Returns: Json
           }
-      create_pos_invoice: {
-        Args: {
-          p_customer_id: string
-          p_discount: number
-          p_items: Json
-          p_location_id: string
-          p_payments: Json
-        }
-        Returns: Json
-      }
+      create_pos_invoice:
+        | {
+            Args: {
+              p_customer_id: string
+              p_discount: number
+              p_items: Json
+              p_location_id: string
+              p_payments: Json
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_business_date: string
+              p_customer_id: string
+              p_discount: number
+              p_items: Json
+              p_location_id: string
+              p_payments: Json
+            }
+            Returns: Json
+          }
       create_stock_adjustment: {
         Args: {
           p_location_id: string
