@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, PackageMinus, Tag } from "lucide-react";
+import { ArrowRightLeft, Download, FileSpreadsheet, PackageMinus, Tag, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
@@ -32,10 +32,14 @@ import {
   createAdjustment,
   createTransfer,
   inr,
+  exportSheets,
+  parseWorkbookFile,
+  pickField,
   REASONS,
   receiveTransfer,
   setTransferStatus,
   useLocations,
+  useInventory,
   useProducts,
   type Product,
   type StockTransfer,
@@ -195,6 +199,9 @@ function ManagerPage() {
             <TabsTrigger value="writeoffs" className="gap-1.5">
               <PackageMinus className="h-3.5 w-3.5" /> Damage / Expiry
             </TabsTrigger>
+            <TabsTrigger value="spreadsheets" className="gap-1.5">
+              <FileSpreadsheet className="h-3.5 w-3.5" /> Spreadsheets
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="enrichment" className="mt-3">
@@ -336,6 +343,9 @@ function ManagerPage() {
                 </TableBody>
               </Table>
             </section>
+          </TabsContent>
+          <TabsContent value="spreadsheets" className="mt-3">
+            <SpreadsheetTools products={products} locations={locations} locationId={location?.id ?? ""} />
           </TabsContent>
         </Tabs>
       </main>
