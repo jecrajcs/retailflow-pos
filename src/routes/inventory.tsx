@@ -6,15 +6,17 @@ import { AppNav } from "@/components/pos/app-nav";
 import { IndentDialog } from "@/components/pos/indent-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { cn } from "@/lib/utils";
-import { inr, useInventory, useLocations, useProducts, type Product } from "@/lib/pos";
+import {
+  inr,
+  matchesProductSearch,
+  useInventory,
+  useLocations,
+  useProducts,
+  type Product,
+} from "@/lib/pos";
+import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
 
 export const Route = createFileRoute("/inventory")({
   head: () => ({
@@ -55,19 +57,27 @@ const STATUS_META: Record<ReorderStatus, { label: string; className: string }> =
 };
 
 function InventoryPage() {
+  const { profile } = useAccess();
   const { data: locations = [] } = useLocations();
+  const allowedLocations = locations.filter((locationRow) =>
+    canAccessLocation(profile, locationRow.id),
+  );
   const { data: products = [] } = useProducts();
   const { data: inventory = [] } = useInventory();
 
   const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
-  const location = locations.find((l) => l.id === locationId) ?? locations.find((l) => l.type !== "WAREHOUSE") ?? locations[0];
+  const location =
+    allowedLocations.find((l) => l.id === locationId) ??
+    allowedLocations.find((l) => l.type !== "WAREHOUSE") ??
+    allowedLocations[0];
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | ReorderStatus>("ALL");
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
 
   const stockAt = (productId: string, locId: string | undefined) =>
-    inventory.find((i) => i.product_id === productId && i.location_id === locId)?.quantity_on_hand ?? 0;
+    inventory.find((i) => i.product_id === productId && i.location_id === locId)
+      ?.quantity_on_hand ?? 0;
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -80,11 +90,7 @@ function InventoryPage() {
       .filter((r) => (statusFilter === "ALL" ? true : r.status === statusFilter))
       .filter((r) => {
         if (!q) return true;
-        const hay = [r.product.name, r.product.sku, r.product.barcode, r.product.category, r.product.variant]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
+        return matchesProductSearch(r.product, q);
       })
       .sort((a, b) => {
         const order = { OUT: 0, REORDER: 1, IN: 2 };
@@ -104,7 +110,7 @@ function InventoryPage() {
 
   function pickLocation(id: string) {
     setLocationId(id);
-    localStorage.setItem(LS_KEY, id);
+    saveActiveLocation(id);
   }
 
   return (
@@ -112,18 +118,17 @@ function InventoryPage() {
       <AppNav active="/inventory" />
 
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
-        <Select value={location?.id ?? ""} onValueChange={pickLocation}>
-          <SelectTrigger className="w-64">
-            <SelectValue placeholder="Viewing stock of…" />
-          </SelectTrigger>
-          <SelectContent>
-            {locations.map((l) => (
-              <SelectItem key={l.id} value={l.id}>
-                {l.name} ({l.type})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          className="w-64"
+          value={location?.id ?? ""}
+          onValueChange={pickLocation}
+          placeholder="Viewing stock of…"
+          options={allowedLocations.map((l) => ({
+            value: l.id,
+            label: `${l.name} (${l.type})`,
+            keywords: [l.code, l.address ?? ""],
+          }))}
+        />
         <div className="relative min-w-64 flex-1 max-w-md">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -133,25 +138,40 @@ function InventoryPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
-          <SelectTrigger className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ALL">All items ({products.length})</SelectItem>
-            <SelectItem value="IN">In Stock ({counts.IN})</SelectItem>
-            <SelectItem value="REORDER">Reorder Now ({counts.REORDER})</SelectItem>
-            <SelectItem value="OUT">Out of Stock ({counts.OUT})</SelectItem>
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          className="w-44"
+          value={statusFilter}
+          onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}
+          options={[
+            { value: "ALL", label: `All items (${products.length})` },
+            { value: "IN", label: `In Stock (${counts.IN})` },
+            { value: "REORDER", label: `Reorder Now (${counts.REORDER})` },
+            { value: "OUT", label: `Out of Stock (${counts.OUT})` },
+          ]}
+        />
       </div>
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 p-3">
         <div className="mb-3 flex flex-wrap gap-2">
           <StatChip label="Total SKUs" value={String(products.length)} icon={Boxes} />
-          <StatChip label="In Stock" value={String(counts.IN)} icon={ArrowDownAZ} className="text-success" />
-          <StatChip label="Reorder Now" value={String(counts.REORDER)} icon={AlertTriangle} className="text-warning" />
-          <StatChip label="Out of Stock" value={String(counts.OUT)} icon={AlertTriangle} className="text-destructive" />
+          <StatChip
+            label="In Stock"
+            value={String(counts.IN)}
+            icon={ArrowDownAZ}
+            className="text-success"
+          />
+          <StatChip
+            label="Reorder Now"
+            value={String(counts.REORDER)}
+            icon={AlertTriangle}
+            className="text-warning"
+          />
+          <StatChip
+            label="Out of Stock"
+            value={String(counts.OUT)}
+            icon={AlertTriangle}
+            className="text-destructive"
+          />
         </div>
 
         <div className="overflow-hidden rounded-lg border bg-card">
@@ -162,7 +182,7 @@ function InventoryPage() {
                   <th className="px-3 py-2 text-left">Item</th>
                   <th className="px-2 py-2 text-left">SKU</th>
                   <th className="px-2 py-2 text-left">Rack</th>
-                  {locations.map((l) => (
+                  {allowedLocations.map((l) => (
                     <th key={l.id} className="px-2 py-2 text-center">
                       {l.code}
                     </th>
@@ -175,14 +195,17 @@ function InventoryPage() {
               <tbody>
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={6 + locations.length} className="px-3 py-10 text-center text-muted-foreground">
+                    <td
+                      colSpan={6 + locations.length}
+                      className="px-3 py-10 text-center text-muted-foreground"
+                    >
                       No items match this search / filter.
                     </td>
                   </tr>
                 )}
                 {rows.map(({ product: p, qty, status }) => {
                   const meta = STATUS_META[status];
-                  const otherQty = locations
+                  const otherQty = allowedLocations
                     .filter((l) => l.id !== location?.id)
                     .reduce((s, l) => s + stockAt(p.id, l.id), 0);
                   const needsHelp = status !== "IN";
@@ -191,15 +214,20 @@ function InventoryPage() {
                       <td className="px-3 py-1.5">
                         <div className="font-medium">
                           {p.name}
-                          {p.variant && <span className="ml-1.5 text-xs text-muted-foreground">{p.variant}</span>}
+                          {p.variant && (
+                            <span className="ml-1.5 text-xs text-muted-foreground">
+                              {p.variant}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-muted-foreground">
-                          {p.category ?? "Uncategorized"} · MRP {inr(p.mrp)} · Sell {inr(p.sale_price)}/{p.uom_sale}
+                          {p.category ?? "Uncategorized"} · MRP {inr(p.mrp)} · Sell{" "}
+                          {inr(p.sale_price)}/{p.uom_sale}
                         </div>
                       </td>
                       <td className="px-2 py-1.5 font-mono text-xs">{p.sku ?? "—"}</td>
                       <td className="px-2 py-1.5 font-mono text-xs">{p.rack_location ?? "—"}</td>
-                      {locations.map((l) => {
+                      {allowedLocations.map((l) => {
                         const q = stockAt(p.id, l.id);
                         return (
                           <td
@@ -217,9 +245,16 @@ function InventoryPage() {
                           </td>
                         );
                       })}
-                      <td className="px-2 py-1.5 text-right font-mono text-xs tabular-nums">{p.min_stock}</td>
+                      <td className="px-2 py-1.5 text-right font-mono text-xs tabular-nums">
+                        {p.min_stock}
+                      </td>
                       <td className="px-2 py-1.5">
-                        <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", meta.className)}>
+                        <span
+                          className={cn(
+                            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                            meta.className,
+                          )}
+                        >
                           {meta.label}
                         </span>
                       </td>
@@ -274,7 +309,12 @@ function StatChip({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm", className)}>
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm",
+        className,
+      )}
+    >
       <Icon className="h-4 w-4" />
       <span className="font-bold tabular-nums">{value}</span>
       <span className="text-xs text-muted-foreground">{label}</span>

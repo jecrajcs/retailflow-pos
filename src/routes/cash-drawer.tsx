@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -13,18 +13,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { supabase } from "@/integrations/supabase/client";
 import { AppNav } from "@/components/pos/app-nav";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -35,6 +28,8 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
+import { userFacingError } from "@/lib/retail-api";
 import {
   CASH_TXN_REASONS,
   closeSession,
@@ -43,6 +38,7 @@ import {
   inr,
   logCashTxn,
   openSession,
+  useCashSessions,
   useCashTransactions,
   useLocations,
   usePaymentsSince,
@@ -81,26 +77,23 @@ function startOfToday() {
 
 function CashDrawerPage() {
   const queryClient = useQueryClient();
+  const { profile } = useAccess();
   const { data: locations = [] } = useLocations();
+  const allowedLocations = locations.filter((entry) => canAccessLocation(profile, entry.id));
   const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
-  const location = locations.find((l) => l.id === locationId) ?? locations[0];
+  const location = allowedLocations.find((l) => l.id === locationId) ?? allowedLocations[0];
 
   const [view, setView] = useState<"express" | "detailed">("express");
 
-  const { data: sessions = [] } = useQuery<CashSession[]>({
-    enabled: !!location?.id,
-    queryKey: ["cash-sessions", location?.id],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("cash_drawer_sessions")
-        .select("*")
-        .eq("location_id", location!.id)
-        .order("opened_at", { ascending: false })
-        .limit(30);
-      if (error) throw error;
-      return data as CashSession[];
-    },
-  });
+  const { data: localSessions = [] } = useCashSessions(location?.id ?? null);
+  const sessions = useMemo(
+    () =>
+      localSessions
+        .slice()
+        .sort((a, b) => b.opened_at.localeCompare(a.opened_at))
+        .slice(0, 30),
+    [localSessions],
+  );
 
   const open = sessions.find((s) => s.status === "OPEN");
   const since = open?.opened_at ?? startOfToday();
@@ -109,7 +102,10 @@ function CashDrawerPage() {
 
   const byMode: { CASH: number; UPI: number; CARD: number; CREDIT: number } = useMemo(() => {
     const map: { CASH: number; UPI: number; CARD: number; CREDIT: number } = {
-      CASH: 0, UPI: 0, CARD: 0, CREDIT: 0,
+      CASH: 0,
+      UPI: 0,
+      CARD: 0,
+      CREDIT: 0,
     };
     for (const p of payments) {
       if (p.mode === "CASH" || p.mode === "UPI" || p.mode === "CARD" || p.mode === "CREDIT") {
@@ -119,12 +115,16 @@ function CashDrawerPage() {
     return map;
   }, [payments]);
 
-  const txnIn = useMemo(() => txns.filter((t) => t.direction === "IN").reduce((s, t) => s + t.amount, 0), [txns]);
-  const txnOut = useMemo(() => txns.filter((t) => t.direction === "OUT").reduce((s, t) => s + t.amount, 0), [txns]);
+  const txnIn = useMemo(
+    () => txns.filter((t) => t.direction === "IN").reduce((s, t) => s + t.amount, 0),
+    [txns],
+  );
+  const txnOut = useMemo(
+    () => txns.filter((t) => t.direction === "OUT").reduce((s, t) => s + t.amount, 0),
+    [txns],
+  );
 
-  const expectedCash = open
-    ? open.opening_cash + byMode.CASH + open.cash_in - open.cash_out
-    : 0;
+  const expectedCash = open ? open.opening_cash + byMode.CASH + open.cash_in - open.cash_out : 0;
 
   function refresh() {
     void queryClient.invalidateQueries({ queryKey: ["cash-sessions"] });
@@ -134,25 +134,24 @@ function CashDrawerPage() {
 
   function pickLocation(id: string) {
     setLocationId(id);
-    localStorage.setItem(LS_KEY, id);
+    saveActiveLocation(id);
   }
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <AppNav active="/cash-drawer" />
       <div className="flex items-center gap-2 border-b bg-card px-3 py-2">
-        <Select value={location?.id ?? ""} onValueChange={pickLocation}>
-          <SelectTrigger className="w-64">
-            <SelectValue placeholder="Select store" />
-          </SelectTrigger>
-          <SelectContent>
-            {locations.map((l) => (
-              <SelectItem key={l.id} value={l.id}>
-                {l.name} ({l.type})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          className="w-64"
+          value={location?.id ?? ""}
+          onValueChange={pickLocation}
+          placeholder="Select store"
+          options={allowedLocations.map((location) => ({
+            value: location.id,
+            label: `${location.name} (${location.type})`,
+            keywords: [location.code],
+          }))}
+        />
       </div>
 
       <main className="mx-auto w-full max-w-[1100px] flex-1 p-3">
@@ -168,11 +167,7 @@ function CashDrawerPage() {
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                   <SummaryCard label="Opening cash" value={inr(open.opening_cash)} />
                   <SummaryCard label="Cash sales (shift)" value={inr(byMode.CASH)} />
-                  <SummaryCard
-                    label="Expected in drawer"
-                    value={inr(expectedCash)}
-                    highlight
-                  />
+                  <SummaryCard label="Expected in drawer" value={inr(expectedCash)} highlight />
                   <SummaryCard
                     label={`Other modes today`}
                     value={inr(byMode.UPI + byMode.CARD + byMode.CREDIT)}
@@ -293,7 +288,11 @@ function CashDrawerPage() {
 
             <section className="overflow-hidden rounded-lg border bg-card">
               <div className="border-b px-3 py-2 text-sm font-medium">
-                Payments since {new Date(since).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
+                Payments since{" "}
+                {new Date(since).toLocaleString("en-IN", {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                })}
               </div>
               <div className="max-h-72 overflow-auto">
                 <Table>
@@ -363,18 +362,33 @@ function CashDrawerPage() {
                       return (
                         <TableRow key={s.id}>
                           <TableCell className="text-xs">
-                            {new Date(s.opened_at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
+                            {new Date(s.opened_at).toLocaleString("en-IN", {
+                              dateStyle: "short",
+                              timeStyle: "short",
+                            })}
                           </TableCell>
                           <TableCell>{s.opened_by}</TableCell>
-                          <TableCell className="text-right tabular-nums">{inr(s.opening_cash)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{inr(s.cash_sales)}</TableCell>
-                          <TableCell className="text-right tabular-nums text-success">{inr(s.cash_in)}</TableCell>
-                          <TableCell className="text-right tabular-nums text-destructive">{inr(s.cash_out)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{inr(s.closing_cash ?? 0)}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {inr(s.opening_cash)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {inr(s.cash_sales)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-success">
+                            {inr(s.cash_in)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-destructive">
+                            {inr(s.cash_out)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {inr(s.closing_cash ?? 0)}
+                          </TableCell>
                           <TableCell
                             className={cn(
                               "text-right tabular-nums",
-                              Math.abs(diff) > 0.01 ? "font-semibold text-destructive" : "text-success",
+                              Math.abs(diff) > 0.01
+                                ? "font-semibold text-destructive"
+                                : "text-success",
                             )}
                           >
                             {inr(diff)}
@@ -456,7 +470,9 @@ function QuickLogForm({
       setAmount("");
       onLogged();
     } catch (e) {
-      toast.error("Could not log the entry", { description: String(e) });
+      toast.error("Could not log the entry", {
+        description: userFacingError(e, "Check the amount and reason, then try again."),
+      });
     } finally {
       setBusy(false);
     }
@@ -468,15 +484,15 @@ function QuickLogForm({
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label>Direction</Label>
-          <Select value={direction} onValueChange={(v) => setDirection(v as "IN" | "OUT")}>
-            <SelectTrigger className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="IN">Cash In</SelectItem>
-              <SelectItem value="OUT">Cash Out</SelectItem>
-            </SelectContent>
-          </Select>
+          <SearchableSelect
+            className="w-36"
+            value={direction}
+            onValueChange={(value) => setDirection(value as "IN" | "OUT")}
+            options={[
+              { value: "IN", label: "Cash In" },
+              { value: "OUT", label: "Cash Out" },
+            ]}
+          />
         </div>
         <div className="space-y-1">
           <Label htmlFor="txn-amount">Amount (₹)</Label>
@@ -492,18 +508,15 @@ function QuickLogForm({
         </div>
         <div className="space-y-1">
           <Label>Reason</Label>
-          <Select value={reason} onValueChange={setReason}>
-            <SelectTrigger className="w-48">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CASH_TXN_REASONS.map((r) => (
-                <SelectItem key={r} value={r}>
-                  {r}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchableSelect
+            className="w-48"
+            value={reason}
+            onValueChange={setReason}
+            options={CASH_TXN_REASONS.map((reasonOption) => ({
+              value: reasonOption,
+              label: reasonOption,
+            }))}
+          />
         </div>
         <Button onClick={log} disabled={busy || !sessionId}>
           {sessionId ? "Log entry" : "Open a shift first"}
@@ -555,7 +568,9 @@ function OpenShiftCard({
       toast.success("Shift opened");
       onOpened();
     } catch (e) {
-      toast.error("Could not open shift", { description: String(e) });
+      toast.error("Could not open shift", {
+        description: userFacingError(e, "Refresh the cash drawer and try again."),
+      });
     } finally {
       setBusy(false);
     }
@@ -573,13 +588,21 @@ function OpenShiftCard({
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label htmlFor="op-name">Operator</Label>
-          <Input id="op-name" value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="Name" />
+          <Input
+            id="op-name"
+            value={operator}
+            onChange={(e) => setOperator(e.target.value)}
+            placeholder="Name"
+          />
         </div>
         <div className="basis-full">
-          <DenominationFields counts={openingCounts} onChange={(counts) => {
-            setOpeningCounts(counts);
-            setOpeningCash(String(denomTotal(counts)));
-          }} />
+          <DenominationFields
+            counts={openingCounts}
+            onChange={(counts) => {
+              setOpeningCounts(counts);
+              setOpeningCash(String(denomTotal(counts)));
+            }}
+          />
         </div>
         <div className="space-y-1">
           <Label htmlFor="op-cash">Opening cash (₹)</Label>
@@ -623,7 +646,11 @@ function CloseShiftCard({
         sessionId: session.id,
         cashIn: null,
         cashOut: null,
-        countedCash: Object.keys(closingCounts).length ? denomTotal(closingCounts) : counted === "" ? null : Number(counted),
+        countedCash: Object.keys(closingCounts).length
+          ? denomTotal(closingCounts)
+          : counted === ""
+            ? null
+            : Number(counted),
         closingDenominations: closingCounts,
       });
       const diff = result.difference;
@@ -638,7 +665,9 @@ function CloseShiftCard({
       }
       onClosed();
     } catch (e) {
-      toast.error("Could not close shift", { description: String(e) });
+      toast.error("Could not close shift", {
+        description: userFacingError(e, "Check the counted cash and try closing the shift again."),
+      });
     } finally {
       setBusy(false);
     }
@@ -672,10 +701,13 @@ function CloseShiftCard({
           />
         </div>
         <div className="basis-full">
-          <DenominationFields counts={closingCounts} onChange={(counts) => {
-            setClosingCounts(counts);
-            setCounted(String(denomTotal(counts)));
-          }} />
+          <DenominationFields
+            counts={closingCounts}
+            onChange={(counts) => {
+              setClosingCounts(counts);
+              setCounted(String(denomTotal(counts)));
+            }}
+          />
         </div>
         <Button variant="destructive" onClick={close} disabled={busy}>
           Close shift
@@ -709,7 +741,9 @@ function DenominationFields({
               aria-label={`Count of ₹${value} notes or coins`}
               className="h-9 text-right tabular-nums"
               value={counts[String(value)] ?? ""}
-              onChange={(event) => onChange({ ...counts, [value]: Math.max(0, Number(event.target.value) || 0) })}
+              onChange={(event) =>
+                onChange({ ...counts, [value]: Math.max(0, Number(event.target.value) || 0) })
+              }
             />
           </label>
         ))}

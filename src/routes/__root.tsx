@@ -9,10 +9,13 @@ import {
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { toast } from "sonner";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
+import { AccessBoundary } from "@/lib/access";
+import { localStoragePersistentRequest, openLocalDatabase } from "@/lib/local-db";
 
 function NotFoundComponent() {
   return (
@@ -80,7 +83,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "RetailHub POS" },
-      { name: "description", content: "RetailHub POS — fast billing, inventory, cash drawer and manager tools." },
+      {
+        name: "description",
+        content: "RetailHub POS — fast billing, inventory, cash drawer and manager tools.",
+      },
       { name: "author", content: "RetailHub" },
       { property: "og:title", content: "RetailHub POS" },
       {
@@ -97,6 +103,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: appCss,
       },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "manifest", href: "/manifest.webmanifest" },
+      { name: "theme-color", content: "#176b55" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {
@@ -128,10 +136,67 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+  useEffect(() => {
+    let cancelled = false;
+    void openLocalDatabase().catch((error: unknown) => {
+      console.error("RetailFlow local POS storage could not be opened", error);
+      if (!cancelled) {
+        toast.error("Local POS storage is unavailable", {
+          description:
+            "Some offline features may not work. Refresh the page or check device storage.",
+        });
+      }
+    });
+    void localStoragePersistentRequest().catch((error: unknown) => {
+      console.warn("RetailFlow could not enable persistent local storage", error);
+    });
+    void import("@/lib/offline-sync")
+      .then(({ startOfflineSync }) => {
+        if (!cancelled) startOfflineSync();
+      })
+      .catch((error: unknown) => {
+        console.error("RetailFlow offline sync could not start", error);
+        if (!cancelled) {
+          toast.error("Offline sync is unavailable", {
+            description: "Saved work remains on this device. Refresh the page and try again.",
+          });
+        }
+      });
+    if ("serviceWorker" in navigator && import.meta.env.PROD) {
+      void navigator.serviceWorker
+        .register("/sw.js", { scope: "/" })
+        .then(async () => {
+          await navigator.serviceWorker.ready;
+          await Promise.allSettled([
+            import("./index"),
+            import("./billing"),
+            import("./sales"),
+            import("./inventory"),
+            import("./purchases"),
+            import("./cash-drawer"),
+            import("./manager"),
+            // Load on-demand bundles online once so offline OCR and spreadsheets
+            // remain usable after the service worker takes control.
+            import("xlsx"),
+            import("tesseract.js"),
+            import("pdfjs-dist/legacy/build/pdf.mjs"),
+          ]);
+        })
+        .catch((error) => {
+          console.warn("RetailFlow offline app shell could not be registered", error);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <AccessBoundary>
+        <Outlet />
+      </AccessBoundary>
       <Toaster position="top-center" richColors />
     </QueryClientProvider>
   );

@@ -1,5 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 
+process.env["BETTER_AUTH_SECRET"] ??= "retailflow-test-only-secret-not-for-deployments";
+
 Object.defineProperty(window, "scrollTo", {
   writable: true,
   value: () => {},

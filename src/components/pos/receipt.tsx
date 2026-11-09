@@ -39,7 +39,9 @@ export function ReceiptDialog({
   const [width, setWidth] = useState<58 | 80>(58);
   if (!data) return null;
 
-  const paid = data.payments.reduce((s, p) => s + p.amount, 0);
+  const paid = data.payments
+    .filter((payment) => payment.mode !== "CREDIT")
+    .reduce((sum, payment) => sum + payment.amount, 0);
   const balance = Math.max(data.total - paid, 0);
   const changeTotal = data.payments.reduce((s, p) => s + (p.change_given ?? 0), 0);
 
@@ -81,7 +83,12 @@ export function ReceiptDialog({
           <div className="my-1 border-t border-dashed border-neutral-400" />
           <div className="flex justify-between">
             <span>{data.invoiceNumber}</span>
-            <span>{new Date(data.createdAt).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}</span>
+            <span>
+              {new Date(data.createdAt).toLocaleString("en-IN", {
+                dateStyle: "short",
+                timeStyle: "short",
+              })}
+            </span>
           </div>
           <div>Customer: {data.customerName ?? "Walk-in"}</div>
           <div className="my-1 border-t border-dashed border-neutral-400" />
@@ -121,7 +128,10 @@ export function ReceiptDialog({
           {data.payments.map((p, i) => (
             <div key={i}>
               <div className="flex justify-between">
-                <span>{p.mode}{p.tendered ? ` (tendered ${inr(p.tendered)})` : ""}</span>
+                <span>
+                  {p.mode}
+                  {p.tendered ? ` (tendered ${inr(p.tendered)})` : ""}
+                </span>
                 <span>{inr(p.amount)}</span>
               </div>
               {(p.change_given ?? 0) > 0 && (
