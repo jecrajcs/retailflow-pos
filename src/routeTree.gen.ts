@@ -10,13 +10,32 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as BillingRouteImport } from './routes/billing'
 import { Route as CashDrawerRouteImport } from './routes/cash-drawer'
 import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as ManagerRouteImport } from './routes/manager'
+import { Route as PurchasesRouteImport } from './routes/purchases'
+import { Route as SalesRouteImport } from './routes/sales'
+import { Route as ApiFirstAdminRouteImport } from './routes/api/first-admin'
+import { Route as ApiPublicOverviewRouteImport } from './routes/api/public-overview'
+import { Route as ApiResolveSyncAlertRouteImport } from './routes/api/resolve-sync-alert'
+import { Route as ApiRetailSnapshotRouteImport } from './routes/api/retail-snapshot'
+import { Route as ApiRetailSyncRouteImport } from './routes/api/retail-sync'
+import { Route as ApiStaffRouteImport } from './routes/api/staff'
+import { Route as ApiStaffLoginRouteImport } from './routes/api/staff-login'
+import { Route as ApiStaffPasswordRouteImport } from './routes/api/staff-password'
+import { Route as ApiStaffSessionRouteImport } from './routes/api/staff-session'
+import { Route as SetupFirstAdminRouteImport } from './routes/setup/first-admin'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BillingRoute = BillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CashDrawerRoute = CashDrawerRouteImport.update({
@@ -34,39 +53,215 @@ const ManagerRoute = ManagerRouteImport.update({
   path: '/manager',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PurchasesRoute = PurchasesRouteImport.update({
+  id: '/purchases',
+  path: '/purchases',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SalesRoute = SalesRouteImport.update({
+  id: '/sales',
+  path: '/sales',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiFirstAdminRoute = ApiFirstAdminRouteImport.update({
+  id: '/api/first-admin',
+  path: '/api/first-admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicOverviewRoute = ApiPublicOverviewRouteImport.update({
+  id: '/api/public-overview',
+  path: '/api/public-overview',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiResolveSyncAlertRoute = ApiResolveSyncAlertRouteImport.update({
+  id: '/api/resolve-sync-alert',
+  path: '/api/resolve-sync-alert',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRetailSnapshotRoute = ApiRetailSnapshotRouteImport.update({
+  id: '/api/retail-snapshot',
+  path: '/api/retail-snapshot',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRetailSyncRoute = ApiRetailSyncRouteImport.update({
+  id: '/api/retail-sync',
+  path: '/api/retail-sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffRoute = ApiStaffRouteImport.update({
+  id: '/api/staff',
+  path: '/api/staff',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffLoginRoute = ApiStaffLoginRouteImport.update({
+  id: '/api/staff-login',
+  path: '/api/staff-login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffPasswordRoute = ApiStaffPasswordRouteImport.update({
+  id: '/api/staff-password',
+  path: '/api/staff-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffSessionRoute = ApiStaffSessionRouteImport.update({
+  id: '/api/staff-session',
+  path: '/api/staff-session',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupFirstAdminRoute = SetupFirstAdminRouteImport.update({
+  id: '/setup/first-admin',
+  path: '/setup/first-admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
+  '/purchases': typeof PurchasesRoute
+  '/sales': typeof SalesRoute
+  '/api/first-admin': typeof ApiFirstAdminRoute
+  '/api/public-overview': typeof ApiPublicOverviewRoute
+  '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
+  '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
+  '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/staff': typeof ApiStaffRoute
+  '/api/staff-login': typeof ApiStaffLoginRoute
+  '/api/staff-password': typeof ApiStaffPasswordRoute
+  '/api/staff-session': typeof ApiStaffSessionRoute
+  '/setup/first-admin': typeof SetupFirstAdminRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
+  '/purchases': typeof PurchasesRoute
+  '/sales': typeof SalesRoute
+  '/api/first-admin': typeof ApiFirstAdminRoute
+  '/api/public-overview': typeof ApiPublicOverviewRoute
+  '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
+  '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
+  '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/staff': typeof ApiStaffRoute
+  '/api/staff-login': typeof ApiStaffLoginRoute
+  '/api/staff-password': typeof ApiStaffPasswordRoute
+  '/api/staff-session': typeof ApiStaffSessionRoute
+  '/setup/first-admin': typeof SetupFirstAdminRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
+  '/purchases': typeof PurchasesRoute
+  '/sales': typeof SalesRoute
+  '/api/first-admin': typeof ApiFirstAdminRoute
+  '/api/public-overview': typeof ApiPublicOverviewRoute
+  '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
+  '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
+  '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/staff': typeof ApiStaffRoute
+  '/api/staff-login': typeof ApiStaffLoginRoute
+  '/api/staff-password': typeof ApiStaffPasswordRoute
+  '/api/staff-session': typeof ApiStaffSessionRoute
+  '/setup/first-admin': typeof SetupFirstAdminRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/cash-drawer' | '/inventory' | '/manager'
+  fullPaths:
+    | '/'
+    | '/billing'
+    | '/cash-drawer'
+    | '/inventory'
+    | '/manager'
+    | '/purchases'
+    | '/sales'
+    | '/api/first-admin'
+    | '/api/public-overview'
+    | '/api/resolve-sync-alert'
+    | '/api/retail-snapshot'
+    | '/api/retail-sync'
+    | '/api/staff'
+    | '/api/staff-login'
+    | '/api/staff-password'
+    | '/api/staff-session'
+    | '/setup/first-admin'
+    | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/cash-drawer' | '/inventory' | '/manager'
-  id: '__root__' | '/' | '/cash-drawer' | '/inventory' | '/manager'
+  to:
+    | '/'
+    | '/billing'
+    | '/cash-drawer'
+    | '/inventory'
+    | '/manager'
+    | '/purchases'
+    | '/sales'
+    | '/api/first-admin'
+    | '/api/public-overview'
+    | '/api/resolve-sync-alert'
+    | '/api/retail-snapshot'
+    | '/api/retail-sync'
+    | '/api/staff'
+    | '/api/staff-login'
+    | '/api/staff-password'
+    | '/api/staff-session'
+    | '/setup/first-admin'
+    | '/api/auth/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/billing'
+    | '/cash-drawer'
+    | '/inventory'
+    | '/manager'
+    | '/purchases'
+    | '/sales'
+    | '/api/first-admin'
+    | '/api/public-overview'
+    | '/api/resolve-sync-alert'
+    | '/api/retail-snapshot'
+    | '/api/retail-sync'
+    | '/api/staff'
+    | '/api/staff-login'
+    | '/api/staff-password'
+    | '/api/staff-session'
+    | '/setup/first-admin'
+    | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BillingRoute: typeof BillingRoute
   CashDrawerRoute: typeof CashDrawerRoute
   InventoryRoute: typeof InventoryRoute
   ManagerRoute: typeof ManagerRoute
+  PurchasesRoute: typeof PurchasesRoute
+  SalesRoute: typeof SalesRoute
+  ApiFirstAdminRoute: typeof ApiFirstAdminRoute
+  ApiPublicOverviewRoute: typeof ApiPublicOverviewRoute
+  ApiResolveSyncAlertRoute: typeof ApiResolveSyncAlertRoute
+  ApiRetailSnapshotRoute: typeof ApiRetailSnapshotRoute
+  ApiRetailSyncRoute: typeof ApiRetailSyncRoute
+  ApiStaffRoute: typeof ApiStaffRoute
+  ApiStaffLoginRoute: typeof ApiStaffLoginRoute
+  ApiStaffPasswordRoute: typeof ApiStaffPasswordRoute
+  ApiStaffSessionRoute: typeof ApiStaffSessionRoute
+  SetupFirstAdminRoute: typeof SetupFirstAdminRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -76,6 +271,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/billing': {
+      id: '/billing'
+      path: '/billing'
+      fullPath: '/billing'
+      preLoaderRoute: typeof BillingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cash-drawer': {
@@ -99,14 +301,119 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ManagerRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/purchases': {
+      id: '/purchases'
+      path: '/purchases'
+      fullPath: '/purchases'
+      preLoaderRoute: typeof PurchasesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sales': {
+      id: '/sales'
+      path: '/sales'
+      fullPath: '/sales'
+      preLoaderRoute: typeof SalesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/first-admin': {
+      id: '/api/first-admin'
+      path: '/api/first-admin'
+      fullPath: '/api/first-admin'
+      preLoaderRoute: typeof ApiFirstAdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public-overview': {
+      id: '/api/public-overview'
+      path: '/api/public-overview'
+      fullPath: '/api/public-overview'
+      preLoaderRoute: typeof ApiPublicOverviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/resolve-sync-alert': {
+      id: '/api/resolve-sync-alert'
+      path: '/api/resolve-sync-alert'
+      fullPath: '/api/resolve-sync-alert'
+      preLoaderRoute: typeof ApiResolveSyncAlertRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/retail-snapshot': {
+      id: '/api/retail-snapshot'
+      path: '/api/retail-snapshot'
+      fullPath: '/api/retail-snapshot'
+      preLoaderRoute: typeof ApiRetailSnapshotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/retail-sync': {
+      id: '/api/retail-sync'
+      path: '/api/retail-sync'
+      fullPath: '/api/retail-sync'
+      preLoaderRoute: typeof ApiRetailSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff': {
+      id: '/api/staff'
+      path: '/api/staff'
+      fullPath: '/api/staff'
+      preLoaderRoute: typeof ApiStaffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff-login': {
+      id: '/api/staff-login'
+      path: '/api/staff-login'
+      fullPath: '/api/staff-login'
+      preLoaderRoute: typeof ApiStaffLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff-password': {
+      id: '/api/staff-password'
+      path: '/api/staff-password'
+      fullPath: '/api/staff-password'
+      preLoaderRoute: typeof ApiStaffPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff-session': {
+      id: '/api/staff-session'
+      path: '/api/staff-session'
+      fullPath: '/api/staff-session'
+      preLoaderRoute: typeof ApiStaffSessionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/setup/first-admin': {
+      id: '/setup/first-admin'
+      path: '/setup/first-admin'
+      fullPath: '/setup/first-admin'
+      preLoaderRoute: typeof SetupFirstAdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BillingRoute: BillingRoute,
   CashDrawerRoute: CashDrawerRoute,
   InventoryRoute: InventoryRoute,
   ManagerRoute: ManagerRoute,
+  PurchasesRoute: PurchasesRoute,
+  SalesRoute: SalesRoute,
+  ApiFirstAdminRoute: ApiFirstAdminRoute,
+  ApiPublicOverviewRoute: ApiPublicOverviewRoute,
+  ApiResolveSyncAlertRoute: ApiResolveSyncAlertRoute,
+  ApiRetailSnapshotRoute: ApiRetailSnapshotRoute,
+  ApiRetailSyncRoute: ApiRetailSyncRoute,
+  ApiStaffRoute: ApiStaffRoute,
+  ApiStaffLoginRoute: ApiStaffLoginRoute,
+  ApiStaffPasswordRoute: ApiStaffPasswordRoute,
+  ApiStaffSessionRoute: ApiStaffSessionRoute,
+  SetupFirstAdminRoute: SetupFirstAdminRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

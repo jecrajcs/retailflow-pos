@@ -1,0 +1,18 @@
+{
+  "name": "RetailFlow POS",
+  "short_name": "RetailFlow",
+  "description": "Offline-first retail point of sale",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#176b55",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icons/retailflow.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -10,14 +10,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { inr, useCustomers, addCustomer, type Customer } from "@/lib/pos";
+  familySummary,
+  inr,
+  matchesSearchFields,
+  useCustomers,
+  addCustomer,
+  type Customer,
+} from "@/lib/pos";
 
 const AGE_GROUPS = ["Child", "Teen", "Adult", "Senior"];
 const GENDERS = ["Male", "Female", "Other"];
@@ -40,14 +41,14 @@ export function CustomerDialog({
   const [ageGroup, setAgeGroup] = useState("Adult");
   const [gender, setGender] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return customers.slice(0, 8);
-    return customers.filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.mobile ?? "").includes(q),
-    );
+    return customers.filter((c) => matchesSearchFields([c.name, c.mobile], q));
   }, [customers, search]);
+  const visibleCustomers = filtered.slice(0, 100);
 
   async function handleAdd() {
     if (!name.trim() || busy) return;
@@ -90,7 +91,23 @@ export function CustomerDialog({
             autoFocus
             placeholder="Name or mobile…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setActiveIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" && visibleCustomers.length) {
+                event.preventDefault();
+                setActiveIndex((index) => Math.min(index + 1, visibleCustomers.length - 1));
+              } else if (event.key === "ArrowUp" && visibleCustomers.length) {
+                event.preventDefault();
+                setActiveIndex((index) => Math.max(0, index - 1));
+              } else if (event.key === "Enter" && visibleCustomers[activeIndex]) {
+                event.preventDefault();
+                onSelect(visibleCustomers[activeIndex]!);
+                onOpenChange(false);
+              } else if (event.key === "Escape") onOpenChange(false);
+            }}
             className="pl-8"
           />
         </div>
@@ -105,28 +122,35 @@ export function CustomerDialog({
           >
             <UserRound className="h-4 w-4" /> Walk-in (no customer)
           </button>
-          {filtered.map((c) => (
+          {visibleCustomers.map((c, index) => (
             <button
               key={c.id}
               onClick={() => {
                 onSelect(c);
                 onOpenChange(false);
               }}
-              className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm hover:bg-accent"
+              className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm hover:bg-accent ${activeIndex === index ? "border-primary bg-accent" : ""}`}
             >
               <span className="flex items-center gap-2">
                 <UserRound className="h-4 w-4 text-muted-foreground" />
                 {c.name}
                 {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
-                {c.visits > 0 && (
+                {Number(c.visits) > 0 && (
                   <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
                     {c.visits} visits
                   </span>
                 )}
               </span>
-              {c.outstanding_balance > 0 ? (
+              {(c.mobile ? familySummary(customers, c.mobile).outstanding : c.outstanding_balance) >
+              0 ? (
                 <span className="text-xs font-semibold text-destructive">
-                  ⚠️ Udhar due {inr(c.outstanding_balance)}
+                  ⚠️ Family{" "}
+                  {inr(
+                    c.mobile
+                      ? familySummary(customers, c.mobile).outstanding
+                      : c.outstanding_balance,
+                  )}{" "}
+                  · member {inr(c.outstanding_balance)}
                 </span>
               ) : (
                 <span className="text-[10px] font-medium text-success">Clear</span>
@@ -134,6 +158,11 @@ export function CustomerDialog({
             </button>
           ))}
         </div>
+        {filtered.length > visibleCustomers.length && (
+          <p className="text-xs text-muted-foreground">
+            Showing the first 100 matches. Type more to narrow the list.
+          </p>
+        )}
 
         {adding ? (
           <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
@@ -160,33 +189,20 @@ export function CustomerDialog({
             <div className="grid grid-cols-3 gap-2">
               <div className="space-y-1">
                 <Label>Age group</Label>
-                <Select value={ageGroup} onValueChange={setAgeGroup}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {AGE_GROUPS.map((g) => (
-                      <SelectItem key={g} value={g}>
-                        {g}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  value={ageGroup}
+                  onValueChange={setAgeGroup}
+                  options={AGE_GROUPS.map((value) => ({ value, label: value }))}
+                />
               </div>
               <div className="space-y-1">
                 <Label>Gender</Label>
-                <Select value={gender} onValueChange={setGender}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="—" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {GENDERS.map((g) => (
-                      <SelectItem key={g} value={g}>
-                        {g}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  value={gender}
+                  onValueChange={setGender}
+                  placeholder="—"
+                  options={GENDERS.map((value) => ({ value, label: value }))}
+                />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="cust-credit">Credit limit (₹)</Label>

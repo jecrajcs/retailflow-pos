@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, Banknote, CreditCard, QrCode, Trash2, UserRound, Wallet } from "lucide-react";
+import {
+  ArrowDownToLine,
+  Banknote,
+  CreditCard,
+  QrCode,
+  Trash2,
+  UserRound,
+  Wallet,
+} from "lucide-react";
 import { toast } from "sonner";
+import QRCodeSVG from "react-qr-code";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,13 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { cn } from "@/lib/utils";
 import {
   createPosInvoice,
@@ -27,6 +30,7 @@ import {
   type PaymentMode,
   type PaymentSplitInput,
 } from "@/lib/pos";
+import { userFacingError } from "@/lib/retail-api";
 
 const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }> = [
   { value: "CASH", label: "Cash", icon: Banknote },
@@ -36,6 +40,16 @@ const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }>
 ];
 
 const NOTES = [100, 200, 500, 2000];
+
+function suggestChange(amount: number) {
+  const denominations = [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5];
+  let remaining = Math.round(amount * 100) / 100;
+  return denominations.flatMap((denomination) => {
+    const count = Math.floor((remaining + 0.0001) / denomination);
+    remaining = Math.round((remaining - count * denomination) * 100) / 100;
+    return count ? [{ denomination, count }] : [];
+  });
+}
 
 interface Split {
   mode: PaymentMode;
@@ -47,6 +61,10 @@ export function PaymentModal({
   open,
   onOpenChange,
   locationId,
+  draftId,
+  invoiceNumber,
+  cashierId,
+  cashierName,
   businessDate,
   lines,
   subtotal,
@@ -60,6 +78,10 @@ export function PaymentModal({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   locationId: string;
+  draftId?: string | null | undefined;
+  invoiceNumber?: string | null | undefined;
+  cashierId?: string | undefined;
+  cashierName?: string | undefined;
   businessDate: string;
   lines: CartLine[];
   subtotal: number;
@@ -76,6 +98,9 @@ export function PaymentModal({
   const [splits, setSplits] = useState<Split[]>([{ mode: "CASH", amount: "", tendered: "" }]);
   const [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
   const [busy, setBusy] = useState(false);
+  const [changeNotes, setChangeNotes] = useState<Array<{ denomination: number; count: number }>>(
+    [],
+  );
 
   useEffect(() => {
     if (open) {
@@ -85,17 +110,12 @@ export function PaymentModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const paid = useMemo(
-    () => splits.reduce((s, x) => s + (Number(x.amount) || 0), 0),
-    [splits],
-  );
+  const paid = useMemo(() => splits.reduce((s, x) => s + (Number(x.amount) || 0), 0), [splits]);
   const remaining = Math.max(total - paid, 0);
 
   const cashDue = useMemo(
     () =>
-      splits
-        .filter((s) => s.mode === "CASH")
-        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
+      splits.filter((s) => s.mode === "CASH").reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
     [splits],
   );
   const cashTendered = useMemo(
@@ -106,6 +126,8 @@ export function PaymentModal({
     [splits],
   );
   const change = Math.max(cashTendered - cashDue, 0);
+
+  useEffect(() => setChangeNotes(suggestChange(change)), [change]);
 
   const upiAmount = splits
     .filter((s) => s.mode === "UPI")
@@ -127,25 +149,39 @@ export function PaymentModal({
       });
       return;
     }
+    if (remaining > 0.01 && !customer) {
+      toast.error("A customer is required for an unpaid balance", {
+        description: "Choose or add a customer, or collect the full amount before checkout.",
+      });
+      return;
+    }
+    if (paid > total + 0.01) {
+      toast.error("Payment amounts exceed the bill total", {
+        description: `Reduce the split by ${inr(paid - total)}.`,
+      });
+      return;
+    }
     setBusy(true);
     try {
-      let changeLeft = change;
       const payments: PaymentSplitInput[] = valid.map((s) => {
         const amount = Number(s.amount);
         if (s.mode === "CASH") {
-          const given = Math.min(changeLeft, amount);
-          changeLeft -= given;
+          const tendered = Number(s.tendered) || amount;
           return {
             amount,
             mode: s.mode,
-            tendered: Number(s.tendered) || amount,
-            change_given: given,
+            tendered,
+            change_given: Math.max(tendered - amount, 0),
           };
         }
         return { amount, mode: s.mode };
       });
       const result = await createPosInvoice({
         locationId,
+        draftId,
+        invoiceNumber,
+        cashierId,
+        cashierName,
         customerId: customer?.id ?? null,
         discount,
         businessDate,
@@ -162,7 +198,12 @@ export function PaymentModal({
       onPaid(result, payments);
       onOpenChange(false);
     } catch (e) {
-      toast.error("Billing failed", { description: String(e) });
+      toast.error("Billing failed", {
+        description: userFacingError(
+          e,
+          "The bill could not be completed. Review the payment and try again.",
+        ),
+      });
     } finally {
       setBusy(false);
     }
@@ -174,7 +215,8 @@ export function PaymentModal({
         <DialogHeader>
           <DialogTitle>Collect payment</DialogTitle>
           <DialogDescription>
-            Split across cash, UPI, card or customer credit. Cash asks for tendered amount and shows change.
+            Split across cash, UPI, card or customer credit. Cash asks for tendered amount and shows
+            change.
           </DialogDescription>
         </DialogHeader>
 
@@ -186,22 +228,30 @@ export function PaymentModal({
           <div className="rounded-lg border bg-muted/40 p-2">
             <div className="text-[10px] uppercase text-muted-foreground">Discount</div>
             <div className="mt-0.5 flex gap-1">
-              <Select value={discountMode} onValueChange={(value) => setDiscountMode(value as "AMOUNT" | "PERCENT")}>
-                <SelectTrigger className="h-7 w-16"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="AMOUNT">₹</SelectItem>
-                  <SelectItem value="PERCENT">%</SelectItem>
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                className="h-7 w-16"
+                value={discountMode}
+                onValueChange={(value) => setDiscountMode(value as "AMOUNT" | "PERCENT")}
+                options={[
+                  { value: "AMOUNT", label: "₹" },
+                  { value: "PERCENT", label: "%" },
+                ]}
+              />
               <Input
                 type="number"
                 className="h-7 text-center text-sm"
-                value={discountMode === "PERCENT" && subtotal > 0 ? ((discount / subtotal) * 100).toFixed(2) : discount || ""}
+                value={
+                  discountMode === "PERCENT" && subtotal > 0
+                    ? ((discount / subtotal) * 100).toFixed(2)
+                    : discount || ""
+                }
                 onChange={(e) => {
                   const entered = Number(e.target.value) || 0;
                   const value = discountMode === "PERCENT" ? (subtotal * entered) / 100 : entered;
                   if (value > maxDiscount) {
-                    toast.warning(`Max discount ${inr(maxDiscount)}`, { description: "Floor price protection is on." });
+                    toast.warning(`Max discount ${inr(maxDiscount)}`, {
+                      description: "Floor price protection is on.",
+                    });
                     onDiscountChange(maxDiscount);
                   } else onDiscountChange(Math.max(0, value));
                 }}
@@ -237,21 +287,12 @@ export function PaymentModal({
                   <div className="flex h-9 w-9 items-center justify-center rounded-md border bg-muted/40">
                     <Icon className="h-4 w-4" />
                   </div>
-                  <Select
+                  <SearchableSelect
+                    className="w-44"
                     value={s.mode}
-                    onValueChange={(v) => updateSplit(i, { mode: v as PaymentMode })}
-                  >
-                    <SelectTrigger className="w-44">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {MODES.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>
-                          {m.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onValueChange={(value) => updateSplit(i, { mode: value as PaymentMode })}
+                    options={MODES.map((mode) => ({ value: mode.value, label: mode.label }))}
+                  />
                   <Input
                     type="number"
                     className="text-right"
@@ -280,7 +321,9 @@ export function PaymentModal({
                     {NOTES.map((n) => (
                       <button
                         key={n}
-                        onClick={() => updateSplit(i, { tendered: String((Number(s.tendered) || 0) + n) })}
+                        onClick={() =>
+                          updateSplit(i, { tendered: String((Number(s.tendered) || 0) + n) })
+                        }
                         className="rounded-md border bg-card px-2 py-1 text-xs font-medium tabular-nums hover:border-primary/40 hover:bg-accent"
                       >
                         +₹{n}
@@ -301,7 +344,9 @@ export function PaymentModal({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setSplits((prev) => [...prev, { mode: "UPI", amount: "", tendered: "" }])}
+              onClick={() =>
+                setSplits((prev) => [...prev, { mode: "UPI", amount: "", tendered: "" }])
+              }
             >
               + Add split
             </Button>
@@ -317,13 +362,12 @@ export function PaymentModal({
 
         {upiAmount > 0 && (
           <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-3">
-            <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(
-                `upi://pay?pn=${encodeURIComponent("RetailHub Store")}&am=${upiAmount.toFixed(2)}&cu=INR`,
-              )}`}
-              alt="UPI QR"
-              className="h-28 w-28 rounded bg-white p-1"
-            />
+            <div className="h-28 w-28 rounded bg-white p-1" aria-label="UPI payment QR code">
+              <QRCodeSVG
+                value={`upi://pay?pn=${encodeURIComponent("RetailHub Store")}&am=${upiAmount.toFixed(2)}&cu=INR`}
+                size={104}
+              />
+            </div>
             <div className="text-sm">
               <div className="font-medium">Scan to pay via UPI</div>
               <div className="text-muted-foreground">Amount: {inr(upiAmount)}</div>
@@ -335,32 +379,84 @@ export function PaymentModal({
         )}
 
         {cashDue > 0 && (
-          <div
-            className={cn(
-              "flex items-center justify-between rounded-lg border-2 p-3",
-              change > 0 ? "border-warning/50 bg-warning/10" : "border-border bg-muted/40",
-            )}
-          >
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <ArrowDownToLine className="h-5 w-5" />
-              {change > 0 ? "Change to return" : "Cash tendered"}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg border bg-muted/40 p-3">
+              <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+                Cash received
+              </div>
+              <div className="mt-1 text-xl font-bold tabular-nums">{inr(cashTendered)}</div>
             </div>
             <div
               className={cn(
-                "text-3xl font-bold tabular-nums",
-                change > 0 ? "text-warning" : "text-foreground",
+                "rounded-lg border-2 p-3",
+                change > 0 ? "border-warning/50 bg-warning/10" : "border-border bg-muted/40",
               )}
             >
-              {inr(change > 0 ? change : cashTendered)}
+              <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                <ArrowDownToLine className="h-3.5 w-3.5" /> Change to return
+              </div>
+              <div
+                className={cn(
+                  "mt-1 text-xl font-bold tabular-nums",
+                  change > 0 ? "text-warning" : "",
+                )}
+              >
+                {inr(change)}
+              </div>
+            </div>
+          </div>
+        )}
+        {change > 0 && (
+          <div className="rounded-lg border bg-muted/40 p-3">
+            <div className="text-xs font-semibold uppercase text-muted-foreground">
+              Suggested change notes · adjust the note count
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {changeNotes.map(({ denomination, count }) => (
+                <div
+                  key={denomination}
+                  className="flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs font-medium tabular-nums"
+                >
+                  <button
+                    aria-label={`Remove one ${denomination} rupee note`}
+                    className="rounded px-1 hover:bg-muted"
+                    onClick={() =>
+                      setChangeNotes((items) =>
+                        items.map((item) =>
+                          item.denomination === denomination
+                            ? { ...item, count: Math.max(0, item.count - 1) }
+                            : item,
+                        ),
+                      )
+                    }
+                  >
+                    −
+                  </button>
+                  <span>
+                    {denomination < 1 ? `${denomination * 100}p` : `₹${denomination}`} × {count}
+                  </span>
+                  <button
+                    aria-label={`Add one ${denomination} rupee note`}
+                    className="rounded px-1 hover:bg-muted"
+                    onClick={() =>
+                      setChangeNotes((items) =>
+                        items.map((item) =>
+                          item.denomination === denomination
+                            ? { ...item, count: item.count + 1 }
+                            : item,
+                        ),
+                      )
+                    }
+                  >
+                    +
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}
 
-        <Button
-          className="h-11 text-base"
-          onClick={confirm}
-          disabled={busy || paid <= 0}
-        >
+        <Button className="h-11 text-base" onClick={confirm} disabled={busy || paid <= 0}>
           {busy ? "Saving…" : `Confirm bill — ${inr(Math.min(paid, total))}`}
         </Button>
       </DialogContent>

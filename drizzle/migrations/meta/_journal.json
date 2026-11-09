@@ -36,6 +36,20 @@
       "when": 1794051072015,
       "tag": "0004_pos_business_date_cash_counts",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794063016000,
+      "tag": "0005_offline_access_and_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794068706091,
+      "tag": "0006_staff_users_pricing_barcodes",
+      "breakpoints": true
     }
   ]
 }
