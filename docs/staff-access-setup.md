@@ -1,42 +1,41 @@
 # Staff accounts and login
 
-RetailFlow keeps POS data in Supabase PostgreSQL, but staff credentials and sessions are managed by the RetailFlow server with Better Auth. Staff identity, role, active state, and location assignments remain in `public.users` and `public.staff_location_access`; passwords are stored only as Better Auth password hashes. Supabase Auth is not used for staff sign-in, and this setup does not add customer or e-commerce login.
+RetailFlow uses Supabase Auth for staff credentials and sessions. POS roles, activation, mandatory password changes, and location assignments are stored separately in `public.users` and `public.staff_location_access`. `public.users.user_id` is the same UUID as `auth.users.id`; Supabase-managed `auth.*` tables are not part of RetailFlow migrations.
 
-Route and data visibility is classified by purpose and sensitivity in [access-control.md](./access-control.md). Public dashboard access is limited to fixed daily aggregate totals; operational records remain authenticated and scoped.
+The public dashboard exposes only aggregate totals. Operational pages and APIs require an active staff profile, and server APIs enforce role and location scope. See [access-control.md](./access-control.md).
 
-## Initial Admin setup
+## Database setup
 
-The preferred bootstrap path is a one-time SQL seed run manually by the project owner in the trusted Supabase SQL editor. It matches the current Better Auth schema and sets `must_change_password=true`, so the Admin must choose a personal password before opening operational screens.
+The single baseline migration is [`20260625000000_retailflow_supabase_auth_baseline.sql`](../supabase/migrations/20260625000000_retailflow_supabase_auth_baseline.sql). It is intentionally destructive to the old RetailFlow schema: it drops the app-owned tables and functions from the previous SQL migrations, then creates the current schema. It does **not** drop Supabase-managed Auth, Storage, or system schemas.
 
-1. Confirm migrations `0005_offline_access_and_sync.sql`, `0006_staff_users_pricing_barcodes.sql`, and `0007_app_managed_staff_auth.sql` have been applied. Back up `public.users`, `public.auth_users`, `public.auth_accounts`, and `public.auth_login_identifiers` before seeding.
-2. Choose a strong temporary password and keep it in a password manager. From the project root, run:
+1. Back up anything you may need. This reset removes RetailFlow business records, staff profiles, role/location assignments, and the old Better Auth tables. It does not remove Supabase Auth accounts.
+2. Run the entire baseline migration once from the Supabase SQL editor or apply it through the configured Supabase migration workflow. Do not run it against a database whose RetailFlow data you need to keep; do not re-run it after setup because it drops and recreates the RetailFlow schema.
+3. Configure server-only `SUPABASE_SERVICE_ROLE_KEY` and the server `SUPABASE_URL`. The browser/build also needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`; the server login proxy uses `SUPABASE_PUBLISHABLE_KEY`. Never expose the service-role key in browser variables, source control, or chat.
+4. If staff will sign in by mobile number, enable/configure the Supabase Auth phone provider and SMS delivery. Phone users must be confirmed according to the project’s Auth settings.
 
-   ```sh
-   node scripts/generate-admin-password-hash.mjs
-   ```
+The app and the migration do not drop the Supabase Auth user you created in Lovable. Supabase Auth remains the source of credentials; the profile table only grants RetailFlow POS access. The shared sign-in screen accepts the email or confirmed mobile number and password for every role. A successful Supabase Auth login must also match an active `public.users` profile to enter the POS.
 
-   Type the password at the hidden prompt. The helper uses the installed Better Auth password hasher and prints only its compatible hash. The helper does not store or print the password.
-3. Replace `PASTE_BETTER_AUTH_HASH_HERE` in `scripts/seed-initial-admin.sql` with the printed hash, then run the entire script in the SQL editor. It runs in a transaction and aborts if an Admin profile or the requested email/mobile already exists. Do not paste the temporary password into SQL.
-4. If the SQL editor reports an error, do not continue to sign in. Inspect the business error and confirm that none of the Admin rows were committed before retrying; if the editor leaves the transaction open, roll it back. Restore the hash placeholder before sharing the file, and resolve any existing duplicate profile deliberately.
-5. After success, open the POS and sign in with `admin@dailyplazaa.com` (or `8269295929`) and the temporary password. The app should require a new personal password before allowing access to operational pages.
+## Create the first store
 
-Passwords are never stored as plaintext or encrypted for later recovery. `auth_accounts.password` contains a one-way Better Auth hash; it cannot be used to reveal the temporary password. If the temporary password is lost, issue a reset/new temporary password rather than trying to recover it.
+The current app has no location-creation screen. After the baseline migration, customize and run [`seed-initial-location.sql`](../scripts/seed-initial-location.sql) to add your first location. The fresh schema otherwise remains empty, and billing/inventory workflows need a location.
 
-The older `/setup/first-admin` form and its one-time token/RPC remain in the application for now. Do not use that route for this seed process; it asks the operator to choose a password and currently does not set the desired mandatory first-login change. Retire that fallback only after this manual seed and recovery path are verified.
+## Link the first Admin
 
-No Supabase Auth provider or Edge Function deployment is needed for staff sign-in. The app's server API uses `SUPABASE_SERVICE_ROLE_KEY`, Better Auth uses a dedicated `BETTER_AUTH_SECRET` containing at least 32 characters, and the server needs canonical `BETTER_AUTH_URL` plus `BETTER_AUTH_TRUSTED_ORIGIN`. Keep all of these out of browser-exposed variables. Production URLs and origins must use HTTPS. For local development use the exact origin shown in the browser, including host and port, for both Better Auth URL settings. The default is `http://localhost:8080`; if the dev server selects another port or you open it as `127.0.0.1`, update both values to match and restart the server. Store secrets in the ignored `.env`; do not use a shared/fallback secret. A missing Supabase server key or untrusted browser origin prevents sign-in and is reported as a service/configuration error rather than an invalid-password result.
+There is no `/first-admin` route. Create the initial account manually through **Lovable Cloud → Project Settings (More) → Users → Add user** (or Supabase Auth), and ensure the login method you plan to use is confirmed. Then:
 
-After applying `0007_app_managed_staff_auth.sql`, apply `0008_cleanup_legacy_staff_profiles.sql` if the legacy `public.staff_profiles` table still exists. It removes only an empty leftover table, re-points its location-access foreign key to `public.users` when safe, and aborts rather than deleting profile data or unreviewed dependencies. Do not drop other tables based only on their apparent absence from a code search; check the live schema, data, database dependencies, and migration history first.
+1. Copy that Auth user’s UUID from the Users list.
+2. Replace the placeholder UUID and display name in [`link-initial-admin.sql`](../scripts/link-initial-admin.sql).
+3. Run the SQL in the Supabase SQL editor. It aborts if the Auth user is missing, a staff profile already exists, or an active Admin has already been linked.
+4. Sign in with that account. The profile is marked `ADMIN`; Admins can access all active locations without individual location assignments.
 
-## Create and validate staff logins
+## Provision staff and validate access
 
-1. Sign in as the bootstrapped Admin while online.
-2. Open **Manager → Staff access**, enter a name and at least one of email or mobile, choose a role, and assign locations for Cashiers and Managers.
-3. RetailFlow creates the app-managed credential and matching `public.users` profile. The Admin sees a randomly generated temporary password once. Share it securely; it is not persisted in the staff profile or shown again.
-4. The staff member signs in with their email/mobile and temporary password, then chooses a personal password before the POS opens. Staff sign-in, provisioning, password changes, and session revocation require a connection.
-5. Verify the role and location scope with a Cashier assigned to one outlet, a Manager assigned to their authorized locations, and the Admin. Deactivate or change access from the same staff panel.
+1. Sign in online as the linked Admin and open **Manager → Staff access**.
+2. Enter a staff name and email and/or mobile number, choose a role, and assign at least one location to Cashiers and Managers.
+3. RetailFlow creates the Supabase Auth user and a corresponding POS profile. A temporary password is shown once; share it securely. The staff member must set a personal password before using operational screens.
+4. Verify a Cashier sees only assigned locations, a Manager can use management workflows only within assigned locations, and the Admin can manage all locations. Deactivating a profile immediately blocks RetailFlow APIs even if its Supabase Auth account still exists.
 
-Once a device has a local staff profile, billing and local saves can continue offline. Offline logout locks the device immediately, preserves pending bills and outbox work, and revokes the server session when connectivity returns. Legacy outbox operations without a staff owner are moved to review instead of being retried indefinitely.
+Staff sign-in, provisioning, password changes, and server synchronization require a connection. After a successful online sign-in, the device caches the access profile so POS work can continue offline. Offline logout locks the device immediately, preserves pending bills/outbox work, and revokes the Supabase session when connectivity returns. Legacy outbox operations without a verified staff owner are moved to review.
 
 ## Product pricing and barcode data
 

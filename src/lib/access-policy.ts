@@ -6,7 +6,7 @@ export const accessPolicy = {
     staff: ["/billing", "/sales", "/inventory", "/purchases", "/cash-drawer", "/manager"],
   },
   api: {
-    public: ["/api/public-overview", "/api/first-admin"],
+    public: ["/api/public-overview"],
     staff: [
       "/api/retail-snapshot",
       "/api/retail-sync",
@@ -15,7 +15,7 @@ export const accessPolicy = {
       "/api/staff-password",
       "/api/staff-session",
     ],
-    signIn: ["/api/staff-login", "/api/auth/*"],
+    signIn: ["/api/pos/login"],
   },
 } as const;
 
