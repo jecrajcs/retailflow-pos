@@ -10,6 +10,7 @@ import {
   type LocalStoreName,
   type OutboxOperation,
 } from "@/lib/local-db";
+import { mergeReplicaRows } from "@/lib/replica-merge-policy";
 
 type SyncResult = { synced: number; pending: number; failed: number };
 
@@ -116,23 +117,7 @@ async function mergeRemoteCollection(
     return { ...row, sync_status: "SYNCED" };
   });
   const localRows = await getAllLocal<KeyedRecord>(store);
-  const localById = new Map(localRows.map((row) => [String(row.id), row]));
-  const merged = new Map<string, KeyedRecord>();
-  for (const row of remoteRows) {
-    const id = String(row.id ?? "");
-    const local = localById.get(id);
-    merged.set(
-      id,
-      local?.["sync_status"] === "PENDING" || local?.["sync_status"] === "LOCAL"
-        ? local
-        : { ...local, ...row, sync_status: "SYNCED" },
-    );
-  }
-  for (const row of localRows) {
-    const id = String(row.id ?? "");
-    if (!merged.has(id)) merged.set(id, row);
-  }
-  await replaceLocalCollection(store, [...merged.values()]);
+  await replaceLocalCollection(store, mergeReplicaRows(table, remoteRows, localRows));
 }
 
 async function sendOperation(

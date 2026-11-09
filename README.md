@@ -22,6 +22,7 @@ Requirements based on our confirmed architecture:
 - Thermal receipt (2-inch/3-inch) print preview.
 - Cash Drawer Express & Detailed view with shift open/close reconciliation.
 - Manager screens: Catalog Enrichment Queue, Stock Transfer requests, and Damage/Expiry Write-Off.
+- Role-separated Admin console at `/admin` for network-wide location setup, analytics, and staff provisioning; Managers operate assigned stores and manage Cashier access within their locations.
 
 This project was built with [Lovable](https://lovable.dev).
 

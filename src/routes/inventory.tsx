@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowDownAZ, Boxes, Search, Truck } from "lucide-react";
 
 import { AppNav } from "@/components/pos/app-nav";
@@ -199,7 +199,25 @@ function InventoryPage() {
                       colSpan={6 + locations.length}
                       className="px-3 py-10 text-center text-muted-foreground"
                     >
-                      No items match this search / filter.
+                      {products.length === 0 ? (
+                        <div className="space-y-2">
+                          <p>No products are available in this device&apos;s catalog yet.</p>
+                          {profile?.role === "MANAGER" ? (
+                            <Button asChild size="sm" variant="outline">
+                              <Link to="/manager">Open Manager catalog and stock tools</Link>
+                            </Button>
+                          ) : profile?.role === "ADMIN" ? (
+                            <p>
+                              Provision a Manager in the Admin console to set up the catalog and
+                              opening stock.
+                            </p>
+                          ) : (
+                            <p>Ask your Manager to add products and opening stock.</p>
+                          )}
+                        </div>
+                      ) : (
+                        "No items match this search / filter."
+                      )}
                     </td>
                   </tr>
                 )}

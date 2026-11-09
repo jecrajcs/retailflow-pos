@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -899,9 +899,29 @@ function PosPage() {
                 {lines.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
-                      {customerUnset
-                        ? "Customer choose karein — phir scan ya quick tile se bill shuru karein."
-                        : "Scan an item or tap a quick tile to start the bill."}
+                      {products.length === 0 ? (
+                        <div className="space-y-2">
+                          <p>No products are available to bill from this device&apos;s catalog.</p>
+                          {profile?.role === "MANAGER" ? (
+                            <Button asChild size="sm" variant="outline">
+                              <Link to="/manager">Open Manager catalog and stock tools</Link>
+                            </Button>
+                          ) : profile?.role === "ADMIN" ? (
+                            <p>
+                              Create a Manager in Admin staff access to prepare products and opening
+                              stock.
+                            </p>
+                          ) : (
+                            <p>
+                              Ask your Manager to add products and opening stock before billing.
+                            </p>
+                          )}
+                        </div>
+                      ) : customerUnset ? (
+                        "Customer choose karein — phir scan ya quick tile se bill shuru karein."
+                      ) : (
+                        "Scan an item or tap a quick tile to start the bill."
+                      )}
                     </td>
                   </tr>
                 )}
