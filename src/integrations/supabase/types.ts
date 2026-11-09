@@ -14,236 +14,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      auth_accounts: {
-        Row: {
-          access_token: string | null
-          access_token_expires_at: string | null
-          account_id: string
-          created_at: string
-          id: string
-          id_token: string | null
-          password: string | null
-          provider_id: string
-          refresh_token: string | null
-          refresh_token_expires_at: string | null
-          scope: string | null
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          access_token?: string | null
-          access_token_expires_at?: string | null
-          account_id: string
-          created_at?: string
-          id?: string
-          id_token?: string | null
-          password?: string | null
-          provider_id: string
-          refresh_token?: string | null
-          refresh_token_expires_at?: string | null
-          scope?: string | null
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          access_token?: string | null
-          access_token_expires_at?: string | null
-          account_id?: string
-          created_at?: string
-          id?: string
-          id_token?: string | null
-          password?: string | null
-          provider_id?: string
-          refresh_token?: string | null
-          refresh_token_expires_at?: string | null
-          scope?: string | null
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "auth_accounts_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "auth_users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      auth_bootstrap_tokens: {
-        Row: {
-          consumed_at: string | null
-          consumed_by: string | null
-          created_at: string
-          token_hash: string
-        }
-        Insert: {
-          consumed_at?: string | null
-          consumed_by?: string | null
-          created_at?: string
-          token_hash: string
-        }
-        Update: {
-          consumed_at?: string | null
-          consumed_by?: string | null
-          created_at?: string
-          token_hash?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "auth_bootstrap_tokens_consumed_by_fkey"
-            columns: ["consumed_by"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["user_id"]
-          },
-        ]
-      }
-      auth_login_identifiers: {
-        Row: {
-          created_at: string
-          kind: string
-          normalized_identifier: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          kind: string
-          normalized_identifier: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          kind?: string
-          normalized_identifier?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "auth_login_identifiers_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "users"
-            referencedColumns: ["user_id"]
-          },
-        ]
-      }
-      auth_rate_limits: {
-        Row: {
-          count: number
-          key: string
-          last_request: number
-        }
-        Insert: {
-          count?: number
-          key: string
-          last_request?: number
-        }
-        Update: {
-          count?: number
-          key?: string
-          last_request?: number
-        }
-        Relationships: []
-      }
-      auth_sessions: {
-        Row: {
-          created_at: string
-          expires_at: string
-          id: string
-          ip_address: string | null
-          token: string
-          updated_at: string
-          user_agent: string | null
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          expires_at: string
-          id?: string
-          ip_address?: string | null
-          token: string
-          updated_at?: string
-          user_agent?: string | null
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          expires_at?: string
-          id?: string
-          ip_address?: string | null
-          token?: string
-          updated_at?: string
-          user_agent?: string | null
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "auth_sessions_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "auth_users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      auth_users: {
-        Row: {
-          created_at: string
-          email: string
-          email_verified: boolean
-          id: string
-          image: string | null
-          name: string
-          updated_at: string
-        }
-        Insert: {
-          created_at?: string
-          email: string
-          email_verified?: boolean
-          id: string
-          image?: string | null
-          name: string
-          updated_at?: string
-        }
-        Update: {
-          created_at?: string
-          email?: string
-          email_verified?: boolean
-          id?: string
-          image?: string | null
-          name?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      auth_verifications: {
-        Row: {
-          created_at: string
-          expires_at: string
-          id: string
-          identifier: string
-          updated_at: string
-          value: string
-        }
-        Insert: {
-          created_at?: string
-          expires_at: string
-          id?: string
-          identifier: string
-          updated_at?: string
-          value: string
-        }
-        Update: {
-          created_at?: string
-          expires_at?: string
-          id?: string
-          identifier?: string
-          updated_at?: string
-          value?: string
-        }
-        Relationships: []
-      }
       cash_drawer_sessions: {
         Row: {
           cash_in: number
@@ -1194,32 +964,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      add_payment: {
-        Args: { p_amount: number; p_invoice_id: string; p_mode: string }
-        Returns: undefined
-      }
-      admin_set_staff_access: {
-        Args: {
-          p_display_name: string
-          p_is_active?: boolean
-          p_location_ids: string[]
-          p_role: string
-          p_user_id: string
-        }
-        Returns: undefined
-      }
-      app_complete_first_admin_bootstrap: {
-        Args: {
-          p_display_name: string
-          p_email: string
-          p_email_identifier: string
-          p_phone: string
-          p_phone_identifier: string
-          p_token_hash: string
-          p_user_id: string
-        }
-        Returns: undefined
-      }
       app_resolve_inventory_sync_alert: {
         Args: { p_actor_user_id: string; p_alert_id: string }
         Returns: undefined
@@ -1228,13 +972,11 @@ export type Database = {
         Args: {
           p_actor_user_id: string
           p_display_name: string
-          p_email: string
-          p_email_identifier: string
+          p_email: string | null
           p_is_active: boolean
           p_location_ids: string[]
           p_must_change_password: boolean
-          p_phone: string
-          p_phone_identifier: string
+          p_phone: string | null
           p_role: string
           p_user_id: string
         }
@@ -1254,99 +996,14 @@ export type Database = {
           p_device_id: string
           p_operation_id: string
           p_operation_type: string
-          p_outlet_id: string
+          p_outlet_id: string | null
           p_payload: Json
         }
         Returns: Json
       }
       can_access_location: { Args: { p_location_id: string }; Returns: boolean }
       can_manage_retail_data: { Args: never; Returns: boolean }
-      close_cash_session:
-        | {
-            Args: {
-              p_cash_in: number
-              p_cash_out: number
-              p_counted_cash: number
-              p_session_id: string
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_cash_in: number
-              p_cash_out: number
-              p_closing_denominations?: Json
-              p_counted_cash: number
-              p_session_id: string
-            }
-            Returns: Json
-          }
-      complete_first_login_password_change: { Args: never; Returns: undefined }
-      create_pos_invoice:
-        | {
-            Args: {
-              p_customer_id: string
-              p_discount: number
-              p_items: Json
-              p_location_id: string
-              p_payments: Json
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_business_date: string
-              p_customer_id: string
-              p_discount: number
-              p_items: Json
-              p_location_id: string
-              p_payments: Json
-            }
-            Returns: Json
-          }
-      create_stock_adjustment: {
-        Args: {
-          p_location_id: string
-          p_product_id: string
-          p_quantity: number
-          p_reason: string
-          p_returnable: boolean
-        }
-        Returns: string
-      }
       current_staff_role: { Args: never; Returns: string }
-      log_cash_txn: {
-        Args: {
-          p_amount: number
-          p_direction: string
-          p_location_id: string
-          p_reason: string
-          p_session_id: string
-        }
-        Returns: string
-      }
-      open_cash_session:
-        | {
-            Args: {
-              p_location_id: string
-              p_opened_by: string
-              p_opening_cash: number
-            }
-            Returns: string
-          }
-        | {
-            Args: {
-              p_location_id: string
-              p_opened_by: string
-              p_opening_cash: number
-              p_opening_denominations?: Json
-            }
-            Returns: string
-          }
-      receive_stock_transfer: {
-        Args: { p_transfer_id: string }
-        Returns: undefined
-      }
       resolve_inventory_sync_alert: {
         Args: { p_alert_id: string }
         Returns: undefined
@@ -1360,7 +1017,7 @@ export type Database = {
           p_device_id: string
           p_operation_id: string
           p_operation_type: string
-          p_outlet_id: string
+          p_outlet_id: string | null
           p_payload: Json
         }
         Returns: Json

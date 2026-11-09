@@ -26,7 +26,7 @@ export const Route = createFileRoute("/api/staff-password")({
           if (password.length < 10 || password.length > 128)
             return jsonResponse({ error: "Choose a password with 10 to 128 characters." }, 400);
 
-          await replaceStaffPassword(session.profile.user_id, password, session.authSession.token);
+          await replaceStaffPassword(session.profile.user_id, password);
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
           const service = supabaseAdmin as unknown as StaffProfileService;
           const { error } = await service

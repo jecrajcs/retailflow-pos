@@ -1,3 +1,5 @@
+import { supabase } from "@/integrations/supabase/client";
+
 export class RetailApiError extends Error {
   constructor(
     message: string,
@@ -35,6 +37,12 @@ export async function retailApi<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
   const { json, ...requestInit } = init;
+  if (!headers.has("Authorization")) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.access_token) headers.set("Authorization", `Bearer ${session.access_token}`);
+  }
   let body = requestInit.body;
   if ("json" in init) {
     headers.set("Content-Type", "application/json");

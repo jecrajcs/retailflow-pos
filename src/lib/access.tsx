@@ -9,7 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { LockKeyhole, WifiOff } from "lucide-react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { useRouterState } from "@tanstack/react-router";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,6 +93,8 @@ export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
     } catch (error) {
       if (!(error instanceof RetailApiError && error.status === 401)) throw error;
     }
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    if (error) throw new Error(`Could not clear the local staff session: ${error.message}`);
     await deleteLocal("settings", "active_access_profile");
     await deleteLocal("settings", "staff_logout_pending");
     try {
@@ -111,6 +114,9 @@ export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
     return profile;
   } catch (error) {
     if (error instanceof RetailApiError && error.status === 401) {
+      const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+      if (signOutError)
+        throw new Error(`Could not clear the expired staff session: ${signOutError.message}`);
       await deleteLocal("settings", "active_access_profile");
       return null;
     }
@@ -152,6 +158,15 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const acceptSignedInProfile = useCallback(async (next: UserAccessProfile) => {
+    await setSetting("active_access_profile", next);
+    setProfile(next);
+    setLogoutPending(false);
+    setAccessError("");
+    setLoaded(true);
+    return next;
+  }, []);
+
   useEffect(() => {
     void refresh();
     const onOnline = () => {
@@ -159,7 +174,12 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
       void refresh();
     };
     const onOffline = () => setOnline(false);
-    const onSessionChange = () => window.setTimeout(() => void refresh(), 0);
+    const onSessionChange = (event: Event) => {
+      const signedInProfile = (event as CustomEvent<{ profile?: UserAccessProfile }>).detail
+        ?.profile;
+      if (signedInProfile) return;
+      window.setTimeout(() => void refresh(), 0);
+    };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     window.addEventListener("retailflow:session-change", onSessionChange);
@@ -208,6 +228,11 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
       } catch (error) {
         if (!(error instanceof RetailApiError && error.status === 401)) throw error;
       }
+      const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+      if (signOutError)
+        throw new Error(
+          `Server logout completed but local sign-out failed: ${signOutError.message}`,
+        );
       await deleteLocal("settings", "active_access_profile");
       await deleteLocal("settings", "staff_logout_pending");
       try {
@@ -238,14 +263,13 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
         Loading this device’s access profile…
       </div>
     );
-  if (pathname === "/setup/first-admin" && !profile) return <>{children}</>;
   if (!profile && pageAccessClass(pathname) === "public")
     return <AccessContext.Provider value={value}>{children}</AccessContext.Provider>;
   if (!profile)
     return (
       <SignInScreen
         online={online}
-        onSignedIn={refresh}
+        onSignedIn={acceptSignedInProfile}
         initialError={accessError}
         logoutPending={logoutPending}
       />
@@ -351,7 +375,7 @@ function SignInScreen({
   logoutPending,
 }: {
   online: boolean;
-  onSignedIn: () => Promise<UserAccessProfile | null>;
+  onSignedIn: (profile: UserAccessProfile) => Promise<UserAccessProfile>;
   initialError: string;
   logoutPending: boolean;
 }) {
@@ -359,24 +383,10 @@ function SignInScreen({
   const [password, setPassword] = useState("");
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState(initialError);
-  const [bootstrapAvailable, setBootstrapAvailable] = useState(false);
 
   useEffect(() => {
     setMessage(initialError);
   }, [initialError]);
-
-  useEffect(() => {
-    if (!online) return;
-    let active = true;
-    void retailApi<{ available: boolean }>("/api/first-admin")
-      .then(({ available }) => {
-        if (active) setBootstrapAvailable(available);
-      })
-      .catch((error) => console.error("Could not check first-Admin setup", error));
-    return () => {
-      active = false;
-    };
-  }, [online]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -384,18 +394,26 @@ function SignInScreen({
     setWorking(true);
     setMessage("");
     try {
-      await retailApi<{ ok: boolean }>("/api/staff-login", {
+      const { session, profile } = await retailApi<{
+        ok: boolean;
+        session: { access_token: string; refresh_token: string };
+        profile: UserAccessProfile;
+      }>("/api/pos/login", {
         method: "POST",
         json: { identifier: identifier.trim(), password },
       });
-      window.dispatchEvent(new CustomEvent("retailflow:session-change"));
-      const profile = await onSignedIn();
-      if (!profile) {
-        await retailApi<{ ok: boolean }>("/api/staff-session", { method: "DELETE" });
-        setMessage("This account has no active RetailFlow staff access. Ask an Admin for help.");
-      }
+      const { error } = await supabase.auth.setSession(session);
+      if (error) throw error;
+      await onSignedIn(profile);
+      window.dispatchEvent(new CustomEvent("retailflow:session-change", { detail: { profile } }));
     } catch (error) {
-      setMessage(userFacingError(error, "Could not sign in. Check your details and connection."));
+      if (error instanceof RetailApiError && error.status === 401) {
+        setMessage(
+          "Supabase Auth could not verify these credentials. Check the email/mobile and password, confirm the sign-in method if required, and make sure this POS uses the same Supabase project.",
+        );
+      } else {
+        setMessage(userFacingError(error, "Could not sign in. Check your details and connection."));
+      }
     } finally {
       setWorking(false);
     }
@@ -413,7 +431,8 @@ function SignInScreen({
         <div>
           <h1 className="text-xl font-bold">Sign in to RetailFlow</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Your role and assigned locations control what this device can show.
+            Sign in with your Supabase Auth email or confirmed mobile number and password. Your
+            account also needs an active RetailFlow role profile.
           </p>
         </div>
         {!online && (
@@ -429,7 +448,7 @@ function SignInScreen({
           </p>
         )}
         <div className="space-y-1">
-          <Label htmlFor="login-email">Email or mobile number</Label>
+          <Label htmlFor="login-email">Supabase Auth email or mobile number</Label>
           <Input
             id="login-email"
             type="text"
@@ -460,16 +479,9 @@ function SignInScreen({
           {working ? "Signing in…" : "Sign in"}
         </Button>
         <p className="text-xs text-muted-foreground">
-          An Admin must provision staff access and location assignments before first sign-in.
+          One sign-in form works for every role. An active RetailFlow profile and location
+          assignments are required for POS access.
         </p>
-        {bootstrapAvailable && (
-          <Link
-            to="/setup/first-admin"
-            className="block text-center text-sm font-medium text-primary underline-offset-4 hover:underline"
-          >
-            Set up the first Admin
-          </Link>
-        )}
       </form>
     </main>
   );

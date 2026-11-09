@@ -5,14 +5,14 @@ import {
   projectStaffSensitiveTables,
   summarizePublicInvoices,
 } from "@/lib/retail-server-api.server";
-import {
-  getAuthServerUrl,
-  getRetailAuth,
-  normalizeStaffIdentifier,
-} from "@/lib/retail-auth.server";
+import { normalizeStaffIdentifier } from "@/lib/retail-auth.server";
 import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { accessPolicy, pageAccessClass } from "@/lib/access-policy";
-import { staffLoginErrorResponse } from "@/routes/api/staff-login";
+import {
+  posLoginErrorResponse,
+  posLoginOriginErrorResponse,
+  posProfileRequiredErrorResponse,
+} from "@/routes/api/pos/login";
 
 describe("staff login identifiers", () => {
   it("normalizes email addresses case-insensitively", () => {
@@ -38,9 +38,10 @@ describe("app access policy and data projections", () => {
     expect(pageAccessClass("/manager")).toBe("staff");
   });
 
-  it("exposes only the allowlisted public overview API and bootstrap status", () => {
-    expect(accessPolicy.api.public).toEqual(["/api/public-overview", "/api/first-admin"]);
+  it("exposes only the allowlisted public overview API", () => {
+    expect(accessPolicy.api.public).toEqual(["/api/public-overview"]);
     expect(accessPolicy.api.staff).toContain("/api/retail-snapshot");
+    expect(accessPolicy.api.signIn).toEqual(["/api/pos/login"]);
   });
 
   it("returns public dashboard aggregates without exposing invoice rows", () => {
@@ -107,56 +108,7 @@ describe("app access policy and data projections", () => {
   });
 });
 
-describe("staff authentication configuration", () => {
-  it("requires an explicit canonical server URL", () => {
-    const baseUrl = process.env["BETTER_AUTH_URL"];
-    delete process.env["BETTER_AUTH_URL"];
-    try {
-      expect(() => getAuthServerUrl()).toThrow(
-        "Staff authentication configuration is incomplete or invalid.",
-      );
-    } finally {
-      if (baseUrl !== undefined) process.env["BETTER_AUTH_URL"] = baseUrl;
-    }
-  });
-
-  it("uses the configured URL and trusted origin without request-origin inference", () => {
-    const baseUrl = process.env["BETTER_AUTH_URL"];
-    const trustedOrigin = process.env["BETTER_AUTH_TRUSTED_ORIGIN"];
-    process.env["BETTER_AUTH_URL"] = "https://pos.example.test/";
-    process.env["BETTER_AUTH_TRUSTED_ORIGIN"] = "https://pos.example.test";
-    try {
-      expect(getAuthServerUrl()).toEqual({
-        baseURL: "https://pos.example.test",
-        trustedOrigins: ["https://pos.example.test"],
-      });
-    } finally {
-      if (baseUrl === undefined) delete process.env["BETTER_AUTH_URL"];
-      else process.env["BETTER_AUTH_URL"] = baseUrl;
-      if (trustedOrigin === undefined) delete process.env["BETTER_AUTH_TRUSTED_ORIGIN"];
-      else process.env["BETTER_AUTH_TRUSTED_ORIGIN"] = trustedOrigin;
-    }
-  });
-
-  it("fails auth operations safely when the server secret is missing", () => {
-    const secret = process.env["BETTER_AUTH_SECRET"];
-    delete process.env["BETTER_AUTH_SECRET"];
-    try {
-      let error: unknown;
-      try {
-        getRetailAuth();
-      } catch (caught) {
-        error = caught;
-      }
-      expect(error).toMatchObject({ name: "AuthConfigurationError" });
-      const response = errorResponse(error, "Could not sign in.");
-      expect(response.status).toBe(503);
-      expect(response.headers.get("Cache-Control")).toBe("no-store");
-    } finally {
-      if (secret !== undefined) process.env["BETTER_AUTH_SECRET"] = secret;
-    }
-  });
-
+describe("staff authentication errors", () => {
   it("returns a safe client message for malformed request JSON", async () => {
     const response = errorResponse(new SyntaxError("Unexpected token"), "Could not save.");
     expect(response.status).toBe(400);
@@ -173,25 +125,6 @@ describe("staff authentication configuration", () => {
     await expect(response.json()).resolves.toEqual({
       error: "RetailFlow services are temporarily unavailable. Please try again later.",
     });
-  });
-
-  it("does not display internal auth configuration details to users", async () => {
-    const secret = process.env["BETTER_AUTH_SECRET"];
-    delete process.env["BETTER_AUTH_SECRET"];
-    try {
-      let error: unknown;
-      try {
-        getRetailAuth();
-      } catch (caught) {
-        error = caught;
-      }
-      const response = errorResponse(error, "Staff authentication is temporarily unavailable.");
-      await expect(response.json()).resolves.toEqual({
-        error: "Staff sign-in is temporarily unavailable. Please contact your store administrator.",
-      });
-    } finally {
-      if (secret !== undefined) process.env["BETTER_AUTH_SECRET"] = secret;
-    }
   });
 });
 
@@ -249,24 +182,30 @@ describe("RetailFlow API errors", () => {
     ).toBe("Could not reach RetailFlow. Check your connection and try again.");
   });
 
-  it("distinguishes untrusted sign-in origins from credentials and service failures", async () => {
-    const originFailure = staffLoginErrorResponse(403);
+  it("distinguishes origin, credential, and service failures", async () => {
+    const originFailure = posLoginOriginErrorResponse();
     expect(originFailure.status).toBe(403);
     await expect(originFailure.json()).resolves.toEqual({
-      error:
-        "This sign-in address is not trusted. Open RetailFlow using its configured local address and try again.",
+      error: "Cross-origin sign-in requests are not allowed.",
     });
 
-    const credentialFailure = staffLoginErrorResponse(401);
+    const credentialFailure = posLoginErrorResponse(401);
     expect(credentialFailure.status).toBe(401);
     await expect(credentialFailure.json()).resolves.toEqual({
-      error: "Invalid login or password, or this staff account is inactive.",
+      error: "Supabase Auth could not verify those credentials.",
     });
 
-    const serviceFailure = staffLoginErrorResponse(500);
+    const profileFailure = posProfileRequiredErrorResponse();
+    expect(profileFailure.status).toBe(403);
+    await expect(profileFailure.json()).resolves.toEqual({
+      error:
+        "Your Supabase sign-in succeeded, but this account is not linked to an active RetailFlow staff role. Ask the project administrator to complete POS access setup.",
+    });
+
+    const serviceFailure = posLoginErrorResponse(500);
     expect(serviceFailure.status).toBe(503);
     await expect(serviceFailure.json()).resolves.toEqual({
-      error: "Staff sign-in is temporarily unavailable. Please try again later.",
+      error: "Sign-in is temporarily unavailable. Please try again later.",
     });
   });
 });
