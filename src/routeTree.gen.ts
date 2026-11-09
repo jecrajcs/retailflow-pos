@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as BillingRouteImport } from './routes/billing'
 import { Route as CashDrawerRouteImport } from './routes/cash-drawer'
 import { Route as InventoryRouteImport } from './routes/inventory'
@@ -23,11 +24,17 @@ import { Route as ApiRetailSyncRouteImport } from './routes/api/retail-sync'
 import { Route as ApiStaffRouteImport } from './routes/api/staff'
 import { Route as ApiStaffPasswordRouteImport } from './routes/api/staff-password'
 import { Route as ApiStaffSessionRouteImport } from './routes/api/staff-session'
+import { Route as ApiAdminLocationsRouteImport } from './routes/api/admin/locations'
 import { Route as ApiPosLoginRouteImport } from './routes/api/pos/login'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BillingRoute = BillingRouteImport.update({
@@ -95,6 +102,11 @@ const ApiStaffSessionRoute = ApiStaffSessionRouteImport.update({
   path: '/api/staff-session',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminLocationsRoute = ApiAdminLocationsRouteImport.update({
+  id: '/api/admin/locations',
+  path: '/api/admin/locations',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPosLoginRoute = ApiPosLoginRouteImport.update({
   id: '/api/pos/login',
   path: '/api/pos/login',
@@ -103,6 +115,7 @@ const ApiPosLoginRoute = ApiPosLoginRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
@@ -116,10 +129,12 @@ export interface FileRoutesByFullPath {
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
@@ -133,11 +148,13 @@ export interface FileRoutesByTo {
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
@@ -151,12 +168,14 @@ export interface FileRoutesById {
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
@@ -170,10 +189,12 @@ export interface FileRouteTypes {
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/admin/locations'
     | '/api/pos/login'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/admin'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
@@ -187,10 +208,12 @@ export interface FileRouteTypes {
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/admin/locations'
     | '/api/pos/login'
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
@@ -204,11 +227,13 @@ export interface FileRouteTypes {
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/admin/locations'
     | '/api/pos/login'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRoute
   BillingRoute: typeof BillingRoute
   CashDrawerRoute: typeof CashDrawerRoute
   InventoryRoute: typeof InventoryRoute
@@ -222,6 +247,7 @@ export interface RootRouteChildren {
   ApiStaffRoute: typeof ApiStaffRoute
   ApiStaffPasswordRoute: typeof ApiStaffPasswordRoute
   ApiStaffSessionRoute: typeof ApiStaffSessionRoute
+  ApiAdminLocationsRoute: typeof ApiAdminLocationsRoute
   ApiPosLoginRoute: typeof ApiPosLoginRoute
 }
 
@@ -232,6 +258,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/billing': {
@@ -325,6 +358,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStaffSessionRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/locations': {
+      id: '/api/admin/locations'
+      path: '/api/admin/locations'
+      fullPath: '/api/admin/locations'
+      preLoaderRoute: typeof ApiAdminLocationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/pos/login': {
       id: '/api/pos/login'
       path: '/api/pos/login'
@@ -337,6 +377,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRoute,
   BillingRoute: BillingRoute,
   CashDrawerRoute: CashDrawerRoute,
   InventoryRoute: InventoryRoute,
@@ -350,6 +391,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiStaffRoute: ApiStaffRoute,
   ApiStaffPasswordRoute: ApiStaffPasswordRoute,
   ApiStaffSessionRoute: ApiStaffSessionRoute,
+  ApiAdminLocationsRoute: ApiAdminLocationsRoute,
   ApiPosLoginRoute: ApiPosLoginRoute,
 }
 export const routeTree = rootRouteImport

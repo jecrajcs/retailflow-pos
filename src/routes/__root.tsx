@@ -175,6 +175,7 @@ function RootComponent() {
             import("./purchases"),
             import("./cash-drawer"),
             import("./manager"),
+            import("./admin"),
             // Load on-demand bundles online once so offline OCR and spreadsheets
             // remain usable after the service worker takes control.
             import("xlsx"),

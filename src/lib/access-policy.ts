@@ -3,7 +3,7 @@ export type AccessClass = "public" | "staff";
 export const accessPolicy = {
   pages: {
     public: ["/"],
-    staff: ["/billing", "/sales", "/inventory", "/purchases", "/cash-drawer", "/manager"],
+    staff: ["/billing", "/sales", "/inventory", "/purchases", "/cash-drawer", "/manager", "/admin"],
   },
   api: {
     public: ["/api/public-overview"],

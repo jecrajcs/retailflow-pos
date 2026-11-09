@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileUp, Plus, ScanSearch, ShieldCheck, Warehouse } from "lucide-react";
 import { toast } from "sonner";
@@ -589,9 +589,16 @@ function PurchasesPage() {
               </p>
             )}
             {warehouses.length === 0 && (
-              <p className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm">
-                No location is marked as a warehouse yet.
-              </p>
+              <div className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm">
+                <p>No active location is marked as a warehouse yet.</p>
+                {profile?.role === "ADMIN" ? (
+                  <Button asChild size="sm" variant="outline" className="mt-2">
+                    <Link to="/admin">Add or activate a warehouse</Link>
+                  </Button>
+                ) : (
+                  <p className="mt-1">Ask an Admin to add or activate a warehouse location.</p>
+                )}
+              </div>
             )}
           </aside>
         </main>

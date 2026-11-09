@@ -8,6 +8,13 @@ import {
 import { normalizeStaffIdentifier } from "@/lib/retail-auth.server";
 import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { accessPolicy, pageAccessClass } from "@/lib/access-policy";
+import { canDeactivateLocation, normalizeLocationInput } from "@/lib/location-policy";
+import {
+  canAssignStaffLocations,
+  canManageStaffRole,
+  canManageStaffTarget,
+} from "@/lib/staff-access-policy";
+import { mergeReplicaRows } from "@/lib/replica-merge-policy";
 import {
   posLoginErrorResponse,
   posLoginOriginErrorResponse,
@@ -31,11 +38,87 @@ describe("staff login identifiers", () => {
   });
 });
 
+describe("Admin location policy", () => {
+  it("normalizes location codes and optional fields before saving", () => {
+    expect(
+      normalizeLocationInput({
+        name: "  Main Store ",
+        code: " ms_01 ",
+        type: "retail",
+        address: " ",
+        phone: null,
+      }),
+    ).toEqual({
+      name: "Main Store",
+      code: "MS_01",
+      type: "RETAIL",
+      address: null,
+      phone: null,
+      is_active: true,
+    });
+  });
+
+  it("rejects malformed, unsupported, or unsafe location inputs", () => {
+    expect(normalizeLocationInput({ name: "", code: "1", type: "RETAIL" })).toBeNull();
+    expect(normalizeLocationInput({ name: "Store", code: "BAD CODE", type: "RETAIL" })).toBeNull();
+    expect(normalizeLocationInput({ name: "Store", code: "MS01", type: "OTHER" })).toBeNull();
+  });
+
+  it("blocks deactivation until shifts, assignments, and sync alerts are clear", () => {
+    expect(
+      canDeactivateLocation({ openCashSessions: 0, assignedStaff: 0, unresolvedAlerts: 0 }),
+    ).toBe(true);
+    expect(
+      canDeactivateLocation({ openCashSessions: 1, assignedStaff: 0, unresolvedAlerts: 0 }),
+    ).toBe(false);
+    expect(
+      canDeactivateLocation({ openCashSessions: 0, assignedStaff: 1, unresolvedAlerts: 0 }),
+    ).toBe(false);
+    expect(
+      canDeactivateLocation({ openCashSessions: 0, assignedStaff: 0, unresolvedAlerts: 1 }),
+    ).toBe(false);
+  });
+});
+
+describe("role and location-scoped staff access", () => {
+  it("limits Managers to Cashiers and to their assigned locations", () => {
+    expect(canManageStaffRole("MANAGER", "CASHIER")).toBe(true);
+    expect(canManageStaffRole("MANAGER", "MANAGER")).toBe(false);
+    expect(canManageStaffRole("MANAGER", "ADMIN")).toBe(false);
+    expect(canAssignStaffLocations("MANAGER", ["store-a"], ["store-a"])).toBe(true);
+    expect(canAssignStaffLocations("MANAGER", ["store-a"], ["store-a", "store-b"])).toBe(false);
+    expect(canManageStaffTarget("MANAGER", ["store-a"], "CASHIER", ["store-a"])).toBe(true);
+    expect(canManageStaffTarget("MANAGER", ["store-a"], "CASHIER", ["store-a", "store-b"])).toBe(
+      false,
+    );
+  });
+
+  it("preserves offline business rows but drops locations removed from the server snapshot", () => {
+    const retainedBills = mergeReplicaRows(
+      "bills",
+      [],
+      [{ id: "local-bill", sync_status: "PENDING" }],
+    );
+    const locations = mergeReplicaRows(
+      "locations",
+      [{ id: "active-store", name: "Active" }],
+      [
+        { id: "active-store", name: "Stale name", sync_status: "SYNCED" },
+        { id: "deactivated-store", name: "Inactive", sync_status: "SYNCED" },
+      ],
+    );
+
+    expect(retainedBills).toEqual([{ id: "local-bill", sync_status: "PENDING" }]);
+    expect(locations).toEqual([{ id: "active-store", name: "Active", sync_status: "SYNCED" }]);
+  });
+});
+
 describe("app access policy and data projections", () => {
   it("allows only the dashboard page before staff sign-in", () => {
     expect(pageAccessClass("/")).toBe("public");
     expect(pageAccessClass("/billing")).toBe("staff");
     expect(pageAccessClass("/manager")).toBe("staff");
+    expect(pageAccessClass("/admin")).toBe("staff");
   });
 
   it("exposes only the allowlisted public overview API", () => {

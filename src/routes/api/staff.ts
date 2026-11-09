@@ -8,6 +8,7 @@ import {
   normalizeStaffPhone,
   removeStaffAuthUser,
   updateStaffAuthUser,
+  type StaffRole,
 } from "@/lib/retail-auth.server";
 import {
   asRecord,
@@ -16,6 +17,11 @@ import {
   jsonResponse,
   type RetailRow,
 } from "@/lib/retail-server-api.server";
+import {
+  canAssignStaffLocations,
+  canManageStaffRole,
+  canManageStaffTarget,
+} from "@/lib/staff-access-policy";
 
 type Query = PromiseLike<{
   data: unknown;
@@ -23,6 +29,7 @@ type Query = PromiseLike<{
 }> & {
   select: (columns?: string) => Query;
   eq: (field: string, value: unknown) => Query;
+  in: (field: string, values: readonly unknown[]) => Query;
   insert: (values: Record<string, unknown>) => Query;
   update: (values: Record<string, unknown>) => Query;
   delete: () => Query;
@@ -100,9 +107,27 @@ export const Route = createFileRoute("/api/staff")({
               { error: "Change your temporary password before using staff tools." },
               403,
             );
-          if (session.profile.role !== "ADMIN")
-            return jsonResponse({ error: "Only an Admin can manage staff accounts." }, 403);
-          return jsonResponse({ staff: await loadStaffRows() });
+          if (!["ADMIN", "MANAGER"].includes(session.profile.role))
+            return jsonResponse(
+              { error: "Admin or Manager access is required for staff tools." },
+              403,
+            );
+          const staff = await loadStaffRows();
+          return jsonResponse({
+            staff:
+              session.profile.role === "ADMIN"
+                ? staff
+                : staff.filter(
+                    (member) =>
+                      member.role === "CASHIER" &&
+                      canManageStaffTarget(
+                        session.profile.role,
+                        session.profile.location_ids,
+                        member.role,
+                        member.location_ids,
+                      ),
+                  ),
+          });
         } catch (error) {
           return errorResponse(error, "Could not load staff access.");
         }
@@ -118,8 +143,11 @@ export const Route = createFileRoute("/api/staff")({
               { error: "Change your temporary password before using staff tools." },
               403,
             );
-          if (session.profile.role !== "ADMIN")
-            return jsonResponse({ error: "Only an Admin can manage staff accounts." }, 403);
+          if (!["ADMIN", "MANAGER"].includes(session.profile.role))
+            return jsonResponse(
+              { error: "Admin or Manager access is required for staff tools." },
+              403,
+            );
           const body = asRecord(await request.json());
           if (!body) return jsonResponse({ error: "Invalid staff details." }, 400);
           const displayName =
@@ -141,8 +169,46 @@ export const Route = createFileRoute("/api/staff")({
           if (!displayName) return jsonResponse({ error: "Enter the staff member’s name." }, 400);
           if (!["CASHIER", "MANAGER", "ADMIN"].includes(role))
             return jsonResponse({ error: "Choose a valid staff role." }, 400);
-          if (role !== "ADMIN" && locationIds.length === 0)
-            return jsonResponse({ error: "Assign at least one location." }, 400);
+          if (!canManageStaffRole(session.profile.role, role as StaffRole))
+            return jsonResponse(
+              { error: "Managers may create or manage Cashier accounts only." },
+              403,
+            );
+          if (
+            role !== "ADMIN" &&
+            active &&
+            !canAssignStaffLocations(
+              session.profile.role,
+              session.profile.location_ids,
+              locationIds,
+            )
+          )
+            return jsonResponse(
+              {
+                error:
+                  session.profile.role === "MANAGER"
+                    ? locationIds.length === 0
+                      ? "Assign this active Cashier to at least one of your locations."
+                      : "Assign this Cashier only to one or more of your locations."
+                    : "Assign at least one location to an active staff member.",
+              },
+              400,
+            );
+          if (locationIds.length > 0) {
+            const service = await getStaffService();
+            const { data: requestedLocations, error: locationError } = await service
+              .from("locations")
+              .select("id,is_active")
+              .in("id", locationIds);
+            if (locationError) throw new Error(locationError.message);
+            const activeLocationIds = new Set(
+              (Array.isArray(requestedLocations) ? (requestedLocations as RetailRow[]) : [])
+                .filter((location) => location["is_active"] === true)
+                .map((location) => String(location["id"])),
+            );
+            if (activeLocationIds.size !== locationIds.length)
+              return jsonResponse({ error: "Assign staff only to active locations." }, 400);
+          }
           if (requestedUserId && !/^[0-9a-f-]{36}$/i.test(requestedUserId))
             return jsonResponse({ error: "Invalid staff account ID." }, 400);
           let contacts: ReturnType<typeof normalizeContacts>;
@@ -165,8 +231,22 @@ export const Route = createFileRoute("/api/staff")({
             : undefined;
           if (requestedUserId && !previous)
             return jsonResponse({ error: "Staff account not found." }, 404);
-          if (requestedUserId === session.profile.user_id && role !== "ADMIN")
-            return jsonResponse({ error: "An Admin cannot remove their own Admin access." }, 400);
+          if (
+            session.profile.role === "MANAGER" &&
+            previous &&
+            !canManageStaffTarget(
+              session.profile.role,
+              session.profile.location_ids,
+              previous.role as StaffRole,
+              previous.location_ids,
+            )
+          )
+            return jsonResponse(
+              { error: "Managers may manage only Cashiers assigned entirely to their locations." },
+              403,
+            );
+          if (requestedUserId === session.profile.user_id && role !== session.profile.role)
+            return jsonResponse({ error: "You cannot change your own staff role." }, 400);
 
           const email = contacts.email ?? previous?.["email"] ?? null;
           const phone = contacts.phone ?? previous?.["phone"] ?? null;

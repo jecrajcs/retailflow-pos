@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { LockKeyhole, WifiOff } from "lucide-react";
-import { useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -379,6 +379,7 @@ function SignInScreen({
   initialError: string;
   logoutPending: boolean;
 }) {
+  const navigate = useNavigate();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [working, setWorking] = useState(false);
@@ -406,6 +407,9 @@ function SignInScreen({
       if (error) throw error;
       await onSignedIn(profile);
       window.dispatchEvent(new CustomEvent("retailflow:session-change", { detail: { profile } }));
+      await navigate({
+        to: profile.role === "ADMIN" ? "/admin" : profile.role === "MANAGER" ? "/manager" : "/billing",
+      });
     } catch (error) {
       if (error instanceof RetailApiError && error.status === 401) {
         setMessage(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRightLeft,
@@ -10,10 +10,9 @@ import {
   Upload,
   UserRoundCog,
   Zap,
-  ShieldCheck,
-  UserPlus,
   CircleAlert,
   Copy,
+  UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,6 +33,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { StaffAccessPanel } from "@/components/pos/staff-access-panel";
 import {
   createAdjustment,
   createTransfer,
@@ -65,7 +65,7 @@ import {
   useSyncAlerts,
   type Product,
 } from "@/lib/pos";
-import { canAccessLocation, canManage, saveActiveLocation, useAccess } from "@/lib/access";
+import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
 import { retailApi, userFacingError } from "@/lib/retail-api";
 import { refreshLocalReplica } from "@/lib/offline-sync";
 
@@ -181,16 +181,24 @@ function ManagerPage() {
 
   const totalLoss = useMemo(() => adjustments.reduce((s, a) => s + a.cost_loss, 0), [adjustments]);
 
-  if (!canManage(profile))
+  if (profile?.role !== "MANAGER")
     return (
       <div className="flex min-h-dvh flex-col bg-background">
         <AppNav active="/manager" />
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
-          <h1 className="text-lg font-semibold">Manager access required</h1>
+          <h1 className="text-lg font-semibold">
+            {profile?.role === "ADMIN" ? "Use the Admin console" : "Manager access required"}
+          </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This account cannot access purchase review, catalog updates, transfers, write-offs,
-            imports, exports or shortcut settings.
+            {profile?.role === "ADMIN"
+              ? "Network-wide administration has a separate workspace."
+              : "This account cannot access store management tools."}
           </p>
+          {profile?.role === "ADMIN" && (
+            <Button asChild className="mt-4">
+              <Link to="/admin">Open Admin console</Link>
+            </Button>
+          )}
         </main>
       </div>
     );
@@ -236,9 +244,9 @@ function ManagerPage() {
             <TabsTrigger value="shortcuts" className="gap-1.5">
               <Zap className="h-3.5 w-3.5" /> Cashier shortcuts
             </TabsTrigger>
-            {profile?.role === "ADMIN" && (
+            {profile?.role === "MANAGER" && (
               <TabsTrigger value="staff" className="gap-1.5">
-                <ShieldCheck className="h-3.5 w-3.5" /> Staff access
+                <UserRoundCog className="h-3.5 w-3.5" /> Cashier access
               </TabsTrigger>
             )}
             <TabsTrigger value="sync-alerts" className="gap-1.5">
@@ -417,9 +425,9 @@ function ManagerPage() {
               defaultLocationId={location?.id ?? ""}
             />
           </TabsContent>
-          {profile?.role === "ADMIN" && (
+          {profile?.role === "MANAGER" && (
             <TabsContent value="staff" className="mt-3">
-              <AdminStaffAccess locations={locations} />
+              <StaffAccessPanel mode="manager" locations={allowedLocations} />
             </TabsContent>
           )}
           <TabsContent value="sync-alerts" className="mt-3">
@@ -544,7 +552,7 @@ type ManagedStaff = {
   has_login: boolean;
 };
 
-function AdminStaffAccess({
+export function AdminStaffAccess({
   locations,
 }: {
   locations: Array<{ id: string; name: string; code: string }>;
