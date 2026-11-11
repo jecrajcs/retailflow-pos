@@ -31,12 +31,11 @@ export const Route = createFileRoute("/api/staff-session")({
                 .eq("status", "OPEN");
               if (error) throw new Error(`Could not verify the cashier shift: ${error.message}`);
               const hasOpenShift = (data ?? []).some(
-                (shift) =>
-                  shift.opened_by_id === session.profile.user_id || shift.opened_by_id === null,
+                (shift) => shift.opened_by_id === session.profile.user_id,
               );
               if (hasOpenShift)
                 return jsonResponse(
-                  { error: "Close and reconcile the cash drawer before signing out." },
+                  { error: "Close and reconcile your cash shift before signing out." },
                   409,
                 );
             }

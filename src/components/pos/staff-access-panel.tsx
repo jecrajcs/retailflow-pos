@@ -17,7 +17,8 @@ type ManagedStaff = {
   display_name: string;
   email: string | null;
   phone: string | null;
-  role: "CASHIER" | "MANAGER" | "ADMIN";
+  username: string;
+  role: "CASHIER" | "MANAGER" | "ADMIN" | "WAREHOUSE";
   is_active: boolean;
   location_ids: string[];
   has_login: boolean;
@@ -110,6 +111,7 @@ export function StaffAccessPanel({
       const result = await retailApi<{
         user_id: string;
         login: string | null;
+        username?: string | null;
         temporary_password?: string;
         credential_verified?: boolean;
       }>("/api/staff", {
@@ -127,7 +129,7 @@ export function StaffAccessPanel({
       });
       if (result.temporary_password) {
         setNewCredential({
-          login: result.login ?? (email.trim() || phone.trim()),
+          login: result.username || result.login || (email.trim() || phone.trim()),
           temporary_password: result.temporary_password,
           credential_verified: result.credential_verified === true,
         });
@@ -157,7 +159,7 @@ export function StaffAccessPanel({
   }
 
   const allowedRoles =
-    mode === "admin" ? (["MANAGER", "CASHIER", "ADMIN"] as const) : (["CASHIER"] as const);
+    mode === "admin" ? (["MANAGER", "CASHIER", "ADMIN", "WAREHOUSE"] as const) : (["CASHIER"] as const);
   const canEdit = mode === "admin" ? profile?.role === "ADMIN" : profile?.role === "MANAGER";
   if (!canEdit) return null;
 
@@ -183,8 +185,9 @@ export function StaffAccessPanel({
               size="sm"
               variant="outline"
               onClick={() =>
-                void navigator.clipboard.writeText(
-                  `Login: ${newCredential.login}\nTemporary password: ${newCredential.temporary_password}`,
+                void navigator.clipboard.writeText(newCredential.temporary_password).then(
+                  () => toast.success("Temporary password copied."),
+                  () => toast.error("Could not copy the temporary password."),
                 )
               }
             >
@@ -376,6 +379,7 @@ export function StaffAccessPanel({
                 header: "Login",
                 accessor: (member) => member.email ?? member.phone ?? member.user_id,
               },
+              { id: "username", header: "Username", accessor: (member) => member.username },
               { id: "role", header: "Role", accessor: (member) => member.role },
               {
                 id: "status",

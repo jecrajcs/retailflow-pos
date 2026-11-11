@@ -1,4 +1,4 @@
-const CACHE_NAME = "retailflow-shell-v2";
+const CACHE_NAME = "retailflow-shell-v3";
 const SHELL_URLS = [
   "/",
   "/manifest.webmanifest",

@@ -11,6 +11,8 @@ import {
   type LocalStoreName,
   type SyncStatus,
 } from "@/lib/local-db";
+import { DENOMINATIONS } from "@/lib/cash-denominations";
+export { DENOMINATIONS } from "@/lib/cash-denominations";
 
 export interface Location {
   id: string;
@@ -19,6 +21,7 @@ export interface Location {
   type: string;
   address: string | null;
   phone: string | null;
+  upi_vpa?: string | null;
   is_active: boolean;
 }
 
@@ -31,7 +34,13 @@ export interface Product {
   barcode: string | null;
   hsn: string | null;
   category: string | null;
+  subcategory?: string | null;
   variant: string | null;
+  barcode_type?: "MANUFACTURER" | "INTERNAL" | "UNVERIFIED" | null;
+  quantity_precision?: number;
+  review_status?: "PENDING" | "APPROVED" | "REJECTED";
+  review_reason?: string | null;
+  is_active?: boolean;
   rack_location: string | null;
   purchase_cost: number;
   mrp: number;
@@ -176,7 +185,7 @@ export function barcodeForSku(sku: string) {
 
 export interface Customer {
   id: string;
-  name: string;
+  name: string | null;
   mobile: string | null;
   age_group: string | null;
   gender: string | null;
@@ -309,6 +318,7 @@ export interface ReceiptPayment {
   amount: number;
   tendered?: number;
   change_given?: number;
+  change_denominations?: Record<string, number>;
 }
 
 export type PaymentMode = "CASH" | "UPI" | "CARD" | "CREDIT";
@@ -449,6 +459,7 @@ export function matchesProductSearch(product: Product, query: string): boolean {
     product.sku,
     product.barcode,
     product.category,
+    product.subcategory,
     product.variant,
   ]
     .filter((field): field is string => !!field)
@@ -525,7 +536,7 @@ export function useLocations() {
 }
 
 export function useProducts() {
-  return useLocalRows<Product & KeyedRecord>("catalog", ["products"]);
+  return useLocalRows<Product & KeyedRecord>("catalog", ["products"], (product) => product.is_active !== false);
 }
 
 export interface InventoryRow {
@@ -535,8 +546,51 @@ export interface InventoryRow {
   reserved_qty: number;
 }
 
+export interface LocationProductAssignment {
+  id: string;
+  product_id: string;
+  location_id: string;
+  stock_count_status: "AWAITING_COUNT" | "TRACKED";
+  review_status: "PENDING" | "APPROVED" | "REJECTED";
+  review_reason?: string | null;
+}
+
+export interface BarcodeCandidate {
+  id: string;
+  product_id: string;
+  location_id: string;
+  code: string;
+  status: "PENDING" | "VERIFIED" | "REJECTED";
+  created_at: string;
+  review_reason?: string | null;
+}
+
+export interface CategoryReview {
+  id: string;
+  location_id: string;
+  kind: "CATEGORY" | "SUBCATEGORY";
+  name: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  created_at: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_reason?: string | null;
+}
+
 export function useInventory() {
   return useLocalRows<InventoryRow & KeyedRecord>("inventory_snapshot", ["inventory"]);
+}
+
+export function useLocationProducts() {
+  return useLocalRows<LocationProductAssignment & KeyedRecord>("location_products", ["location-products"]);
+}
+
+export function useBarcodeCandidates() {
+  return useLocalRows<BarcodeCandidate & KeyedRecord>("barcode_candidates", ["barcode-candidates"]);
+}
+
+export function useCategoryReviews() {
+  return useLocalRows<CategoryReview & KeyedRecord>("category_reviews", ["category-reviews"]);
 }
 
 export function useCustomers() {
@@ -613,6 +667,7 @@ export interface PaymentRow {
   mode: string;
   tendered: number | null;
   change_given: number | null;
+  change_denominations?: Record<string, number> | null;
   created_at: string;
 }
 
@@ -665,6 +720,7 @@ export interface PaymentSplitInput {
   mode: string;
   tendered?: number;
   change_given?: number;
+  change_denominations?: Record<string, number>;
 }
 
 function localId() {
@@ -711,13 +767,31 @@ async function localStockDelta(
     created_at: new Date().toISOString(),
     sync_status: "PENDING",
   };
+  const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
+    { store: "inventory_snapshot", value: inventory as KeyedRecord },
+    { store: "stock_movements", value: movement as KeyedRecord },
+  ];
+  if (delta > 0) {
+    const assignmentId = `${productId}:${locationId}`;
+    const currentAssignment = await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId);
+    entries.push({
+      store: "location_products",
+      value: {
+        ...(currentAssignment ?? {}),
+        id: assignmentId,
+        product_id: productId,
+        location_id: locationId,
+        stock_count_status: "TRACKED",
+        review_status: currentAssignment?.review_status ?? "PENDING",
+        review_reason: currentAssignment?.review_reason ?? null,
+        sync_status: "PENDING",
+      },
+    });
+  }
   return {
     inventory,
     movement,
-    entries: [
-      { store: "inventory_snapshot" as const, value: inventory as KeyedRecord },
-      { store: "stock_movements" as const, value: movement as KeyedRecord },
-    ],
+    entries,
   };
 }
 
@@ -730,7 +804,7 @@ export type LocalDraftLine = CartLine;
 export interface DraftPayload {
   invoice: LocalInvoice;
   customer: Customer | null;
-  customer_mode: "unset" | "chosen" | "walkin";
+  customer_mode: "unset" | "chosen";
   items: LocalDraftLine[];
   discount_mode: "AMOUNT" | "PERCENT";
   discount_input: number;
@@ -961,8 +1035,22 @@ export async function createPosInvoice(input: {
   payments: PaymentSplitInput[];
 }): Promise<InvoiceResult> {
   if (input.items.length === 0) throw new Error("Add at least one item before checkout.");
+  if (!input.customerId) throw new Error("Select a customer before completing the bill.");
+  for (const item of input.items) {
+    const product = (await getLocal<Product & KeyedRecord>("catalog", item.product_id)) ?? null;
+    if (item.quantity <= 0 || !Number.isFinite(item.quantity)) throw new Error("Enter a valid item quantity.");
+    if (product && !product.is_loose && !Number.isInteger(item.quantity))
+      throw new Error(`${product.name} is sold in whole units. Enter a whole-number quantity.`);
+    if (product?.is_loose) {
+      const precision = Math.max(0, Math.min(3, product.quantity_precision ?? 3));
+      const scale = 10 ** precision;
+      if (Math.abs(item.quantity * scale - Math.round(item.quantity * scale)) > 0.0001)
+        throw new Error(`${product.name} supports up to ${precision} decimal places.`);
+    }
+  }
   const inventory = await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot");
   const products = await getAllLocal<Product & KeyedRecord>("catalog");
+  const assignments = await getAllLocal<LocationProductAssignment & KeyedRecord>("location_products");
   const existing = input.draftId
     ? await getLocal<LocalInvoice & KeyedRecord>("bills", input.draftId)
     : undefined;
@@ -973,6 +1061,10 @@ export async function createPosInvoice(input: {
     const stock = inventory.find(
       (row) => row.product_id === productId && row.location_id === input.locationId,
     );
+    const assignment = assignments.find(
+      (row) => row.product_id === productId && row.location_id === input.locationId,
+    );
+    if (!stock && assignment?.stock_count_status === "AWAITING_COUNT") continue;
     if (!stock || stock.quantity_on_hand - stock.reserved_qty < quantity) {
       const product = products.find((row) => row.id === productId);
       throw new Error(
@@ -1001,7 +1093,7 @@ export async function createPosInvoice(input: {
     location_id: input.locationId,
     customer_id: input.customerId,
     customer_segment: input.customerSegment ?? null,
-    order_type: input.orderType ?? (input.customerId ? "Registered customer" : "Walk-in"),
+    order_type: input.orderType ?? "Registered customer",
     cashier_id: deviceId,
     cashier_name: input.cashierName ?? "Cashier",
     total_amount: total,
@@ -1038,7 +1130,12 @@ export async function createPosInvoice(input: {
         }
       : row,
   );
-  const movements = [...grouped.entries()].map(([productId, quantity]) => {
+  const trackedProductIds = new Set(
+    inventory.filter((row) => row.location_id === input.locationId).map((row) => row.product_id),
+  );
+  const movements = [...grouped.entries()]
+    .filter(([productId]) => trackedProductIds.has(productId))
+    .map(([productId, quantity]) => {
     const stock = stockRows.find(
       (row) => row.product_id === productId && row.location_id === input.locationId,
     );
@@ -1053,7 +1150,18 @@ export async function createPosInvoice(input: {
       created_at: createdAt,
       sync_status: "PENDING",
     } as KeyedRecord;
-  });
+    });
+  const uncountedSales = [...grouped.entries()]
+    .filter(([productId]) => !trackedProductIds.has(productId))
+    .map(([productId, quantity]) => ({
+      id: localId(),
+      invoice_id: id,
+      product_id: productId,
+      location_id: input.locationId,
+      quantity,
+      created_at: createdAt,
+      sync_status: "PENDING",
+    }));
   const updatedCustomers = input.customerId
     ? (await getAllLocal<Customer & KeyedRecord>("customers")).map((customer) =>
         customer.id === input.customerId
@@ -1085,6 +1193,10 @@ export async function createPosInvoice(input: {
         value: value as unknown as KeyedRecord,
       })),
     ...movements.map((value) => ({ store: "stock_movements" as const, value })),
+    ...uncountedSales.map((value) => ({
+      store: "uncounted_sales" as const,
+      value: value as unknown as KeyedRecord,
+    })),
     ...updatedCustomers
       .filter((customer) => customer.id === input.customerId)
       .map((value) => ({ store: "customers" as const, value: value as unknown as KeyedRecord })),
@@ -1098,6 +1210,7 @@ export async function createPosInvoice(input: {
       items: itemRows,
       payments: paymentRows,
       stock_movements: movements,
+      uncounted_sales: uncountedSales,
     },
     input.locationId,
   );
@@ -1186,9 +1299,11 @@ export async function quickAddProduct(input: {
   searchAliases?: string[];
   sku?: string;
   barcode?: string | null;
+  barcodeType?: "MANUFACTURER" | "INTERNAL" | "UNVERIFIED" | null;
   priceTiers?: ProductPriceTier[];
   variant?: string | null;
   category?: string | null;
+  subcategory?: string | null;
   rackLocation?: string | null;
   salePrice: number;
   minSalePrice?: number;
@@ -1196,17 +1311,16 @@ export async function quickAddProduct(input: {
   mrp: number;
   uom: string;
   locationId: string;
-  openingQty: number;
+  openingQty?: number;
   minStock?: number;
   cashierQuickAdd?: boolean;
 }): Promise<Product> {
   if (!input.name.trim()) throw new Error("Enter an item name.");
   if (!Number.isFinite(input.salePrice) || input.salePrice <= 0)
     throw new Error("Retail sell price must be greater than zero.");
-  if (!Number.isFinite(input.openingQty) || input.openingQty < 0)
+  const openingQty = input.openingQty ?? 0;
+  if (!Number.isFinite(openingQty) || openingQty < 0)
     throw new Error("Available quantity cannot be negative.");
-  if (input.cashierQuickAdd && input.openingQty <= 0)
-    throw new Error("Enter the available quantity before adding this item to a bill.");
   if (!input.uom.trim()) throw new Error("Choose a sale unit.");
   const sku = input.sku?.trim() || (await generateSku());
   const priceTiers = parsePriceTiers(input.priceTiers);
@@ -1214,8 +1328,8 @@ export async function quickAddProduct(input: {
   if (priceTiers.some((tier) => tier.unit_price < floorPrice || tier.unit_price > input.salePrice))
     throw new Error("Quantity prices must be between the minimum allowed price and retail price.");
   const allProducts = await getAllLocal<Product & KeyedRecord>("catalog");
-  const barcode = input.barcode?.trim() || barcodeForSku(sku);
-  if (allProducts.some((product) => product.barcode?.toLowerCase() === barcode.toLowerCase())) {
+  const barcode = input.barcode?.trim() || null;
+  if (barcode && allProducts.some((product) => product.barcode?.toLowerCase() === barcode.toLowerCase())) {
     throw new Error("This barcode is already assigned to another product.");
   }
   if (allProducts.some((product) => product.sku?.toLowerCase() === sku.toLowerCase()))
@@ -1230,7 +1344,13 @@ export async function quickAddProduct(input: {
     barcode,
     hsn: null,
     category: input.category || null,
+    subcategory: input.subcategory || null,
     variant: input.variant || null,
+    barcode_type: barcode ? (input.barcodeType ?? (input.cashierQuickAdd ? "UNVERIFIED" : "MANUFACTURER")) : null,
+    quantity_precision: 0,
+    review_status: "PENDING",
+    review_reason: null,
+    is_active: true,
     rack_location: input.rackLocation || null,
     purchase_cost: input.purchaseCost,
     mrp: input.mrp,
@@ -1248,13 +1368,58 @@ export async function quickAddProduct(input: {
   };
   const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
     { store: "catalog", value: { ...product, sync_status: "PENDING" } as unknown as KeyedRecord },
+    {
+      store: "location_products",
+      value: {
+        id: `${id}:${input.locationId}`,
+        product_id: id,
+        location_id: input.locationId,
+        stock_count_status: openingQty > 0 ? "TRACKED" : "AWAITING_COUNT",
+        review_status: "PENDING",
+        review_reason: null,
+        sync_status: "PENDING",
+      },
+    },
   ];
+  if (barcode && input.cashierQuickAdd) {
+    entries.push({
+      store: "barcode_candidates",
+      value: {
+        id: `${id}:${barcode}`,
+        product_id: id,
+        location_id: input.locationId,
+        code: barcode,
+        status: "PENDING",
+        created_at: new Date().toISOString(),
+      },
+    });
+  }
+  for (const [kind, value] of [["CATEGORY", input.category], ["SUBCATEGORY", input.subcategory]] as const) {
+    const normalized = value?.trim();
+    if (!normalized) continue;
+    const reviewId = `${input.locationId}:${kind}:${normalized.toLowerCase()}`;
+    const existingReview = await getLocal<KeyedRecord>("category_reviews", reviewId);
+    if (!existingReview || existingReview["status"] === "REJECTED") {
+      entries.push({
+        store: "category_reviews",
+        value: {
+          ...existingReview,
+          id: reviewId,
+          location_id: input.locationId,
+          kind,
+          name: normalized,
+          status: "PENDING",
+          created_at: new Date().toISOString(),
+        },
+      });
+    }
+  }
   const movement =
-    input.openingQty > 0
+      openingQty > 0
       ? await localStockDelta(
           product.id,
           input.locationId,
-          input.openingQty,
+          openingQty,
           "OPENING",
           `SKU ${sku}`,
         )
@@ -1266,8 +1431,16 @@ export async function quickAddProduct(input: {
     {
       record_id: id,
       product,
-      opening_qty: input.openingQty,
+      opening_qty: openingQty,
       location_id: input.locationId,
+      location_product: entries.find((entry) => entry.store === "location_products")?.value,
+      barcode_candidate:
+        input.cashierQuickAdd && barcode
+          ? entries.find((entry) => entry.store === "barcode_candidates")?.value
+          : null,
+      category_reviews: entries
+        .filter((entry) => entry.store === "category_reviews")
+        .map((entry) => entry.value),
       stock_movements: movement ? [movement.movement] : [],
     },
     input.locationId,
@@ -1276,25 +1449,96 @@ export async function quickAddProduct(input: {
   return product;
 }
 
-export async function addCustomer(input: {
+export async function resubmitRejectedProduct(input: {
+  productId: string;
+  locationId: string;
   name: string;
+  sku: string;
+  variant: string | null;
+  category: string | null;
+  subcategory: string | null;
+  salePrice: number;
+  uom: string;
+}): Promise<Product> {
+  const current = await getLocal<Product & KeyedRecord>("catalog", input.productId);
+  if (!current || current.review_status !== "REJECTED")
+    throw new Error("This SKU is no longer awaiting correction. Refresh the catalog and try again.");
+  if (!input.name.trim() || !input.uom.trim() || !Number.isFinite(input.salePrice) || input.salePrice <= 0)
+    throw new Error("Enter the item name, sale unit and a valid retail price.");
+  const sku = input.sku.trim();
+  if (!sku) throw new Error("Enter a valid SKU.");
+  const duplicate = (await getAllLocal<Product & KeyedRecord>("catalog")).some(
+    (product) => product.id !== current.id && product.sku?.toLowerCase() === sku.toLowerCase(),
+  );
+  if (duplicate) throw new Error("That SKU is already assigned to another product.");
+  const product: Product = {
+    ...current,
+    name: input.name.trim(),
+    sku,
+    variant: input.variant?.trim() || null,
+    category: input.category?.trim() || null,
+    subcategory: input.subcategory?.trim() || null,
+    sale_price: input.salePrice,
+    uom_sale: input.uom.trim(),
+    review_status: "PENDING",
+    review_reason: null,
+    enrichment_status: "PENDING",
+  };
+  const assignmentId = `${product.id}:${input.locationId}`;
+  const assignment = await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId);
+  if (!assignment) throw new Error("This SKU is not assigned to the active store.");
+  const updatedAssignment = { ...assignment, review_status: "PENDING", review_reason: null, sync_status: "PENDING" };
+  const categoryReviews: KeyedRecord[] = [];
+  for (const [kind, value] of [["CATEGORY", product.category], ["SUBCATEGORY", product.subcategory]] as const) {
+    if (!value) continue;
+    const id = `${input.locationId}:${kind}:${value.toLowerCase()}`;
+    const existingReview = await getLocal<KeyedRecord>("category_reviews", id);
+    if (!existingReview || existingReview["status"] === "REJECTED") categoryReviews.push({
+      ...existingReview,
+      id, location_id: input.locationId, kind, name: value, status: "PENDING", created_at: new Date().toISOString(),
+    });
+  }
+  await commitLocalOperation(
+    [
+      { store: "catalog", value: { ...product, sync_status: "PENDING" } as unknown as KeyedRecord },
+      { store: "location_products", value: updatedAssignment as unknown as KeyedRecord },
+      ...categoryReviews.map((value) => ({ store: "category_reviews" as const, value })),
+    ],
+    "product.quick_add",
+    {
+      record_id: product.id,
+      product,
+      correction: true,
+      location_id: input.locationId,
+      location_product: updatedAssignment,
+      category_reviews: categoryReviews,
+    },
+    input.locationId,
+  );
+  triggerBackgroundSync();
+  return product;
+}
+
+export async function addCustomer(input: {
+  name: string | null;
   mobile: string | null;
   creditLimit: number;
   ageGroup?: string | null;
   gender?: string | null;
   outstandingBalance?: number;
 }): Promise<Customer> {
-  const normalizedName = input.name.trim().toLocaleLowerCase("hi-IN");
+  const normalizedName = input.name?.trim().toLocaleLowerCase("hi-IN") || null;
   const normalizedMobile = input.mobile?.replace(/\D/g, "") || null;
+  if (!normalizedName && !normalizedMobile) throw new Error("Enter a customer name or mobile number.");
   const duplicate = (await getAllLocal<Customer & KeyedRecord>("customers")).find(
     (customer) =>
-      customer.name.trim().toLocaleLowerCase("hi-IN") === normalizedName &&
+      (customer.name?.trim().toLocaleLowerCase("hi-IN") || null) === normalizedName &&
       (customer.mobile?.replace(/\D/g, "") || null) === normalizedMobile,
   );
   if (duplicate) return duplicate;
   const customer: Customer = {
     id: localId(),
-    name: input.name.trim(),
+    name: input.name?.trim() || null,
     mobile: input.mobile?.trim() || null,
     age_group: input.ageGroup || null,
     gender: input.gender || null,
@@ -1324,6 +1568,8 @@ export async function updateCustomer(
   const current = await getLocal<Customer & KeyedRecord>("customers", customerId);
   if (!current) throw new Error("Customer not found on this device.");
   const updated = { ...current, ...patch, sync_status: "PENDING" };
+  if (!updated.name?.trim() && !updated.mobile?.replace(/\D/g, ""))
+    throw new Error("A customer needs a name or mobile number.");
   await commitLocalOperation(
     [{ store: "customers", value: updated as unknown as KeyedRecord }],
     "customer.update",
@@ -1368,6 +1614,11 @@ export async function updateProductProfile(productId: string, patch: Partial<Pro
     ...patch,
     sku: nextSku,
     barcode: nextBarcode,
+    barcode_type: nextBarcode === barcodeForSku(nextSku ?? "")
+      ? "INTERNAL" as const
+      : nextBarcode
+        ? (patch.barcode_type ?? current.barcode_type ?? "MANUFACTURER")
+        : null,
     price_tiers: priceTiers,
     sync_status: "PENDING",
   };
@@ -1579,6 +1830,75 @@ export async function createAdjustment(input: {
   triggerBackgroundSync();
 }
 
+/** Record an absolute physical count and start tracked-stock accounting at this location. */
+export async function countLocationStock(input: {
+  productId: string;
+  locationId: string;
+  countedQuantity: number;
+}) {
+  const counted = input.countedQuantity;
+  if (!Number.isFinite(counted) || counted < 0)
+    throw new Error("Enter a valid non-negative physical count.");
+  const product = await getLocal<Product & KeyedRecord>("catalog", input.productId);
+  if (!product || product.is_active === false)
+    throw new Error("This SKU is no longer active. Refresh the inventory list and try again.");
+  if (!product.is_loose && !Number.isInteger(counted))
+    throw new Error("This SKU is counted in whole units.");
+  const precision = Math.max(0, Math.min(3, product.quantity_precision ?? 0));
+  const scale = 10 ** precision;
+  if (product.is_loose && Math.abs(counted * scale - Math.round(counted * scale)) > 0.0001)
+    throw new Error(`This SKU supports up to ${precision} decimal places.`);
+
+  const current = (await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot")).find(
+    (row) => row.product_id === input.productId && row.location_id === input.locationId,
+  )?.quantity_on_hand ?? 0;
+  const delta = counted - current;
+  const reason = `Physical count: ${current} → ${counted}`;
+  const stock = await localStockDelta(
+    input.productId,
+    input.locationId,
+    delta,
+    "COUNT",
+    reason,
+  );
+  const assignmentId = `${input.productId}:${input.locationId}`;
+  const assignment = {
+    ...(await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId)),
+    id: assignmentId,
+    product_id: input.productId,
+    location_id: input.locationId,
+    stock_count_status: "TRACKED" as const,
+    review_status: "APPROVED" as const,
+    review_reason: null,
+    sync_status: "PENDING",
+  };
+  const adjustment = {
+    id: localId(),
+    product_id: input.productId,
+    location_id: input.locationId,
+    quantity: delta,
+    reason,
+    returnable_to_vendor: false,
+    cost_loss: 0,
+    created_at: new Date().toISOString(),
+  };
+  await commitLocalOperation(
+    [
+      ...stock.entries,
+      { store: "location_products", value: assignment as unknown as KeyedRecord },
+      { store: "stock_adjustments", value: { ...adjustment, sync_status: "PENDING" } },
+    ],
+    "inventory.adjustment.create",
+    {
+      record_id: adjustment.id,
+      adjustment,
+      stock_movement: stock.movement,
+    },
+    input.locationId,
+  );
+  triggerBackgroundSync();
+}
+
 export async function openSession(input: {
   locationId: string;
   openedBy: string;
@@ -1767,8 +2087,6 @@ export async function legacyStockSet(input: {
 }
 
 /* ----------------------------- denominations ----------------------------- */
-
-export const DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1] as const;
 
 export function denomTotal(counts: Record<string, number> | null | undefined): number {
   if (!counts) return 0;

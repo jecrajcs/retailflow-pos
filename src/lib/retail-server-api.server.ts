@@ -33,6 +33,10 @@ const REMOTE_TABLES = [
   "stock_transfer_items",
   "stock_adjustments",
   "inventory_sync_alerts",
+  "location_product_assignments",
+  "uncounted_sales",
+  "barcode_candidates",
+  "category_reviews",
 ] as const;
 
 type PublicInvoiceQuery = PromiseLike<{
@@ -105,13 +109,13 @@ export function projectStaffSensitiveTables(
   customers: RetailRow[],
   role: StaffAccessProfile["role"],
 ) {
-  if (role !== "CASHIER") return { products, customers };
+  if (role !== "CASHIER" && role !== "WAREHOUSE") return { products, customers };
 
   return {
     products: products.map(
       ({ purchase_cost: _purchaseCost, preferred_supplier: _supplier, ...product }) => product,
     ),
-    customers: customers.map(
+    customers: role === "WAREHOUSE" ? [] : customers.map(
       ({ age_group: _ageGroup, gender: _gender, visits: _visits, notes: _notes, ...customer }) =>
         customer,
     ),
@@ -160,6 +164,9 @@ export async function loadAuthorizedSnapshot(profile: StaffAccessProfile) {
     (row) => row["is_active"] !== false && locationIsVisible(profile, row["id"], allowedLocations),
   );
   const invoices = (rowsByTable.get("invoices") ?? []).filter((row) =>
+    (profile.role === "ADMIN" || profile.role === "MANAGER") &&
+    locationIsVisible(profile, row["location_id"], allowedLocations) ||
+    profile.role === "CASHIER" && row["cashier_id"] === profile.user_id &&
     locationIsVisible(profile, row["location_id"], allowedLocations),
   );
   const invoiceIds = new Set(invoices.map((row) => String(row["id"])));
@@ -190,19 +197,21 @@ export async function loadAuthorizedSnapshot(profile: StaffAccessProfile) {
       locationIsVisible(profile, row["location_id"], allowedLocations),
     ),
     invoices,
-    invoice_items: (rowsByTable.get("invoice_items") ?? []).filter((row) =>
-      invoiceIds.has(String(row["invoice_id"])),
-    ),
+    invoice_items: (rowsByTable.get("invoice_items") ?? [])
+      .filter((row) => invoiceIds.has(String(row["invoice_id"])))
+      .map((row) => profile.role === "CASHIER" || profile.role === "WAREHOUSE"
+        ? (({ unit_cost_snapshot: _cost, ...safe }) => safe)(row)
+        : row),
     payments: (rowsByTable.get("payments") ?? []).filter((row) =>
       invoiceIds.has(String(row["invoice_id"])),
     ),
     stock_movements: (rowsByTable.get("stock_movements") ?? []).filter((row) =>
       locationIsVisible(profile, row["location_id"], allowedLocations),
     ),
-    cashier_shortcuts: (rowsByTable.get("cashier_shortcuts") ?? []).filter((row) =>
+    cashier_shortcuts: profile.role === "WAREHOUSE" ? [] : (rowsByTable.get("cashier_shortcuts") ?? []).filter((row) =>
       locationIsVisible(profile, row["location_id"], allowedLocations),
     ),
-    cash_drawer_sessions: (rowsByTable.get("cash_drawer_sessions") ?? []).filter((row) =>
+    cash_drawer_sessions: profile.role === "WAREHOUSE" ? [] : (rowsByTable.get("cash_drawer_sessions") ?? []).filter((row) =>
       locationIsVisible(profile, row["location_id"], allowedLocations),
     ),
     purchase_receipts: receipts,
@@ -211,7 +220,7 @@ export async function loadAuthorizedSnapshot(profile: StaffAccessProfile) {
           receiptIds.has(String(row["receipt_id"])),
         )
       : [],
-    cash_transactions: (rowsByTable.get("cash_transactions") ?? []).filter((row) =>
+    cash_transactions: profile.role === "WAREHOUSE" ? [] : (rowsByTable.get("cash_transactions") ?? []).filter((row) =>
       locationIsVisible(profile, row["location_id"], allowedLocations),
     ),
     stock_transfers: transfers,
@@ -230,6 +239,18 @@ export async function loadAuthorizedSnapshot(profile: StaffAccessProfile) {
             locationIsVisible(profile, row["location_id"], allowedLocations),
           )
         : [],
+    location_product_assignments: (rowsByTable.get("location_product_assignments") ?? []).filter((row) =>
+      locationIsVisible(profile, row["location_id"], allowedLocations),
+    ),
+    uncounted_sales: profile.role === "ADMIN" || profile.role === "MANAGER"
+      ? (rowsByTable.get("uncounted_sales") ?? []).filter((row) => locationIsVisible(profile, row["location_id"], allowedLocations))
+      : [],
+    barcode_candidates: ["ADMIN", "MANAGER", "WAREHOUSE"].includes(profile.role)
+      ? (rowsByTable.get("barcode_candidates") ?? []).filter((row) => locationIsVisible(profile, row["location_id"], allowedLocations))
+      : [],
+    category_reviews: ["ADMIN", "MANAGER"].includes(profile.role)
+      ? (rowsByTable.get("category_reviews") ?? []).filter((row) => locationIsVisible(profile, row["location_id"], allowedLocations))
+      : [],
   };
   return { tables };
 }

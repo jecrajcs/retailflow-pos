@@ -21,6 +21,7 @@ export type Database = {
           cash_sales: number
           closed_at: string | null
           closed_by_id: string | null
+          close_block_reason: string | null
           closing_cash: number | null
           closing_denominations: Json | null
           id: string
@@ -41,6 +42,7 @@ export type Database = {
           cash_sales?: number
           closed_at?: string | null
           closed_by_id?: string | null
+          close_block_reason?: string | null
           closing_cash?: number | null
           closing_denominations?: Json | null
           id?: string
@@ -61,6 +63,7 @@ export type Database = {
           cash_sales?: number
           closed_at?: string | null
           closed_by_id?: string | null
+          close_block_reason?: string | null
           closing_cash?: number | null
           closing_denominations?: Json | null
           id?: string
@@ -174,7 +177,7 @@ export type Database = {
           gender: string | null
           id: string
           mobile: string | null
-          name: string
+          name: string | null
           notes: string | null
           segment: string | null
           outstanding_balance: number
@@ -187,7 +190,7 @@ export type Database = {
           gender?: string | null
           id?: string
           mobile?: string | null
-          name: string
+          name?: string | null
           notes?: string | null
           segment?: string | null
           outstanding_balance?: number
@@ -200,7 +203,7 @@ export type Database = {
           gender?: string | null
           id?: string
           mobile?: string | null
-          name?: string
+          name?: string | null
           notes?: string | null
           segment?: string | null
           outstanding_balance?: number
@@ -522,6 +525,7 @@ export type Database = {
         Row: {
           amount: number
           change_given: number | null
+          change_denominations: Json | null
           created_at: string
           customer_id: string | null
           id: string
@@ -532,6 +536,7 @@ export type Database = {
         Insert: {
           amount: number
           change_given?: number | null
+          change_denominations?: Json | null
           created_at?: string
           customer_id?: string | null
           id?: string
@@ -542,6 +547,7 @@ export type Database = {
         Update: {
           amount?: number
           change_given?: number | null
+          change_denominations?: Json | null
           created_at?: string
           customer_id?: string | null
           id?: string
@@ -568,23 +574,31 @@ export type Database = {
       }
       products: {
         Row: {
+          archived_at: string | null
+          archived_by: string | null
           barcode: string | null
+          barcode_type: string | null
           category: string | null
+          subcategory: string | null
           conversion_factor: number
           created_at: string
           enrichment_status: string
           hsn: string | null
           id: string
           is_loose: boolean
+          is_active: boolean
           min_sale_price: number
           min_stock: number
           mrp: number
           name: string
           name_hi: string | null
+          quantity_precision: number
           preferred_supplier: string | null
           price_tiers: Json
           purchase_cost: number
           rack_location: string | null
+          review_reason: string | null
+          review_status: string
           sale_price: number
           search_aliases: string[]
           sku: string | null
@@ -594,23 +608,31 @@ export type Database = {
           variant: string | null
         }
         Insert: {
+          archived_at?: string | null
+          archived_by?: string | null
           barcode?: string | null
+          barcode_type?: string | null
           category?: string | null
+          subcategory?: string | null
           conversion_factor?: number
           created_at?: string
           enrichment_status?: string
           hsn?: string | null
           id?: string
           is_loose?: boolean
+          is_active?: boolean
           min_sale_price?: number
           min_stock?: number
           mrp?: number
           name: string
           name_hi?: string | null
+          quantity_precision?: number
           preferred_supplier?: string | null
           price_tiers?: Json
           purchase_cost?: number
           rack_location?: string | null
+          review_reason?: string | null
+          review_status?: string
           sale_price?: number
           search_aliases?: string[]
           sku?: string | null
@@ -620,23 +642,31 @@ export type Database = {
           variant?: string | null
         }
         Update: {
+          archived_at?: string | null
+          archived_by?: string | null
           barcode?: string | null
+          barcode_type?: string | null
           category?: string | null
+          subcategory?: string | null
           conversion_factor?: number
           created_at?: string
           enrichment_status?: string
           hsn?: string | null
           id?: string
           is_loose?: boolean
+          is_active?: boolean
           min_sale_price?: number
           min_stock?: number
           mrp?: number
           name?: string
           name_hi?: string | null
+          quantity_precision?: number
           preferred_supplier?: string | null
           price_tiers?: Json
           purchase_cost?: number
           rack_location?: string | null
+          review_reason?: string | null
+          review_status?: string
           sale_price?: number
           search_aliases?: string[]
           sku?: string | null
@@ -1035,6 +1065,7 @@ export type Database = {
           phone: string | null
           role: string
           updated_at: string
+          username: string
           user_id: string
         }
         Insert: {
@@ -1046,6 +1077,7 @@ export type Database = {
           phone?: string | null
           role: string
           updated_at?: string
+          username?: string
           user_id: string
         }
         Update: {
@@ -1057,7 +1089,143 @@ export type Database = {
           phone?: string | null
           role?: string
           updated_at?: string
+          username?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      location_product_assignments: {
+        Row: {
+          created_at: string
+          id: string
+          location_id: string
+          product_id: string
+          review_reason: string | null
+          review_status: string
+          stock_count_status: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          location_id: string
+          product_id: string
+          review_reason?: string | null
+          review_status?: string
+          stock_count_status?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          location_id?: string
+          product_id?: string
+          review_reason?: string | null
+          review_status?: string
+          stock_count_status?: string
+        }
+        Relationships: []
+      }
+      uncounted_sales: {
+        Row: {
+          created_at: string
+          id: string
+          invoice_id: string
+          location_id: string
+          product_id: string
+          quantity: number
+          recorded_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          invoice_id: string
+          location_id: string
+          product_id: string
+          quantity: number
+          recorded_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invoice_id?: string
+          location_id?: string
+          product_id?: string
+          quantity?: number
+          recorded_by?: string | null
+        }
+        Relationships: []
+      }
+      barcode_candidates: {
+        Row: {
+          code: string
+          created_at: string
+          id: string
+          location_id: string
+          product_id: string
+          review_reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source: string
+          status: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          id: string
+          location_id: string
+          product_id: string
+          review_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string
+          status?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          id?: string
+          location_id?: string
+          product_id?: string
+          review_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      category_reviews: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          location_id: string
+          name: string
+          review_reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          kind: string
+          location_id: string
+          name: string
+          review_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          location_id?: string
+          name?: string
+          review_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
         }
         Relationships: []
       }
@@ -1090,6 +1258,34 @@ export type Database = {
       app_resolve_inventory_sync_alert: {
         Args: { p_actor_user_id: string; p_alert_id: string }
         Returns: undefined
+      }
+      app_review_barcode_candidate: {
+        Args: {
+          p_actor_user_id: string
+          p_barcode_type: string
+          p_candidate_id: string
+          p_reason: string
+          p_status: string
+        }
+        Returns: undefined
+      }
+      app_assign_product_barcode: {
+        Args: {
+          p_actor_user_id: string
+          p_barcode_type: string
+          p_code: string
+          p_location_id: string
+          p_product_id: string
+        }
+        Returns: undefined
+      }
+      app_archive_product_as_admin: {
+        Args: { p_actor_user_id: string; p_product_id: string; p_reason: string }
+        Returns: undefined
+      }
+      app_update_own_username: {
+        Args: { p_actor_user_id: string; p_username: string }
+        Returns: string
       }
       app_save_staff_profile: {
         Args: {

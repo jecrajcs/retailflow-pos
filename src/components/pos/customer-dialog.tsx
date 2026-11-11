@@ -51,11 +51,11 @@ export function CustomerDialog({
   const visibleCustomers = filtered.slice(0, 100);
 
   async function handleAdd() {
-    if (!name.trim() || busy) return;
+    if ((!name.trim() && !mobile.replace(/\D/g, "")) || busy) return;
     setBusy(true);
     try {
       const created = await addCustomer({
-        name: name.trim(),
+        name: name.trim() || null,
         mobile: mobile.trim() || null,
         creditLimit: Number(creditLimit) || 0,
         ageGroup,
@@ -79,8 +79,8 @@ export function CustomerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Customer</DialogTitle>
-          <DialogDescription>Search by customer name or mobile.</DialogDescription>
+          <DialogTitle>Select customer</DialogTitle>
+          <DialogDescription>Search by name or mobile, or create a customer profile.</DialogDescription>
         </DialogHeader>
 
         <div className="relative">
@@ -111,15 +111,6 @@ export function CustomerDialog({
         </div>
 
         <div className="max-h-56 space-y-1 overflow-y-auto">
-          <button
-            onClick={() => {
-              onSelect(null);
-              onOpenChange(false);
-            }}
-            className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
-          >
-            <UserRound className="h-4 w-4" /> No customer
-          </button>
           {visibleCustomers.map((c, index) => (
             <button
               key={c.id}
@@ -131,7 +122,7 @@ export function CustomerDialog({
             >
               <span className="flex items-center gap-2">
                 <UserRound className="h-4 w-4 text-muted-foreground" />
-                {c.name}
+                {c.name || "Name not provided"}
                 {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
                 {Number(c.visits) > 0 && (
                   <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
@@ -184,7 +175,7 @@ export function CustomerDialog({
           <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <Label htmlFor="cust-name">Name *</Label>
+                <Label htmlFor="cust-name">Name</Label>
                 <Input
                   id="cust-name"
                   value={name}
@@ -235,7 +226,7 @@ export function CustomerDialog({
               <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleAdd} disabled={!name.trim() || busy}>
+              <Button size="sm" onClick={handleAdd} disabled={(!name.trim() && !mobile.replace(/\D/g, "")) || busy}>
                 Save customer
               </Button>
             </div>

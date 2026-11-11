@@ -611,12 +611,12 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
             ? []
             : importedCustomers.filter((customer) => customer.mobile === group.mobile);
         const exactMobileNameMatches = candidatesByMobile.filter(
-          (customer) => customer.name.toLowerCase() === group.sourceName.toLowerCase(),
+          (customer) => (customer.name ?? "").toLowerCase() === group.sourceName.toLowerCase(),
         );
         const exactNameMatches = isWalkIn
           ? []
           : importedCustomers.filter(
-              (customer) => customer.name.toLowerCase() === group.sourceName.toLowerCase(),
+              (customer) => (customer.name ?? "").toLowerCase() === group.sourceName.toLowerCase(),
             );
         const nameMatches = exactMobileNameMatches.length
           ? exactMobileNameMatches

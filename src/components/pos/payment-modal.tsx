@@ -5,7 +5,6 @@ import {
   CreditCard,
   QrCode,
   Trash2,
-  UserRound,
   Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { cn } from "@/lib/utils";
 import {
+  DENOMINATIONS,
   createPosInvoice,
   inr,
   type CartLine,
@@ -39,15 +39,15 @@ const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }>
   { value: "CREDIT", label: "Udhar (Customer Credit)", icon: Wallet },
 ];
 
-const NOTES = [100, 200, 500, 2000];
+const NOTES = DENOMINATIONS;
 
 function suggestChange(amount: number) {
-  const denominations = [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5];
+  const denominations = DENOMINATIONS;
   let remaining = Math.round(amount * 100) / 100;
-  return denominations.flatMap((denomination) => {
+  return denominations.map((denomination) => {
     const count = Math.floor((remaining + 0.0001) / denomination);
     remaining = Math.round((remaining - count * denomination) * 100) / 100;
-    return count ? [{ denomination, count }] : [];
+    return { denomination, count };
   });
 }
 
@@ -72,7 +72,6 @@ export function PaymentModal({
   onDiscountChange,
   minTotal,
   customer,
-  onPickCustomer,
   onPaid,
 }: {
   open: boolean;
@@ -90,7 +89,6 @@ export function PaymentModal({
   /** Sum of qty × floor (min allowed) price — bill discount cannot go below this. */
   minTotal: number;
   customer: Customer | null;
-  onPickCustomer: () => void;
   onPaid: (result: InvoiceResult, payments: PaymentSplitInput[]) => void;
 }) {
   const maxDiscount = Math.max(subtotal - minTotal, 0);
@@ -110,22 +108,19 @@ export function PaymentModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const paid = useMemo(() => splits.reduce((s, x) => s + (Number(x.amount) || 0), 0), [splits]);
-  const remaining = Math.max(total - paid, 0);
-
-  const cashDue = useMemo(
-    () =>
-      splits.filter((s) => s.mode === "CASH").reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
+  const nonCashPaid = useMemo(
+    () => splits.filter((s) => s.mode !== "CASH").reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
     [splits],
   );
   const cashTendered = useMemo(
-    () =>
-      splits
-        .filter((s) => s.mode === "CASH")
-        .reduce((sum, s) => sum + (Number(s.tendered) || 0), 0),
+    () => splits.filter((s) => s.mode === "CASH").reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
     [splits],
   );
-  const change = Math.max(cashTendered - cashDue, 0);
+  const cashApplied = Math.min(cashTendered, Math.max(total - nonCashPaid, 0));
+  const paid = nonCashPaid + cashApplied;
+  const remaining = Math.max(total - paid, 0);
+  const change = Math.max(cashTendered - cashApplied, 0);
+  const changeDenominationTotal = changeNotes.reduce((sum, item) => sum + item.denomination * item.count, 0);
 
   useEffect(() => setChangeNotes(suggestChange(change)), [change]);
 
@@ -143,15 +138,9 @@ export function PaymentModal({
       toast.error("Enter at least one payment amount");
       return;
     }
-    if (valid.some((s) => s.mode === "CREDIT") && !customer) {
-      toast.error("Udhar needs a registered customer", {
-        description: "Tap the customer chip to pick or add one first.",
-      });
-      return;
-    }
-    if (remaining > 0.01 && !customer) {
-      toast.error("A customer is required for an unpaid balance", {
-        description: "Choose or add a customer, or collect the full amount before checkout.",
+    if (!customer) {
+      toast.error("Select a customer before completing the bill.", {
+        description: "Choose a customer profile or add one from the customer search.",
       });
       return;
     }
@@ -163,15 +152,23 @@ export function PaymentModal({
     }
     setBusy(true);
     try {
+      let changeRemaining = change;
+      let cashApplyRemaining = Math.max(total - nonCashPaid, 0);
       const payments: PaymentSplitInput[] = valid.map((s) => {
         const amount = Number(s.amount);
         if (s.mode === "CASH") {
-          const tendered = Number(s.tendered) || amount;
+          const applied = Math.min(amount, cashApplyRemaining);
+          cashApplyRemaining -= applied;
+          const changeGiven = Math.min(changeRemaining, Math.max(amount - applied, 0));
+          changeRemaining -= changeGiven;
           return {
-            amount,
+            amount: applied,
             mode: s.mode,
-            tendered,
-            change_given: Math.max(tendered - amount, 0),
+            tendered: amount,
+            change_given: changeGiven,
+            ...(changeGiven > 0
+              ? { change_denominations: Object.fromEntries(changeNotes.map(({ denomination, count }) => [String(denomination), count])) }
+              : {}),
           };
         }
         return { amount, mode: s.mode };
@@ -184,7 +181,7 @@ export function PaymentModal({
         cashierName,
         customerId: customer?.id ?? null,
         customerSegment: customer?.segment ?? null,
-        orderType: customer ? "Registered customer" : "Walk-in",
+        orderType: "Registered customer",
         discount,
         businessDate,
         items: lines.map((l) => ({
@@ -268,18 +265,10 @@ export function PaymentModal({
           </div>
         </div>
 
-        <button
-          onClick={onPickCustomer}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm",
-            customer ? "border-primary/40 bg-primary/5" : "border-dashed text-muted-foreground",
-          )}
-        >
-          <UserRound className="h-4 w-4" />
-          {customer
-            ? `${customer.name}${customer.credit_limit > 0 ? ` · credit limit ${inr(customer.credit_limit)}` : ""}`
-            : "Walk-in — tap to attach a customer (needed for Udhar)"}
-        </button>
+        <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+          Customer: <strong>{customer?.name || customer?.mobile}</strong>
+          {customer?.credit_limit ? ` · credit limit ${inr(customer.credit_limit)}` : ""}
+        </div>
 
         <div className="space-y-2">
           {splits.map((s, i) => {
@@ -301,6 +290,8 @@ export function PaymentModal({
                     className="text-right"
                     value={s.amount}
                     onChange={(e) => updateSplit(i, { amount: e.target.value })}
+                    aria-label={s.mode === "CASH" ? "Cash tendered" : `${s.mode} payment amount`}
+                    placeholder={s.mode === "CASH" ? "Cash received" : "Amount applied"}
                   />
                   {splits.length > 1 && (
                     <Button
@@ -314,18 +305,11 @@ export function PaymentModal({
                 </div>
                 {s.mode === "CASH" && (
                   <div className="flex items-center gap-1.5 pl-11">
-                    <Input
-                      type="number"
-                      className="h-8 w-32 text-right"
-                      placeholder="Cash tendered"
-                      value={s.tendered}
-                      onChange={(e) => updateSplit(i, { tendered: e.target.value })}
-                    />
                     {NOTES.map((n) => (
                       <button
                         key={n}
                         onClick={() =>
-                          updateSplit(i, { tendered: String((Number(s.tendered) || 0) + n) })
+                          updateSplit(i, { amount: String((Number(s.amount) || 0) + n) })
                         }
                         className="rounded-md border bg-card px-2 py-1 text-xs font-medium tabular-nums hover:border-primary/40 hover:bg-accent"
                       >
@@ -333,11 +317,12 @@ export function PaymentModal({
                       </button>
                     ))}
                     <button
-                      onClick={() => updateSplit(i, { tendered: String(cashDue.toFixed(2)) })}
+                      onClick={() => updateSplit(i, { amount: String(Math.max(total - nonCashPaid, 0).toFixed(2)) })}
                       className="rounded-md border bg-primary/10 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/15"
                     >
                       Exact
                     </button>
+                    <span className="ml-auto text-xs text-muted-foreground">Applied {inr(Math.min(Number(s.amount) || 0, Math.max(total - nonCashPaid, 0)))}</span>
                   </div>
                 )}
               </div>
@@ -381,11 +366,11 @@ export function PaymentModal({
           </div>
         )}
 
-        {cashDue > 0 && (
+        {cashTendered > 0 && (
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-lg border bg-muted/40 p-3">
               <div className="text-[10px] font-semibold uppercase text-muted-foreground">
-                Cash received
+                Cash received · applied {inr(cashApplied)}
               </div>
               <div className="mt-1 text-xl font-bold tabular-nums">{inr(cashTendered)}</div>
             </div>
@@ -412,7 +397,7 @@ export function PaymentModal({
         {change > 0 && (
           <div className="rounded-lg border bg-muted/40 p-3">
             <div className="text-xs font-semibold uppercase text-muted-foreground">
-              Suggested change notes · adjust the note count
+              Suggested change · adjust the notes and coins actually returned
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               {changeNotes.map(({ denomination, count }) => (
@@ -421,7 +406,7 @@ export function PaymentModal({
                   className="flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs font-medium tabular-nums"
                 >
                   <button
-                    aria-label={`Remove one ${denomination} rupee note`}
+                    aria-label={`Remove one ${denomination} rupee denomination`}
                     className="rounded px-1 hover:bg-muted"
                     onClick={() =>
                       setChangeNotes((items) =>
@@ -436,10 +421,10 @@ export function PaymentModal({
                     −
                   </button>
                   <span>
-                    {denomination < 1 ? `${denomination * 100}p` : `₹${denomination}`} × {count}
+                    ₹{denomination} × {count}
                   </span>
                   <button
-                    aria-label={`Add one ${denomination} rupee note`}
+                    aria-label={`Add one ${denomination} rupee denomination`}
                     className="rounded px-1 hover:bg-muted"
                     onClick={() =>
                       setChangeNotes((items) =>
@@ -456,10 +441,13 @@ export function PaymentModal({
                 </div>
               ))}
             </div>
+            <div className={cn("mt-2 text-xs", Math.abs(changeDenominationTotal - change) > 0.01 ? "text-destructive" : "text-success")}>
+              Returned: {inr(changeDenominationTotal)} · {Math.abs(changeDenominationTotal - change) <= 0.01 ? "matches change" : `adjust by ${inr(Math.abs(changeDenominationTotal - change))}`}
+            </div>
           </div>
         )}
 
-        <Button className="h-11 text-base" onClick={confirm} disabled={busy || paid <= 0}>
+        <Button className="h-11 text-base" onClick={confirm} disabled={busy || paid <= 0 || !customer || (change > 0 && Math.abs(changeDenominationTotal - change) > 0.01)}>
           {busy ? "Saving…" : `Confirm bill — ${inr(Math.min(paid, total))}`}
         </Button>
       </DialogContent>

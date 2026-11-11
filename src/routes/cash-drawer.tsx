@@ -115,6 +115,7 @@ function CashDrawerPage() {
   const activeShift = sessions.find((s) => s.status === "OPEN");
   const foreignShift =
     profile?.role === "CASHIER" && activeShift && activeShift.opened_by_id !== profile.user_id;
+  const legacyUnassignedShift = !!activeShift && !activeShift.opened_by_id;
   const open = foreignShift ? undefined : activeShift;
   const since = open?.opened_at ?? startOfToday();
   const { data: payments = [] } = usePaymentsSince(location?.id ?? null, since);
@@ -186,9 +187,15 @@ function CashDrawerPage() {
           <TabsContent value="express" className="mt-3 space-y-3">
             {foreignShift && activeShift ? (
               <div className="rounded-xl border border-warning/50 bg-warning/5 p-4 text-sm">
-                <p className="font-medium">This drawer is open under {activeShift.opened_by}.</p>
+                <p className="font-medium">
+                  {legacyUnassignedShift
+                    ? "This legacy shift has no verified cashier owner."
+                    : `This drawer is open under ${activeShift.opened_by}.`}
+                </p>
                 <p className="mt-1 text-muted-foreground">
-                  Ask the operator to reconcile and close the shift before this drawer can be used.
+                  {legacyUnassignedShift
+                    ? "A Manager must review and resolve the shift before this location can be used. You may sign out."
+                    : `The cashier who opened it at ${new Date(activeShift.opened_at).toLocaleString("en-IN", { timeStyle: "short" })} must reconcile and close it. You may sign out.`}
                 </p>
               </div>
             ) : open ? (
@@ -229,7 +236,13 @@ function CashDrawerPage() {
                 />
               </>
             ) : (
-              <OpenShiftCard locationId={location?.id ?? ""} profile={profile} onOpened={refresh} />
+              profile?.role === "CASHIER" ? (
+                <OpenShiftCard locationId={location?.id ?? ""} profile={profile} onOpened={refresh} />
+              ) : (
+                <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+                  No cashier shift is open at this location. A Cashier must count the drawer and open the shift before sales begin.
+                </div>
+              )
             )}
           </TabsContent>
 
@@ -674,7 +687,7 @@ function CloseShiftCard({
   const counted = denomTotal(closingCounts);
   const difference = counted - expectedCash;
   const isSessionOwner = session.opened_by_id === profile?.user_id;
-  const managerClosingForOperator = canManage(profile) && !isSessionOwner;
+  const managerClosingForOperator = profile?.role === "MANAGER" && !isSessionOwner;
 
   async function close() {
     if (busy || !profile || Object.keys(closingCounts).length === 0 || Math.abs(difference) > 0.01)
@@ -754,6 +767,9 @@ function CloseShiftCard({
           <div className="text-muted-foreground">
             Cash sales: {inr(cashSales)} · Cash in {inr(session.cash_in)} · Cash out{" "}
             {inr(session.cash_out)}
+            <span className="mt-1 block text-xs">
+              Expected = opening cash + cash applied to sales + cash in − cash out.
+            </span>
           </div>
         </div>
       </div>
@@ -784,12 +800,12 @@ function CloseShiftCard({
         </Button>
       </div>
       {Object.keys(closingCounts).length > 0 &&
-        (Math.abs(difference) > 0.01 || managerClosingForOperator) && (
+        profile?.role !== "ADMIN" && (Math.abs(difference) > 0.01 || managerClosingForOperator) && (
           <div className="mt-4 space-y-3 rounded-lg border border-warning/50 bg-warning/5 p-3">
             <p className="text-sm font-medium">
               {managerClosingForOperator
-                ? "Manager approval is required to close this operator’s shift."
-                : "A Manager or Admin must approve this variance."}
+                ? "Manager approval is required because this shift belongs to another cashier."
+                : "The counted drawer differs from expected cash. Review the opening count, cash sales, cash-in and cash-out before requesting a Manager."}
             </p>
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="space-y-1">

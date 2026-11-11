@@ -155,6 +155,15 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    overflow: hidden;
+  }
+
   * {
     border-color: var(--color-border);
   }
@@ -164,6 +173,42 @@
     color: var(--color-foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+
+  .retailflow-lock-screen {
+    background:
+      radial-gradient(ellipse at 18% 18%, rgba(21, 112, 88, 0.5), transparent 48%),
+      radial-gradient(ellipse at 84% 78%, rgba(26, 82, 103, 0.45), transparent 44%),
+      #071410;
+    isolation: isolate;
+  }
+
+  .retailflow-lock-glow {
+    position: absolute;
+    inset: -25%;
+    z-index: -1;
+    background: conic-gradient(from 25deg at 50% 50%, transparent, rgba(45, 212, 191, 0.13), transparent 28%, rgba(74, 222, 128, 0.11), transparent 64%);
+    filter: blur(34px);
+    animation: retailflow-aurora 28s linear infinite;
+  }
+
+  .retailflow-lock-panel {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.035));
+    box-shadow: 0 20px 80px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(14px);
+  }
+
+  .retailflow-lock-prompt {
+    animation: retailflow-prompt 2.5s ease-in-out infinite;
+  }
+
+  @keyframes retailflow-aurora {
+    to { transform: rotate(1turn) scale(1.08); }
+  }
+
+  @keyframes retailflow-prompt {
+    50% { box-shadow: 0 0 30px rgba(110, 231, 183, 0.14); }
   }
 
   h1, h2, h3, h4 {

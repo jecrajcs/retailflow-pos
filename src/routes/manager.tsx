@@ -173,24 +173,15 @@ function ManagerPage() {
 
   const totalLoss = useMemo(() => adjustments.reduce((s, a) => s + a.cost_loss, 0), [adjustments]);
 
-  if (profile?.role !== "MANAGER")
+  if (profile?.role !== "MANAGER" && profile?.role !== "ADMIN")
     return (
       <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
         <AppNav active="/manager" />
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
-          <h1 className="text-lg font-semibold">
-            {profile?.role === "ADMIN" ? "Use the Admin console" : "Manager access required"}
-          </h1>
+          <h1 className="text-lg font-semibold">Manager access required</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {profile?.role === "ADMIN"
-              ? "Network-wide administration has a separate workspace."
-              : "This account cannot access store management tools."}
+            This account cannot access store management tools.
           </p>
-          {profile?.role === "ADMIN" && (
-            <Button asChild className="mt-4">
-              <Link to="/admin">Open Admin console</Link>
-            </Button>
-          )}
         </main>
       </div>
     );
@@ -252,6 +243,7 @@ function ManagerPage() {
           <TabsContent value="enrichment" className="mt-3">
             <EnrichmentQueue
               products={products.filter((p) => p.enrichment_status !== "COMPLETE")}
+              canArchive={profile?.role === "ADMIN"}
             />
           </TabsContent>
 
@@ -675,7 +667,7 @@ function SpreadsheetTools({
           if (!name) issues.push({ row: index + 2, issue: "Customer name is required." });
           const duplicate = customers.some(
             (customer) =>
-              customer.name.trim().toLowerCase() === name.toLowerCase() &&
+              (customer.name ?? "").trim().toLowerCase() === name.toLowerCase() &&
               (customer.mobile ?? "") === mobile,
           );
           const fingerprint = `${name.toLowerCase()}|${mobile}`;
@@ -842,7 +834,7 @@ function SpreadsheetTools({
       }
       if (type === "customers") {
         const rows = customers.map((customer) => ({
-          name: customer.name,
+          name: customer.name ?? "",
           mobile: customer.mobile,
           age_group: customer.age_group,
           gender: customer.gender,
@@ -1038,7 +1030,7 @@ function CustomerManagement({
 }: {
   customers: Array<{
     id: string;
-    name: string;
+    name: string | null;
     mobile: string | null;
     credit_limit: number;
     outstanding_balance: number;
@@ -1100,11 +1092,11 @@ function CustomerManagement({
           {
             id: "name",
             header: "Customer",
-            accessor: (customer) => customer.name,
+            accessor: (customer) => customer.name ?? "",
             cell: (customer) => (
               <Input
-                aria-label={`Customer name ${customer.name}`}
-                value={drafts[customer.id]?.name ?? customer.name}
+                aria-label={`Customer name ${customer.name ?? customer.mobile ?? customer.id}`}
+                value={drafts[customer.id]?.name ?? customer.name ?? ""}
                 onChange={(event) =>
                   setDrafts((current) => ({
                     ...current,
@@ -1120,7 +1112,7 @@ function CustomerManagement({
             accessor: (customer) => customer.mobile ?? "",
             cell: (customer) => (
               <Input
-                aria-label={`Mobile for ${customer.name}`}
+                aria-label={`Mobile for ${customer.name ?? customer.mobile ?? customer.id}`}
                 value={drafts[customer.id]?.mobile ?? customer.mobile ?? ""}
                 onChange={(event) =>
                   setDrafts((current) => ({
@@ -1139,7 +1131,7 @@ function CustomerManagement({
             accessor: (customer) => customer.credit_limit,
             cell: (customer) => (
               <Input
-                aria-label={`Credit limit for ${customer.name}`}
+                aria-label={`Credit limit for ${customer.name ?? customer.mobile ?? customer.id}`}
                 type="number"
                 min="0"
                 className="w-28"
@@ -1307,7 +1299,7 @@ function ShortcutTileManager({
 
 /* ------------------------------ Enrichment ------------------------------ */
 
-function EnrichmentQueue({ products }: { products: Product[] }) {
+function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArchive: boolean }) {
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
 
@@ -1321,6 +1313,8 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
           .split(/[|,;]/)
           .map((value) => value.trim())
           .filter(Boolean),
+        category: d["category"] ?? p.category ?? null,
+        subcategory: d["subcategory"] ?? p.subcategory ?? null,
         barcode: d["barcode"] ?? p.barcode ?? null,
         sku: d["sku"] ?? p.sku ?? null,
         hsn: d["hsn"] ?? p.hsn ?? null,
@@ -1332,7 +1326,11 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
         uom_stock: d["uom_stock"] ?? p.uom_stock,
         uom_sale: d["uom_sale"] ?? p.uom_sale,
         min_stock: Number(d["min_stock"] ?? p.min_stock),
+        is_loose: d["is_loose"] === undefined ? p.is_loose : d["is_loose"] === "true",
+        quantity_precision: Number(d["quantity_precision"] ?? p.quantity_precision ?? 0),
         enrichment_status: "COMPLETE",
+        review_status: "APPROVED",
+        review_reason: null,
       });
     },
     onSuccess: () => {
@@ -1344,6 +1342,32 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
         description: userFacingError(e, "The product changes could not be saved."),
       }),
   });
+
+  const rejectMut = useMutation({
+    mutationFn: async (p: Product) => {
+      const reason = drafts[p.id]?.["review_reason"]?.trim() ?? "";
+      if (reason.length < 5) throw new Error("Enter a clear reason of at least five characters.");
+      await updateProductProfile(p.id, { review_status: "REJECTED", review_reason: reason });
+    },
+    onSuccess: () => {
+      toast.success("SKU returned for correction");
+      void queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (error) => toast.error("Could not reject SKU", { description: userFacingError(error, "Check the reason and try again.") }),
+  });
+
+  async function archive(p: Product) {
+    const reason = window.prompt(`Archive ${p.name}? Enter the reason.`, "Incorrect item entry");
+    if (!reason || reason.trim().length < 5) return;
+    try {
+      await retailApi("/api/admin/archive-product", { method: "POST", json: { product_id: p.id, reason: reason.trim() } });
+      await refreshLocalReplica();
+      toast.success(`${p.name} archived. Historical bills remain intact.`);
+      void queryClient.invalidateQueries({ queryKey: ["products"] });
+    } catch (error) {
+      toast.error("Could not archive SKU", { description: userFacingError(error, "Refresh the catalog and try again.") });
+    }
+  }
 
   if (products.length === 0) {
     return (
@@ -1399,6 +1423,17 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
                     }))
                   }
                 />
+              </div>
+            ),
+          },
+          {
+            id: "category",
+            header: "Category / subcategory",
+            accessor: (p) => `${p.category ?? ""} ${p.subcategory ?? ""}`,
+            cell: (p) => (
+              <div className="min-w-40 space-y-1">
+                <Input aria-label={`Category for ${p.name}`} value={field(p, "category")} placeholder="Category" onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], category: event.target.value } }))} />
+                <Input aria-label={`Subcategory for ${p.name}`} value={field(p, "subcategory")} placeholder="Subcategory" onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], subcategory: event.target.value } }))} />
               </div>
             ),
           },
@@ -1493,14 +1528,42 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
             ),
           },
           {
+            id: "quantity-type",
+            header: "Measured sale",
+            accessor: (p) => p.is_loose ? `Decimal · ${p.quantity_precision ?? 0} places` : "Whole units",
+            cell: (p) => (
+              <div className="space-y-1">
+                <label className="flex items-center gap-1 text-xs">
+                  <Checkbox checked={drafts[p.id]?.["is_loose"] === undefined ? p.is_loose : drafts[p.id]?.["is_loose"] === "true"} onCheckedChange={(checked) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], is_loose: checked === true ? "true" : "false" } }))} />
+                  Allow decimal quantity
+                </label>
+                {(drafts[p.id]?.["is_loose"] === "true" || (drafts[p.id]?.["is_loose"] === undefined && p.is_loose)) && (
+                  <Input aria-label={`Quantity precision for ${p.name}`} type="number" min="1" max="3" step="1" className="h-7 w-16" value={field(p, "quantity_precision")} onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], quantity_precision: event.target.value } }))} />
+                )}
+              </div>
+            ),
+          },
+          {
+            id: "review",
+            header: "Review",
+            accessor: (p) => p.review_status ?? "PENDING",
+            cell: (p) => (
+              <div className="min-w-48 space-y-1">
+                <Input aria-label={`Rejection reason for ${p.name}`} value={drafts[p.id]?.["review_reason"] ?? p.review_reason ?? ""} onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], review_reason: event.target.value } }))} placeholder="Reason if returning to cashier" />
+                <Button size="sm" variant="outline" onClick={() => rejectMut.mutate(p)} disabled={rejectMut.isPending || (drafts[p.id]?.["review_reason"] ?? "").trim().length < 5}>Reject with reason</Button>
+              </div>
+            ),
+          },
+          {
             id: "complete",
             header: "",
             accessor: () => "Complete",
             sortable: false,
             cell: (p) => (
-              <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>
-                Complete
-              </Button>
+              <div className="flex gap-1">
+                <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>Approve</Button>
+                {canArchive && <Button size="sm" variant="destructive" onClick={() => void archive(p)}>Archive</Button>}
+              </div>
             ),
           },
         ]}

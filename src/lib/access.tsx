@@ -12,6 +12,7 @@ import {
 } from "react";
 import { LockKeyhole, WifiOff } from "lucide-react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +29,7 @@ import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { pageAccessClass } from "@/lib/access-policy";
 import { toast } from "sonner";
 
-export type AccessRole = "CASHIER" | "MANAGER" | "ADMIN";
+export type AccessRole = "CASHIER" | "MANAGER" | "ADMIN" | "WAREHOUSE";
 export const ACTIVE_LOCATION_KEY = "pos-location-id";
 
 export function saveActiveLocation(locationId: string) {
@@ -40,12 +41,21 @@ export function saveActiveLocation(locationId: string) {
 export interface UserAccessProfile {
   user_id: string;
   display_name: string;
+  username: string;
   email: string | null;
   phone: string | null;
   must_change_password: boolean;
   role: AccessRole;
   location_ids: string[];
   cached_at: string;
+}
+
+function roleCanOpenPath(role: AccessRole, path: string) {
+  if (role === "CASHIER") return ["/billing", "/cash-drawer", "/scanner"].includes(path);
+  if (role === "WAREHOUSE") return ["/inventory", "/barcodes", "/scanner"].includes(path);
+  if (role === "MANAGER")
+    return ["/", "/sales", "/inventory", "/purchases", "/manager", "/cash-drawer", "/barcodes", "/scanner"].includes(path);
+  return ["/", "/admin", "/manager", "/sales", "/inventory", "/purchases", "/barcodes", "/scanner"].includes(path);
 }
 
 interface AccessContextValue {
@@ -201,16 +211,28 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
+  useEffect(() => {
+    if (!profile || roleCanOpenPath(profile.role, pathname)) return;
+    const destination = profile.role === "CASHIER"
+      ? "/cash-drawer"
+      : profile.role === "WAREHOUSE"
+        ? "/inventory"
+        : profile.role === "MANAGER"
+          ? "/manager"
+          : "/admin";
+    void navigate({ to: destination });
+  }, [profile, pathname, navigate]);
+
   const signOut = useCallback(async () => {
     if (profile?.role === "CASHIER") {
       const openShift = (await getAllLocal<KeyedRecord>("cash_sessions")).find(
         (session) =>
           session["status"] === "OPEN" &&
           profile.location_ids.includes(String(session["location_id"] ?? "")) &&
-          (session["opened_by_id"] == null || session["opened_by_id"] === profile.user_id),
+          session["opened_by_id"] === profile.user_id,
       );
       if (openShift) {
-        toast.error("Close and reconcile the cash drawer before signing out.");
+        toast.error("Close and reconcile your cash shift before signing out.");
         await navigate({ to: "/cash-drawer" });
         return;
       }
@@ -228,7 +250,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
           error instanceof RetailApiError &&
           error.status === 409
         ) {
-          toast.error("Close and reconcile the cash drawer before signing out.");
+          toast.error("Close and reconcile your cash shift before signing out.");
           await navigate({ to: "/cash-drawer" });
           return;
         } else {
@@ -326,6 +348,8 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
       />
     );
   if (profile.must_change_password) return <ChangePasswordScreen onComplete={refresh} />;
+  if (!roleCanOpenPath(profile.role, pathname))
+    return <div className="grid h-dvh place-items-center text-sm text-muted-foreground">Opening your permitted workspace…</div>;
   return (
     <AccessContext.Provider value={value}>
       <CashierShiftGate profile={profile}>
@@ -408,6 +432,7 @@ type IdleStats = {
   syncAlerts: number;
   enrichment: number;
   purchases: number;
+  salesTrend: Array<{ day: string; sales: number }>;
 };
 const EMPTY_IDLE_STATS: IdleStats = {
   bills: 0,
@@ -417,6 +442,7 @@ const EMPTY_IDLE_STATS: IdleStats = {
   syncAlerts: 0,
   enrichment: 0,
   purchases: 0,
+  salesTrend: [],
 };
 
 function pinDigest(pin: string, salt: string) {
@@ -437,6 +463,7 @@ function StaffIdleScreen({
   children: ReactNode;
 }) {
   const [idle, setIdle] = useState(false);
+  const [showUnlock, setShowUnlock] = useState(false);
   const [stats, setStats] = useState(EMPTY_IDLE_STATS);
   const [savedPin, setSavedPin] = useState<{ salt: string; hash: string } | null>(null);
   const [password, setPassword] = useState("");
@@ -452,6 +479,7 @@ function StaffIdleScreen({
     let timer = 0;
     const enterIdle = () => {
       idleRef.current = true;
+      setShowUnlock(false);
       setIdle(true);
     };
     const resetActivity = () => {
@@ -524,6 +552,17 @@ function StaffIdleScreen({
         new Date(),
       );
       const todaysBills = scopedBills.filter((row) => String(row["business_date"] ?? "") === today);
+      const salesTrend = Array.from({ length: 7 }, (_, index) => {
+        const date = new Date();
+        date.setDate(date.getDate() - (6 - index));
+        const key = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
+        return {
+          day: new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short" }).format(date),
+          sales: scopedBills
+            .filter((row) => String(row["business_date"] ?? "") === key)
+            .reduce((sum, row) => sum + Number(row["total_amount"] ?? 0), 0),
+        };
+      });
       const productById = new Map(products.map((row) => [String(row["id"] ?? ""), row]));
       const lowStock = inventory.filter((row) => {
         if (!scope.includes(String(row["location_id"] ?? ""))) return false;
@@ -569,6 +608,7 @@ function StaffIdleScreen({
         syncAlerts,
         enrichment,
         purchases: openPurchases,
+        salesTrend,
       });
     };
     void refreshStats();
@@ -586,17 +626,17 @@ function StaffIdleScreen({
     setMessage("");
     try {
       if (online) {
-        const identity = profile.email
-          ? { email: profile.email, password }
-          : profile.phone
-            ? { phone: profile.phone, password }
-            : null;
-        if (!identity || !password)
+        if (!password)
           throw new Error("Enter this staff account’s password to resume.");
         const { data: previous } = await supabase.auth.getSession();
-        const { data, error } = await supabase.auth.signInWithPassword(identity);
+        const result = await retailApi<{
+          ok: boolean;
+          profile: UserAccessProfile;
+          session: { access_token: string; refresh_token: string };
+        }>("/api/pos/login", { method: "POST", json: { identifier: profile.username, password } });
+        const { data, error } = await supabase.auth.setSession(result.session);
         if (error || !data.user) throw new Error("Password verification failed. Try again.");
-        if (data.user.id !== profile.user_id) {
+        if (data.user.id !== profile.user_id || result.profile.user_id !== profile.user_id) {
           if (previous.session)
             await supabase.auth.setSession({
               access_token: previous.session.access_token,
@@ -636,12 +676,20 @@ function StaffIdleScreen({
     <>
       {children}
       {idle && (
-        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950 p-4 text-white sm:p-8">
-          <div className="mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-6">
+        <div
+          className="retailflow-lock-screen fixed inset-0 z-[100] overflow-y-auto p-4 text-white sm:p-8"
+          onPointerMove={() => setShowUnlock(true)}
+          onPointerDown={() => setShowUnlock(true)}
+          onTouchStart={() => setShowUnlock(true)}
+          onKeyDown={() => setShowUnlock(true)}
+          tabIndex={-1}
+        >
+          <div className="retailflow-lock-glow" aria-hidden="true" />
+          <div className="relative mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-5">
             <header className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <p className="text-sm text-white/60">RetailFlow · {profile.role.toLowerCase()}</p>
-                <h1 className="mt-1 text-3xl font-semibold">Store overview</h1>
+                <p className="text-sm uppercase tracking-[0.25em] text-emerald-200/80">RetailFlow · {profile.role.toLowerCase()}</p>
+                <h1 className="mt-1 text-3xl font-semibold sm:text-4xl">Store at a glance</h1>
               </div>
               <p className="text-sm text-white/60">
                 {new Intl.DateTimeFormat("en-IN", { dateStyle: "full", timeStyle: "short" }).format(
@@ -649,19 +697,35 @@ function StaffIdleScreen({
                 )}
               </p>
             </header>
-            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <IdleMetric label="Bills today" value={String(stats.bills)} />
-              <IdleMetric
-                label="Sales today"
-                value={new Intl.NumberFormat("en-IN", {
-                  style: "currency",
-                  currency: "INR",
-                }).format(stats.sales)}
-              />
-              <IdleMetric label="Low stock items" value={String(stats.lowStock)} />
-              <IdleMetric label="Pending sync" value={String(stats.pendingSync)} />
+            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[1.3fr_1fr]">
+              <div className="retailflow-lock-panel min-h-56 rounded-2xl border border-white/15 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-white/65">Sales · last 7 days</p>
+                    <p className="mt-1 text-2xl font-semibold tabular-nums">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(stats.sales)}</p>
+                  </div>
+                  <span className="rounded-full bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">{stats.bills} bills today</span>
+                </div>
+                <div className="mt-3 h-36 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={stats.salesTrend} margin={{ top: 6, right: 8, left: -24, bottom: 0 }}>
+                      <CartesianGrid stroke="rgba(255,255,255,.1)" vertical={false} />
+                      <XAxis dataKey="day" tick={{ fill: "rgba(255,255,255,.62)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: "rgba(255,255,255,.48)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <Tooltip formatter={(value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(Number(value ?? 0))} contentStyle={{ background: "#10231f", border: "1px solid rgba(255,255,255,.18)", borderRadius: 12 }} />
+                      <Bar dataKey="sales" fill="#63d7a3" radius={[5, 5, 0, 0]} isAnimationActive />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <IdleMetric label="Bills today" value={String(stats.bills)} />
+                <IdleMetric label="Low stock" value={String(stats.lowStock)} />
+                <IdleMetric label="Pending sync" value={String(stats.pendingSync)} />
+                <IdleMetric label="Stock alerts" value={String(stats.syncAlerts)} />
+              </div>
             </section>
-            <section className="rounded-2xl border border-white/15 bg-white/5 p-4">
+            <section className="retailflow-lock-panel rounded-2xl border border-white/15 p-4">
               <h2 className="font-medium">Action items</h2>
               <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
                 <IdleAction label="Records waiting to sync" value={stats.pendingSync} />
@@ -670,7 +734,15 @@ function StaffIdleScreen({
                 <IdleAction label="Purchases awaiting receipt" value={stats.purchases} />
               </div>
             </section>
-            <form
+            {!showUnlock ? (
+              <button
+                type="button"
+                className="retailflow-lock-prompt ml-auto rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm text-white/85 transition hover:bg-white/15"
+                onClick={() => setShowUnlock(true)}
+              >
+                Move the mouse or press a key to unlock
+              </button>
+            ) : <form
               onSubmit={(event) => void resume(event)}
               className="ml-auto w-full max-w-md space-y-3 rounded-2xl border border-white/15 bg-white/10 p-4"
             >
@@ -687,6 +759,7 @@ function StaffIdleScreen({
                     id="idle-password"
                     type="password"
                     autoComplete="current-password"
+                    placeholder="Enter your password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                   />
@@ -735,7 +808,7 @@ function StaffIdleScreen({
               <Button className="w-full" disabled={working}>
                 {working ? "Verifying…" : "Resume POS"}
               </Button>
-            </form>
+            </form>}
           </div>
         </div>
       )}
@@ -770,6 +843,7 @@ function ChangePasswordScreen({
   const [confirmation, setConfirmation] = useState("");
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
+  const [changed, setChanged] = useState(false);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -789,12 +863,27 @@ function ChangePasswordScreen({
         method: "POST",
         json: { password },
       });
-      await deleteLocal("settings", "active_access_profile");
-      window.dispatchEvent(new CustomEvent("retailflow:session-change"));
-      await onComplete();
+      setChanged(true);
     } catch (error) {
       setMessage(userFacingError(error, "Could not update your password. Try again."));
       setWorking(false);
+    }
+  }
+
+  async function continueToPos() {
+    await deleteLocal("settings", "active_access_profile");
+    window.dispatchEvent(new CustomEvent("retailflow:session-change"));
+    await onComplete();
+  }
+
+  async function backToLogin() {
+    try {
+      await retailApi<{ ok: boolean }>("/api/staff-session", { method: "DELETE" });
+    } finally {
+      await supabase.auth.signOut({ scope: "local" });
+      await deleteLocal("settings", "active_access_profile");
+      window.dispatchEvent(new CustomEvent("retailflow:session-change"));
+      await onComplete();
     }
   }
 
@@ -808,18 +897,28 @@ function ChangePasswordScreen({
           <LockKeyhole className="h-6 w-6" />
         </div>
         <div>
-          <h1 className="text-xl font-bold">Set your password</h1>
+          <h1 className="text-xl font-bold">{changed ? "Password changed" : "Set your password"}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Use a personal password before opening RetailFlow. The one-time password cannot be used
-            again after this step.
+            {changed
+              ? "Your new password is active. Continue into RetailFlow or return to sign in and verify your new credentials."
+              : "Use a personal password before opening RetailFlow. The one-time password cannot be used again after this step."}
           </p>
         </div>
+        {changed ? (
+          <div className="space-y-2">
+            <p role="status" className="rounded-lg bg-success/10 p-3 text-sm text-success">Password updated successfully.</p>
+            <Button type="button" className="w-full" onClick={() => void continueToPos()}>Continue to RetailFlow</Button>
+            <Button type="button" variant="outline" className="w-full" onClick={() => void backToLogin()}>Return to sign-in</Button>
+          </div>
+        ) : (
+        <>
         <div className="space-y-1">
           <Label htmlFor="new-password">New password</Label>
           <Input
             id="new-password"
             type="password"
             autoComplete="new-password"
+            placeholder="Enter a new password"
             minLength={10}
             required
             value={password}
@@ -832,6 +931,7 @@ function ChangePasswordScreen({
             id="confirm-password"
             type="password"
             autoComplete="new-password"
+            placeholder="Confirm your new password"
             minLength={10}
             required
             value={confirmation}
@@ -846,6 +946,8 @@ function ChangePasswordScreen({
         <Button className="w-full" disabled={working}>
           {working ? "Updating…" : "Set password and continue"}
         </Button>
+        </>
+        )}
       </form>
     </main>
   );
@@ -896,12 +998,14 @@ function SignInScreen({
             ? "/admin"
             : profile.role === "MANAGER"
               ? "/manager"
-              : "/cash-drawer",
+              : profile.role === "WAREHOUSE"
+                ? "/inventory"
+                : "/cash-drawer",
       });
     } catch (error) {
       if (error instanceof RetailApiError && error.status === 401) {
         setMessage(
-          "Supabase Auth could not verify these credentials. Check the email/mobile and password, confirm the sign-in method if required, and make sure this POS uses the same Supabase project.",
+          "Supabase Auth could not verify these credentials. Check the email, username or mobile number and password, then try again.",
         );
       } else {
         setMessage(userFacingError(error, "Could not sign in. Check your details and connection."));
@@ -923,7 +1027,7 @@ function SignInScreen({
         <div>
           <h1 className="text-xl font-bold">Sign in to RetailFlow</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Sign in with your Supabase Auth email or confirmed mobile number and password. Your
+            Sign in with your email, username or confirmed mobile number and password. Your
             account also needs an active RetailFlow role profile.
           </p>
         </div>
@@ -940,7 +1044,7 @@ function SignInScreen({
           </p>
         )}
         <div className="space-y-1">
-          <Label htmlFor="login-email">Supabase Auth email or mobile number</Label>
+          <Label htmlFor="login-email">Email, username or mobile number</Label>
           <Input
             id="login-email"
             type="text"
@@ -948,7 +1052,7 @@ function SignInScreen({
             required
             value={identifier}
             onChange={(event) => setIdentifier(event.target.value)}
-            placeholder="email@example.com or +91 98765 43210"
+            placeholder="Email, username or +91 98765 43210"
           />
         </div>
         <div className="space-y-1">
@@ -957,6 +1061,7 @@ function SignInScreen({
             id="login-password"
             type="password"
             autoComplete="current-password"
+            placeholder="Enter your password"
             required
             value={password}
             onChange={(event) => setPassword(event.target.value)}

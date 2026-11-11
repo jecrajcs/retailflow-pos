@@ -3,14 +3,13 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { Database } from "@/integrations/supabase/types";
+import { DENOMINATIONS } from "@/lib/cash-denominations";
 import {
   getStaffAccessProfile,
   getStaffSession,
   normalizeStaffIdentifier,
 } from "@/lib/retail-auth.server";
 import { errorResponse, isSameOriginMutation, jsonResponse } from "@/lib/retail-server-api.server";
-
-const DENOMINATIONS = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
 
 export const Route = createFileRoute("/api/cash-session-override")({
   server: {
@@ -56,7 +55,7 @@ export const Route = createFileRoute("/api/cash-session-override")({
             const denomination = Number(value);
             const quantity = Number(amount);
             if (
-              !DENOMINATIONS.includes(denomination) ||
+              !DENOMINATIONS.some((supported) => supported === denomination) ||
               !Number.isInteger(quantity) ||
               quantity < 0
             )
@@ -76,16 +75,25 @@ export const Route = createFileRoute("/api/cash-session-override")({
           const authClient = createClient<Database>(url, key, {
             auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
           });
-          const credentials = normalized.startsWith("email:")
-            ? { email: normalized.slice("email:".length), password }
-            : { phone: normalized.slice("phone:".length), password };
+          let credentials: { email: string; password: string } | { phone: string; password: string };
+          if (normalized.startsWith("email:")) credentials = { email: normalized.slice("email:".length), password };
+          else if (normalized.startsWith("phone:")) credentials = { phone: normalized.slice("phone:".length), password };
+          else {
+            const { data: staff, error: staffError } = await supabaseAdmin.from("users")
+              .select("email,phone").eq("username", normalized.slice("username:".length)).maybeSingle();
+            if (staffError) throw new Error(staffError.message);
+            if (!staff) return jsonResponse({ error: "Manager credentials could not be verified." }, 401);
+            if (staff.email) credentials = { email: staff.email, password };
+            else if (staff.phone) credentials = { phone: staff.phone, password };
+            else return jsonResponse({ error: "Manager credentials could not be verified." }, 401);
+          }
           const { data, error } = await authClient.auth.signInWithPassword(credentials);
           if (error || !data.user)
             return jsonResponse({ error: "Manager credentials could not be verified." }, 401);
           const manager = await getStaffAccessProfile(data.user.id);
-          if (!manager || !["MANAGER", "ADMIN"].includes(manager.role))
+          if (!manager || manager.role !== "MANAGER")
             return jsonResponse(
-              { error: "Only an active Manager or Admin can approve a shift variance." },
+              { error: "Only an active Manager can approve a shift variance." },
               403,
             );
           if (manager.must_change_password)
@@ -109,16 +117,14 @@ export const Route = createFileRoute("/api/cash-session-override")({
           const requesterIsCashierOwner =
             requester.profile.role === "CASHIER" &&
             cashSession.opened_by_id === requester.profile.user_id;
-          const requesterIsAuthorizedManager =
-            ["MANAGER", "ADMIN"].includes(requester.profile.role) &&
-            (requester.profile.role === "ADMIN" ||
-              requester.profile.location_ids.includes(cashSession.location_id));
+          const requesterIsAuthorizedManager = requester.profile.role === "MANAGER" &&
+            requester.profile.location_ids.includes(cashSession.location_id);
           if (!requesterIsCashierOwner && !requesterIsAuthorizedManager)
             return jsonResponse(
               { error: "The signed-in staff member cannot approve this shift close." },
               403,
             );
-          if (manager.role !== "ADMIN" && !manager.location_ids.includes(cashSession.location_id))
+          if (!manager.location_ids.includes(cashSession.location_id))
             return jsonResponse(
               { error: "The approving Manager is not assigned to this location." },
               403,

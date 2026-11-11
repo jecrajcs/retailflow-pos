@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 import {
   Boxes,
   ChartNoAxesCombined,
@@ -15,8 +16,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAccess, canAccessLocation, canManage } from "@/lib/access";
+import { useAccess, canAccessLocation } from "@/lib/access";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { retailApi, userFacingError } from "@/lib/retail-api";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +37,8 @@ const links: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: "/billing", label: "Billing", icon: ScanBarcode },
   { to: "/sales", label: "Sales", icon: ChartNoAxesCombined },
   { to: "/inventory", label: "Inventory", icon: Boxes },
+  { to: "/barcodes", label: "Barcodes", icon: ScanBarcode },
+  { to: "/scanner", label: "Scanner", icon: ScanBarcode },
   { to: "/purchases", label: "Purchases", icon: ClipboardList },
   { to: "/cash-drawer", label: "Cash Drawer", icon: Vault },
   { to: "/manager", label: "Manager", icon: PackageSearch },
@@ -57,10 +63,11 @@ export function AppNav({ active }: { active: string }) {
   const activeLocations = locations.filter((location) => canAccessLocation(profile, location.id));
   const shiftOpen = sessions.some((session) => session.status === "OPEN");
   const visibleLinks = links.filter(({ to }) => {
-    if (to === "/admin") return profile?.role === "ADMIN";
-    if (to === "/manager") return profile?.role === "MANAGER";
-    if (to === "/purchases") return canManage(profile);
-    return true;
+    if (!profile) return false;
+    if (profile.role === "CASHIER") return ["/billing", "/cash-drawer"].includes(to);
+    if (profile.role === "WAREHOUSE") return ["/inventory", "/barcodes", "/scanner"].includes(to);
+    if (profile.role === "MANAGER") return ["/", "/sales", "/inventory", "/purchases", "/cash-drawer", "/manager", "/barcodes", "/scanner"].includes(to);
+    return ["/", "/admin", "/sales", "/inventory", "/purchases", "/manager", "/barcodes", "/scanner"].includes(to);
   });
   return (
     <>
@@ -94,14 +101,7 @@ export function AppNav({ active }: { active: string }) {
           </nav>
           {profile && (
             <div className="ml-auto flex shrink-0 items-center gap-2 border-l pl-2 sm:pl-3">
-              <span className="hidden text-right sm:block">
-                <span className="block max-w-28 truncate text-[11px] font-medium">
-                  {profile.display_name}
-                </span>
-                <span className="block text-[9px] text-muted-foreground">
-                  {profile.role.toLowerCase()} · {online ? "online" : "offline"}
-                </span>
-              </span>
+              <UsernameProfileDialog />
               <span
                 className="hidden max-w-36 items-center gap-1 truncate rounded-md border bg-muted/40 px-2 py-1 text-[10px] text-muted-foreground md:flex"
                 title={`${currentLocation?.name ?? "No outlet selected"} · ${shiftOpen ? "shift open" : "shift closed"}`}
@@ -156,12 +156,6 @@ export function AppNav({ active }: { active: string }) {
               </div>
             </DialogContent>
           </Dialog>
-          <div className="ml-2 hidden shrink-0 items-center gap-1.5 text-[10px] text-muted-foreground xl:flex">
-            <span className="rounded border px-1.5 py-0.5 font-mono">F1</span> scan
-            <span className="rounded border px-1.5 py-0.5 font-mono">F2</span> quick add
-            <span className="rounded border px-1.5 py-0.5 font-mono">F3</span> customer
-            <span className="rounded border px-1.5 py-0.5 font-mono">F4</span> pay
-          </div>
         </div>
       </header>
       {profile && activeLocations.length === 0 && (
@@ -189,6 +183,56 @@ export function AppNav({ active }: { active: string }) {
   );
 }
 
+function UsernameProfileDialog() {
+  const { profile, refresh } = useAccess();
+  const [open, setOpen] = useState(false);
+  const [username, setUsername] = useState(profile?.username ?? "");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setUsername(profile?.username ?? ""), [profile?.username]);
+  if (!profile) return null;
+  async function save() {
+    if (!username.trim() || saving) return;
+    setSaving(true);
+    try {
+      const result = await retailApi<{ username: string }>("/api/staff-username", {
+        method: "POST",
+        json: { username },
+      });
+      setUsername(result.username);
+      await refresh();
+      setOpen(false);
+    } catch (error) {
+      toast.error("Could not update username", { description: userFacingError(error, "Check availability and try again.") });
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button className="hidden text-right sm:block" title="Edit your profile username">
+          <span className="block max-w-28 truncate text-[11px] font-medium">{profile.display_name}</span>
+          <span className="block text-[9px] text-muted-foreground">{profile.username} · {profile.role.toLowerCase()}</span>
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>My profile</DialogTitle>
+          <DialogDescription>Your username can be used with your password to sign in.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1">
+          <Label htmlFor="my-username">Username</Label>
+          <Input id="my-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Choose a username" />
+          <p className="text-xs text-muted-foreground">3–32 letters, numbers, dots, underscores or hyphens. Availability is checked when saved.</p>
+        </div>
+        <Button onClick={() => void save()} disabled={saving || !username.trim() || username === profile.username}>
+          {saving ? "Checking…" : "Save username"}
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function guideFor(route: string) {
   const guides: Record<string, string[]> = {
     "/": [
@@ -202,9 +246,9 @@ function guideFor(route: string) {
       "Use the network-wide inventory, sales and operations links to review all active locations.",
     ],
     "/billing": [
-      "Select the outlet. The bill starts as Walk-in; use customer search when needed.",
-      "Scan or type a name/SKU; use arrow keys and Enter to select. F2 adds an unknown barcode.",
-      "Pay completes the bill and starts the next one automatically.",
+      "Select a customer by name or mobile before adding sale items.",
+      "Scan or search by barcode, SKU, name, category or variant. Enter adds the selected match.",
+      "Pay records the split tender and starts the next customer selection.",
     ],
     "/sales": [
       "Search by bill, customer or phone; narrow the register by date, outlet or payment status.",

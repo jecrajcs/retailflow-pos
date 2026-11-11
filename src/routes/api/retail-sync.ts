@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { getStaffSession } from "@/lib/retail-auth.server";
+import { canStaffSyncOperation } from "@/lib/staff-access-policy";
 import {
   asRecord,
   errorResponse,
@@ -87,6 +88,11 @@ export const Route = createFileRoute("/api/retail-sync")({
             );
           if (!operation["user_id"])
             return jsonResponse({ error: "The sync operation has no verified staff owner." }, 403);
+          if (!canStaffSyncOperation(session.profile.role, String(operation["type"])))
+            return jsonResponse(
+              { error: "Your role cannot perform this POS operation." },
+              403,
+            );
 
           const rpcPayload: Record<string, unknown> = structuredClone(payload);
           const receipt = asRecord(rpcPayload["receipt"]);

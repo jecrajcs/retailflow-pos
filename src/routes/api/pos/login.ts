@@ -6,6 +6,7 @@ import type { Database } from "@/integrations/supabase/types";
 import {
   getStaffAccessProfile,
   normalizeStaffIdentifier,
+  resolveStaffAuthCredentials,
   type StaffAccessProfile,
 } from "@/lib/retail-auth.server";
 import { errorResponse, isSameOriginMutation, jsonResponse } from "@/lib/retail-server-api.server";
@@ -76,9 +77,7 @@ export const Route = createFileRoute("/api/pos/login")({
               detectSessionInUrl: false,
             },
           });
-          const credentials = normalized.startsWith("email:")
-            ? { email: normalized.slice("email:".length), password }
-            : { phone: normalized.slice("phone:".length), password };
+          const credentials = await resolveStaffAuthCredentials(normalized, password);
           const { data, error } = await authClient.auth.signInWithPassword(credentials);
           if (error) return posLoginErrorResponse(error.status ?? 401);
           if (!data.session) return posLoginErrorResponse(503);

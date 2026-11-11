@@ -176,11 +176,14 @@ function RootComponent() {
             import("./cash-drawer"),
             import("./manager"),
             import("./admin"),
+            import("./barcodes"),
+            import("./scanner"),
             // Load on-demand bundles online once so offline OCR and spreadsheets
             // remain usable after the service worker takes control.
             import("xlsx"),
             import("tesseract.js"),
             import("pdfjs-dist/legacy/build/pdf.mjs"),
+            import("@zxing/browser"),
           ]);
         })
         .catch((error) => {

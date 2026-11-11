@@ -34,6 +34,10 @@ const REMOTE_COLLECTIONS: Array<{ table: string; store: LocalStoreName }> = [
   { table: "stock_transfer_items", store: "transfer_items" },
   { table: "stock_adjustments", store: "stock_adjustments" },
   { table: "inventory_sync_alerts", store: "sync_alerts" },
+  { table: "location_product_assignments", store: "location_products" },
+  { table: "uncounted_sales", store: "uncounted_sales" },
+  { table: "barcode_candidates", store: "barcode_candidates" },
+  { table: "category_reviews", store: "category_reviews" },
 ];
 
 function online() {

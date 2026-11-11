@@ -11,12 +11,15 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as BarcodesRouteImport } from './routes/barcodes'
 import { Route as BillingRouteImport } from './routes/billing'
 import { Route as CashDrawerRouteImport } from './routes/cash-drawer'
 import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as ManagerRouteImport } from './routes/manager'
 import { Route as PurchasesRouteImport } from './routes/purchases'
 import { Route as SalesRouteImport } from './routes/sales'
+import { Route as ScannerRouteImport } from './routes/scanner'
+import { Route as ApiBarcodeCandidateRouteImport } from './routes/api/barcode-candidate'
 import { Route as ApiCashSessionOverrideRouteImport } from './routes/api/cash-session-override'
 import { Route as ApiPublicOverviewRouteImport } from './routes/api/public-overview'
 import { Route as ApiResolveSyncAlertRouteImport } from './routes/api/resolve-sync-alert'
@@ -26,6 +29,8 @@ import { Route as ApiRetailWorkbookImportRouteImport } from './routes/api/retail
 import { Route as ApiStaffRouteImport } from './routes/api/staff'
 import { Route as ApiStaffPasswordRouteImport } from './routes/api/staff-password'
 import { Route as ApiStaffSessionRouteImport } from './routes/api/staff-session'
+import { Route as ApiStaffUsernameRouteImport } from './routes/api/staff-username'
+import { Route as ApiAdminArchiveProductRouteImport } from './routes/api/admin/archive-product'
 import { Route as ApiAdminLocationsRouteImport } from './routes/api/admin/locations'
 import { Route as ApiPosLoginRouteImport } from './routes/api/pos/login'
 
@@ -37,6 +42,11 @@ const IndexRoute = IndexRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BarcodesRoute = BarcodesRouteImport.update({
+  id: '/barcodes',
+  path: '/barcodes',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BillingRoute = BillingRouteImport.update({
@@ -67,6 +77,16 @@ const PurchasesRoute = PurchasesRouteImport.update({
 const SalesRoute = SalesRouteImport.update({
   id: '/sales',
   path: '/sales',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ScannerRoute = ScannerRouteImport.update({
+  id: '/scanner',
+  path: '/scanner',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBarcodeCandidateRoute = ApiBarcodeCandidateRouteImport.update({
+  id: '/api/barcode-candidate',
+  path: '/api/barcode-candidate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiCashSessionOverrideRoute = ApiCashSessionOverrideRouteImport.update({
@@ -114,6 +134,16 @@ const ApiStaffSessionRoute = ApiStaffSessionRouteImport.update({
   path: '/api/staff-session',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiStaffUsernameRoute = ApiStaffUsernameRouteImport.update({
+  id: '/api/staff-username',
+  path: '/api/staff-username',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminArchiveProductRoute = ApiAdminArchiveProductRouteImport.update({
+  id: '/api/admin/archive-product',
+  path: '/api/admin/archive-product',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminLocationsRoute = ApiAdminLocationsRouteImport.update({
   id: '/api/admin/locations',
   path: '/api/admin/locations',
@@ -128,12 +158,15 @@ const ApiPosLoginRoute = ApiPosLoginRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/barcodes': typeof BarcodesRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/scanner': typeof ScannerRoute
+  '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
@@ -143,18 +176,23 @@ export interface FileRoutesByFullPath {
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/staff-username': typeof ApiStaffUsernameRoute
+  '/api/admin/archive-product': typeof ApiAdminArchiveProductRoute
   '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/barcodes': typeof BarcodesRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/scanner': typeof ScannerRoute
+  '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
@@ -164,6 +202,8 @@ export interface FileRoutesByTo {
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/staff-username': typeof ApiStaffUsernameRoute
+  '/api/admin/archive-product': typeof ApiAdminArchiveProductRoute
   '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
@@ -171,12 +211,15 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/barcodes': typeof BarcodesRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/scanner': typeof ScannerRoute
+  '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
@@ -186,6 +229,8 @@ export interface FileRoutesById {
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/staff-username': typeof ApiStaffUsernameRoute
+  '/api/admin/archive-product': typeof ApiAdminArchiveProductRoute
   '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
@@ -194,12 +239,15 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/barcodes'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/scanner'
+    | '/api/barcode-candidate'
     | '/api/cash-session-override'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
@@ -209,18 +257,23 @@ export interface FileRouteTypes {
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/staff-username'
+    | '/api/admin/archive-product'
     | '/api/admin/locations'
     | '/api/pos/login'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
+    | '/barcodes'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/scanner'
+    | '/api/barcode-candidate'
     | '/api/cash-session-override'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
@@ -230,18 +283,23 @@ export interface FileRouteTypes {
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/staff-username'
+    | '/api/admin/archive-product'
     | '/api/admin/locations'
     | '/api/pos/login'
   id:
     | '__root__'
     | '/'
     | '/admin'
+    | '/barcodes'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/scanner'
+    | '/api/barcode-candidate'
     | '/api/cash-session-override'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
@@ -251,6 +309,8 @@ export interface FileRouteTypes {
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/staff-username'
+    | '/api/admin/archive-product'
     | '/api/admin/locations'
     | '/api/pos/login'
   fileRoutesById: FileRoutesById
@@ -258,12 +318,15 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  BarcodesRoute: typeof BarcodesRoute
   BillingRoute: typeof BillingRoute
   CashDrawerRoute: typeof CashDrawerRoute
   InventoryRoute: typeof InventoryRoute
   ManagerRoute: typeof ManagerRoute
   PurchasesRoute: typeof PurchasesRoute
   SalesRoute: typeof SalesRoute
+  ScannerRoute: typeof ScannerRoute
+  ApiBarcodeCandidateRoute: typeof ApiBarcodeCandidateRoute
   ApiCashSessionOverrideRoute: typeof ApiCashSessionOverrideRoute
   ApiPublicOverviewRoute: typeof ApiPublicOverviewRoute
   ApiResolveSyncAlertRoute: typeof ApiResolveSyncAlertRoute
@@ -273,6 +336,8 @@ export interface RootRouteChildren {
   ApiStaffRoute: typeof ApiStaffRoute
   ApiStaffPasswordRoute: typeof ApiStaffPasswordRoute
   ApiStaffSessionRoute: typeof ApiStaffSessionRoute
+  ApiStaffUsernameRoute: typeof ApiStaffUsernameRoute
+  ApiAdminArchiveProductRoute: typeof ApiAdminArchiveProductRoute
   ApiAdminLocationsRoute: typeof ApiAdminLocationsRoute
   ApiPosLoginRoute: typeof ApiPosLoginRoute
 }
@@ -291,6 +356,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/barcodes': {
+      id: '/barcodes'
+      path: '/barcodes'
+      fullPath: '/barcodes'
+      preLoaderRoute: typeof BarcodesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/billing': {
@@ -333,6 +405,20 @@ declare module '@tanstack/react-router' {
       path: '/sales'
       fullPath: '/sales'
       preLoaderRoute: typeof SalesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/scanner': {
+      id: '/scanner'
+      path: '/scanner'
+      fullPath: '/scanner'
+      preLoaderRoute: typeof ScannerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/barcode-candidate': {
+      id: '/api/barcode-candidate'
+      path: '/api/barcode-candidate'
+      fullPath: '/api/barcode-candidate'
+      preLoaderRoute: typeof ApiBarcodeCandidateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/cash-session-override': {
@@ -398,6 +484,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStaffSessionRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/staff-username': {
+      id: '/api/staff-username'
+      path: '/api/staff-username'
+      fullPath: '/api/staff-username'
+      preLoaderRoute: typeof ApiStaffUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/archive-product': {
+      id: '/api/admin/archive-product'
+      path: '/api/admin/archive-product'
+      fullPath: '/api/admin/archive-product'
+      preLoaderRoute: typeof ApiAdminArchiveProductRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/locations': {
       id: '/api/admin/locations'
       path: '/api/admin/locations'
@@ -418,12 +518,15 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  BarcodesRoute: BarcodesRoute,
   BillingRoute: BillingRoute,
   CashDrawerRoute: CashDrawerRoute,
   InventoryRoute: InventoryRoute,
   ManagerRoute: ManagerRoute,
   PurchasesRoute: PurchasesRoute,
   SalesRoute: SalesRoute,
+  ScannerRoute: ScannerRoute,
+  ApiBarcodeCandidateRoute: ApiBarcodeCandidateRoute,
   ApiCashSessionOverrideRoute: ApiCashSessionOverrideRoute,
   ApiPublicOverviewRoute: ApiPublicOverviewRoute,
   ApiResolveSyncAlertRoute: ApiResolveSyncAlertRoute,
@@ -433,6 +536,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiStaffRoute: ApiStaffRoute,
   ApiStaffPasswordRoute: ApiStaffPasswordRoute,
   ApiStaffSessionRoute: ApiStaffSessionRoute,
+  ApiStaffUsernameRoute: ApiStaffUsernameRoute,
+  ApiAdminArchiveProductRoute: ApiAdminArchiveProductRoute,
   ApiAdminLocationsRoute: ApiAdminLocationsRoute,
   ApiPosLoginRoute: ApiPosLoginRoute,
 }

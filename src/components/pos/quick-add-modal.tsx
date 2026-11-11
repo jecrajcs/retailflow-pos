@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BarcodePreview } from "@/components/pos/barcode-preview";
-import { UOMS, barcodeForSku, generateSku, inr, quickAddProduct, type Product } from "@/lib/pos";
+import { UOMS, barcodeForSku, generateSku, inr, quickAddProduct, resubmitRejectedProduct, type Product } from "@/lib/pos";
 import { userFacingError } from "@/lib/retail-api";
 
 export function QuickAddModal({
@@ -25,6 +25,7 @@ export function QuickAddModal({
   prefillRetailPrice,
   prefillPurchaseCost,
   prefillUom,
+  correctionProduct,
   managerMode = false,
   context = "pos",
   onAdded,
@@ -38,6 +39,7 @@ export function QuickAddModal({
   prefillRetailPrice?: number;
   prefillPurchaseCost?: number;
   prefillUom?: string;
+  correctionProduct?: Product | null;
   managerMode?: boolean;
   context?: "pos" | "purchase";
   onAdded: (product: Product) => void;
@@ -45,32 +47,47 @@ export function QuickAddModal({
   const [sku, setSku] = useState("");
   const [name, setName] = useState("");
   const [barcode, setBarcode] = useState("");
+  const [variant, setVariant] = useState("");
+  const [category, setCategory] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const [internalBarcode, setInternalBarcode] = useState(false);
   const [uom, setUom] = useState("Pcs");
   const [salePrice, setSalePrice] = useState("");
-  const [openingQty, setOpeningQty] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
+      if (correctionProduct) {
+        setSku(correctionProduct.sku ?? "");
+        setName(correctionProduct.name);
+        setBarcode(correctionProduct.barcode ?? "");
+        setVariant(correctionProduct.variant ?? "");
+        setCategory(correctionProduct.category ?? "");
+        setSubcategory(correctionProduct.subcategory ?? "");
+        setUom(correctionProduct.uom_sale);
+        setSalePrice(String(correctionProduct.sale_price));
+        setInternalBarcode(correctionProduct.barcode_type === "INTERNAL");
+        setBusy(false);
+        return;
+      }
       // Smart prefill: digits look like a barcode, anything else is a name.
       const text = (prefill ?? "").trim();
       const isNumeric = /^\d{4,}$/.test(text);
       setName(isNumeric ? "" : text);
       setBarcode(isNumeric ? text : "");
+      setInternalBarcode(false);
       if (prefillSku?.trim()) setSku(prefillSku.trim());
       setUom(prefillUom?.trim() || "Pcs");
       setSalePrice(prefillRetailPrice && prefillRetailPrice > 0 ? String(prefillRetailPrice) : "");
-      setOpeningQty("");
       setBusy(false);
       if (open && !prefillSku?.trim())
         generateSku()
           .then((generatedSku) => {
             setSku(generatedSku);
-            if (!isNumeric) setBarcode(barcodeForSku(generatedSku));
           })
           .catch(() => setSku(""));
     }
-  }, [open, prefill, prefillSku, prefillRetailPrice, prefillPurchaseCost, prefillUom]);
+  }, [open, prefill, prefillSku, prefillRetailPrice, prefillPurchaseCost, prefillUom, correctionProduct]);
 
   const saleNum = Number(salePrice) || 0;
 
@@ -79,18 +96,31 @@ export function QuickAddModal({
       !sku ||
       !name.trim() ||
       !(saleNum > 0) ||
-      (context === "pos" && !(Number(openingQty) > 0)) ||
       busy
     )
       return;
     setBusy(true);
     try {
-      const product = await quickAddProduct({
+      const product = correctionProduct
+        ? await resubmitRejectedProduct({
+            productId: correctionProduct.id,
+            locationId,
+            name,
+            sku,
+            variant: variant || null,
+            category: category || null,
+            subcategory: subcategory || null,
+            salePrice: saleNum,
+            uom,
+          })
+        : await quickAddProduct({
         name: name.trim(),
         sku,
         barcode: barcode.trim() || null,
-        variant: null,
-        category: null,
+        barcodeType: internalBarcode ? "INTERNAL" : managerMode ? "MANUFACTURER" : "UNVERIFIED",
+        variant: variant.trim() || null,
+        category: category.trim() || null,
+        subcategory: subcategory.trim() || null,
         rackLocation: null,
         salePrice: saleNum,
         minSalePrice: 0,
@@ -99,13 +129,15 @@ export function QuickAddModal({
         mrp: 0,
         uom,
         locationId,
-        openingQty: context === "pos" ? Number(openingQty) || 0 : 0,
+        openingQty: 0,
         cashierQuickAdd: !managerMode,
       });
       onAdded(product);
       onOpenChange(false);
-      toast.success(`${product.name} added — ${sku}`, {
-        description: `${inr(saleNum)}/${uom} · Catalog details are ready for Manager review.`,
+      toast.success(correctionProduct ? `${product.name} corrected` : `${product.name} added — ${sku}`, {
+        description: correctionProduct
+          ? "The corrected SKU has been resubmitted for Manager review."
+          : `${inr(saleNum)}/${uom} · Catalog details are ready for Manager review.`,
       });
     } catch (e) {
       toast.error("Could not save item", {
@@ -121,12 +153,14 @@ export function QuickAddModal({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <Zap className="h-4 w-4 text-warning" /> Quick add item
+            <Zap className="h-4 w-4 text-warning" /> {correctionProduct ? "Correct rejected SKU" : "Quick add item"}
           </DialogTitle>
           <DialogDescription>
-            {context === "purchase"
+            {correctionProduct
+              ? correctionProduct.review_reason || "Correct the product details and resubmit for review."
+              : context === "purchase"
               ? "Add the missing SKU with its item name, retail price, and sale unit. The invoice quantity will be added when the receipt is received."
-              : "Enter the item name, retail price, sale unit, and quantity available. Managers can complete the remaining catalog details later."}
+              : "Add the selling details. Stock is assigned to this store and can be counted by a Manager later."}
           </DialogDescription>
         </DialogHeader>
 
@@ -134,7 +168,7 @@ export function QuickAddModal({
           <div className="grid grid-cols-[auto_1fr_1fr] gap-2">
             <div className="space-y-1">
               <Label htmlFor="qa-sku">SKU (auto)</Label>
-              <Input id="qa-sku" readOnly value={sku} className="w-40 bg-muted font-mono text-xs" />
+              <Input id="qa-sku" readOnly={!correctionProduct} value={sku} onChange={(event) => setSku(event.target.value)} className="w-40 bg-muted font-mono text-xs" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="qa-name">Item name *</Label>
@@ -148,22 +182,44 @@ export function QuickAddModal({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="qa-barcode">Barcode</Label>
+              <Label htmlFor="qa-barcode">{managerMode ? "Barcode" : "Scanned barcode (pending review)"}</Label>
               <Input
-                autoFocus={!!barcode}
+                autoFocus={!!barcode && managerMode}
                 id="qa-barcode"
                 value={barcode}
                 onChange={(e) => setBarcode(e.target.value)}
-                placeholder="Scan or type barcode"
+                readOnly={!managerMode}
+                placeholder={managerMode ? "Manufacturer barcode" : "Captured from scan"}
                 onKeyDown={(e) => e.key === "Enter" && handleSave()}
               />
             </div>
           </div>
 
-          {sku && (
+          <div className="grid gap-2 sm:grid-cols-3">
             <div className="space-y-1">
-              <Label>Scannable Code 128 barcode · auto-generated from SKU</Label>
-              <BarcodePreview value={barcode || barcodeForSku(sku)} caption={name || sku} />
+              <Label htmlFor="qa-variant">Variant</Label>
+              <Input id="qa-variant" value={variant} onChange={(e) => setVariant(e.target.value)} placeholder="Size, shade, pack" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="qa-category">Category</Label>
+              <Input id="qa-category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Personal care" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="qa-subcategory">Subcategory</Label>
+              <Input id="qa-subcategory" value={subcategory} onChange={(e) => setSubcategory(e.target.value)} placeholder="e.g. Shampoo" />
+            </div>
+          </div>
+
+          {managerMode && sku && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <Label>Internal Code 128 label</Label>
+                <Button type="button" variant="outline" size="sm" onClick={() => {
+                  setBarcode(barcodeForSku(sku));
+                  setInternalBarcode(true);
+                }}>Generate internal label</Button>
+              </div>
+              {internalBarcode && <BarcodePreview value={barcode} caption={`${name || sku} · Internal label`} />}
             </div>
           )}
           <div className="grid gap-2 sm:grid-cols-2">
@@ -188,22 +244,6 @@ export function QuickAddModal({
               />
             </div>
           </div>
-          {context === "pos" && (
-            <div className="space-y-1">
-              <Label htmlFor="qa-qty">Quantity available *</Label>
-              <Input
-                id="qa-qty"
-                type="number"
-                min="0.001"
-                step="any"
-                value={openingQty}
-                onChange={(e) => setOpeningQty(e.target.value)}
-                placeholder="0"
-                required
-              />
-            </div>
-          )}
-
           <Button
             className="w-full"
             onClick={handleSave}
@@ -211,11 +251,10 @@ export function QuickAddModal({
               !sku ||
               !name.trim() ||
               !(saleNum > 0) ||
-              (context === "pos" && !(Number(openingQty) > 0)) ||
               busy
             }
           >
-            {managerMode ? "Save item" : "Add item to bill"}
+            {correctionProduct ? "Resubmit corrected SKU" : managerMode ? "Save item" : "Add item to bill"}
             {salePrice ? ` — ${inr(saleNum)}/${uom}` : ""}
           </Button>
         </div>
