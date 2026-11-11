@@ -5,7 +5,9 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type FormEvent,
   type ReactNode,
 } from "react";
 import { LockKeyhole, WifiOff } from "lucide-react";
@@ -14,9 +16,17 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { deleteLocal, getSetting, setSetting } from "@/lib/local-db";
+import {
+  deleteLocal,
+  getAllLocal,
+  getSetting,
+  setSetting,
+  subscribeLocalChanges,
+  type KeyedRecord,
+} from "@/lib/local-db";
 import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { pageAccessClass } from "@/lib/access-policy";
+import { toast } from "sonner";
 
 export type AccessRole = "CASHIER" | "MANAGER" | "ADMIN";
 export const ACTIVE_LOCATION_KEY = "pos-location-id";
@@ -126,6 +136,7 @@ export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
 
 export function AccessBoundary({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const navigate = useNavigate();
   const [profile, setProfile] = useState<UserAccessProfile | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [online, setOnline] = useState(typeof navigator === "undefined" || navigator.onLine);
@@ -191,6 +202,46 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const signOut = useCallback(async () => {
+    if (profile?.role === "CASHIER") {
+      const openShift = (await getAllLocal<KeyedRecord>("cash_sessions")).find(
+        (session) =>
+          session["status"] === "OPEN" &&
+          profile.location_ids.includes(String(session["location_id"] ?? "")) &&
+          (session["opened_by_id"] == null || session["opened_by_id"] === profile.user_id),
+      );
+      if (openShift) {
+        toast.error("Close and reconcile the cash drawer before signing out.");
+        await navigate({ to: "/cash-drawer" });
+        return;
+      }
+    }
+    let serverLogoutCompleted = false;
+    if (typeof navigator !== "undefined" && navigator.onLine) {
+      try {
+        await retailApi<{ ok: boolean }>("/api/staff-session", { method: "DELETE" });
+        serverLogoutCompleted = true;
+      } catch (error) {
+        if (error instanceof RetailApiError && error.status === 401) {
+          serverLogoutCompleted = true;
+        } else if (
+          profile?.role === "CASHIER" &&
+          error instanceof RetailApiError &&
+          error.status === 409
+        ) {
+          toast.error("Close and reconcile the cash drawer before signing out.");
+          await navigate({ to: "/cash-drawer" });
+          return;
+        } else {
+          toast.error("Could not sign out", {
+            description: userFacingError(error, "Reconnect and try again."),
+          });
+          return;
+        }
+      }
+    } else if (profile?.role === "CASHIER") {
+      toast.error("Reconnect before signing out so RetailFlow can verify the closed shift.");
+      return;
+    }
     setProfile(null);
     setLogoutPending(true);
     setAccessError("");
@@ -218,15 +269,15 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
     }
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setAccessError(
-        "This device is locked. The server session will be revoked when you reconnect.",
+        serverLogoutCompleted
+          ? "The server session is revoked. Reconnect to clear the local session."
+          : "This device is locked. The server session will be revoked when you reconnect.",
       );
       return;
     }
     try {
-      try {
+      if (!serverLogoutCompleted) {
         await retailApi<{ ok: boolean }>("/api/staff-session", { method: "DELETE" });
-      } catch (error) {
-        if (!(error instanceof RetailApiError && error.status === 401)) throw error;
       }
       const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
       if (signOutError)
@@ -251,7 +302,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
           : "This device is locked. Reconnect to finish logout.",
       );
     }
-  }, []);
+  }, [profile, navigate]);
 
   const value = useMemo(
     () => ({ profile, online, signOut, refresh }),
@@ -275,7 +326,439 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
       />
     );
   if (profile.must_change_password) return <ChangePasswordScreen onComplete={refresh} />;
-  return <AccessContext.Provider value={value}>{children}</AccessContext.Provider>;
+  return (
+    <AccessContext.Provider value={value}>
+      <CashierShiftGate profile={profile}>
+        <StaffIdleScreen profile={profile} online={online}>
+          {children}
+        </StaffIdleScreen>
+      </CashierShiftGate>
+    </AccessContext.Provider>
+  );
+}
+
+function CashierShiftGate({
+  profile,
+  children,
+}: {
+  profile: UserAccessProfile;
+  children: ReactNode;
+}) {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const navigate = useNavigate();
+  const [hasOpenShift, setHasOpenShift] = useState(false);
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const refreshShift = async () => {
+      const sessions = await getAllLocal<KeyedRecord>("cash_sessions");
+      if (!active) return;
+      const savedLocation =
+        typeof window === "undefined"
+          ? ""
+          : (window.localStorage.getItem(ACTIVE_LOCATION_KEY) ?? "");
+      const requiredLocation = profile.location_ids.includes(savedLocation)
+        ? savedLocation
+        : profile.location_ids.length === 1
+          ? profile.location_ids[0]
+          : null;
+      setHasOpenShift(
+        !!requiredLocation &&
+          sessions.some(
+            (session) =>
+              session["status"] === "OPEN" &&
+              session["location_id"] === requiredLocation &&
+              session["opened_by_id"] === profile.user_id,
+          ),
+      );
+      setChecked(true);
+    };
+    void refreshShift();
+    const unsubscribe = subscribeLocalChanges((store) => {
+      if (store === "cash_sessions") void refreshShift();
+    });
+    window.addEventListener("retailflow:location-change", refreshShift);
+    return () => {
+      active = false;
+      unsubscribe();
+      window.removeEventListener("retailflow:location-change", refreshShift);
+    };
+  }, [profile.location_ids, profile.user_id]);
+
+  useEffect(() => {
+    if (profile.role === "CASHIER" && checked && !hasOpenShift && pathname !== "/cash-drawer")
+      void navigate({ to: "/cash-drawer" });
+  }, [profile.role, checked, hasOpenShift, pathname, navigate]);
+
+  if (profile.role === "CASHIER" && pathname !== "/cash-drawer" && (!checked || !hasOpenShift))
+    return (
+      <div className="grid h-dvh place-items-center text-sm text-muted-foreground">
+        Opening the cash drawer…
+      </div>
+    );
+  return children;
+}
+
+type IdleStats = {
+  bills: number;
+  sales: number;
+  lowStock: number;
+  pendingSync: number;
+  syncAlerts: number;
+  enrichment: number;
+  purchases: number;
+};
+const EMPTY_IDLE_STATS: IdleStats = {
+  bills: 0,
+  sales: 0,
+  lowStock: 0,
+  pendingSync: 0,
+  syncAlerts: 0,
+  enrichment: 0,
+  purchases: 0,
+};
+
+function pinDigest(pin: string, salt: string) {
+  return crypto.subtle
+    .digest("SHA-256", new TextEncoder().encode(`${salt}:${pin}`))
+    .then((digest) =>
+      Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+    );
+}
+
+function StaffIdleScreen({
+  profile,
+  online,
+  children,
+}: {
+  profile: UserAccessProfile;
+  online: boolean;
+  children: ReactNode;
+}) {
+  const [idle, setIdle] = useState(false);
+  const [stats, setStats] = useState(EMPTY_IDLE_STATS);
+  const [savedPin, setSavedPin] = useState<{ salt: string; hash: string } | null>(null);
+  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
+  const [pinConfirmation, setPinConfirmation] = useState("");
+  const [message, setMessage] = useState("");
+  const [working, setWorking] = useState(false);
+  const idleRef = useRef(false);
+  const lastActivity = useRef(Date.now());
+  const pinSettingKey = `staff_device_resume_pin:${profile.user_id}`;
+
+  useEffect(() => {
+    let timer = 0;
+    const enterIdle = () => {
+      idleRef.current = true;
+      setIdle(true);
+    };
+    const resetActivity = () => {
+      if (idleRef.current) return;
+      lastActivity.current = Date.now();
+      window.clearTimeout(timer);
+      timer = window.setTimeout(enterIdle, 5 * 60 * 1000);
+    };
+    const checkInactivity = () => {
+      if (!idleRef.current && Date.now() - lastActivity.current >= 5 * 60 * 1000) enterIdle();
+    };
+    const events: Array<keyof WindowEventMap> = [
+      "pointerdown",
+      "pointermove",
+      "keydown",
+      "touchstart",
+      "scroll",
+    ];
+    events.forEach((eventName) =>
+      window.addEventListener(eventName, resetActivity, { passive: true }),
+    );
+    document.addEventListener("visibilitychange", checkInactivity);
+    timer = window.setTimeout(enterIdle, 5 * 60 * 1000);
+    const checkTimer = window.setInterval(checkInactivity, 10000);
+    void getSetting<{ salt: string; hash: string }>(pinSettingKey).then((value) =>
+      setSavedPin(value ?? null),
+    );
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(checkTimer);
+      events.forEach((eventName) => window.removeEventListener(eventName, resetActivity));
+      document.removeEventListener("visibilitychange", checkInactivity);
+    };
+  }, [profile.user_id, pinSettingKey]);
+
+  useEffect(() => {
+    if (!idle) return;
+    let active = true;
+    const refreshStats = async () => {
+      const [locations, salesRows, products, inventory, outbox, purchases, alerts] =
+        await Promise.all([
+          getAllLocal<KeyedRecord>("locations"),
+          getAllLocal<KeyedRecord>("bills"),
+          getAllLocal<KeyedRecord>("catalog"),
+          getAllLocal<KeyedRecord>("inventory_snapshot"),
+          getAllLocal<KeyedRecord>("outbox"),
+          getAllLocal<KeyedRecord>("purchases"),
+          getAllLocal<KeyedRecord>("sync_alerts"),
+        ]);
+      if (!active) return;
+      const selected =
+        typeof window === "undefined"
+          ? ""
+          : (window.localStorage.getItem(ACTIVE_LOCATION_KEY) ?? "");
+      const available =
+        profile.role === "ADMIN"
+          ? locations.map((row) => String(row["id"] ?? ""))
+          : profile.location_ids;
+      const scope =
+        selected && (profile.role === "ADMIN" || profile.location_ids.includes(selected))
+          ? [selected]
+          : available;
+      const scopedBills = salesRows.filter(
+        (row) =>
+          scope.includes(String(row["location_id"] ?? "")) &&
+          String(row["status"] ?? row["invoice_status"] ?? "").toUpperCase() === "COMPLETED" &&
+          (profile.role !== "CASHIER" || row["cashier_id"] === profile.user_id),
+      );
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
+        new Date(),
+      );
+      const todaysBills = scopedBills.filter((row) => String(row["business_date"] ?? "") === today);
+      const productById = new Map(products.map((row) => [String(row["id"] ?? ""), row]));
+      const lowStock = inventory.filter((row) => {
+        if (!scope.includes(String(row["location_id"] ?? ""))) return false;
+        const product = productById.get(String(row["product_id"] ?? ""));
+        return (
+          !!product &&
+          Number(product["min_stock"] ?? 0) > 0 &&
+          Number(row["quantity_on_hand"] ?? 0) <= Number(product["min_stock"] ?? 0)
+        );
+      }).length;
+      const pendingSync = outbox.filter(
+        (row) =>
+          row["sync_status"] === "PENDING" &&
+          (!row["outlet_id"] || scope.includes(String(row["outlet_id"]))),
+      ).length;
+      const syncAlerts = alerts.filter(
+        (row) => !row["resolved_at"] && scope.includes(String(row["location_id"] ?? "")),
+      ).length;
+      const scopedProductIds = new Set(
+        inventory
+          .filter((row) => scope.includes(String(row["location_id"] ?? "")))
+          .map((row) => String(row["product_id"] ?? "")),
+      );
+      const enrichment = canManage(profile)
+        ? products.filter(
+            (row) =>
+              row["enrichment_status"] === "PENDING" &&
+              scopedProductIds.has(String(row["id"] ?? "")),
+          ).length
+        : 0;
+      const openPurchases = canManage(profile)
+        ? purchases.filter(
+            (row) =>
+              scope.includes(String(row["warehouse_location_id"] ?? "")) &&
+              ["DRAFT", "REVIEW", "PENDING"].includes(String(row["status"] ?? "").toUpperCase()),
+          ).length
+        : 0;
+      setStats({
+        bills: todaysBills.length,
+        sales: todaysBills.reduce((sum, row) => sum + Number(row["total_amount"] ?? 0), 0),
+        lowStock,
+        pendingSync,
+        syncAlerts,
+        enrichment,
+        purchases: openPurchases,
+      });
+    };
+    void refreshStats();
+    const timer = window.setInterval(() => void refreshStats(), 30000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [idle, profile]);
+
+  async function resume(event: FormEvent) {
+    event.preventDefault();
+    if (working) return;
+    setWorking(true);
+    setMessage("");
+    try {
+      if (online) {
+        const identity = profile.email
+          ? { email: profile.email, password }
+          : profile.phone
+            ? { phone: profile.phone, password }
+            : null;
+        if (!identity || !password)
+          throw new Error("Enter this staff account’s password to resume.");
+        const { data: previous } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.signInWithPassword(identity);
+        if (error || !data.user) throw new Error("Password verification failed. Try again.");
+        if (data.user.id !== profile.user_id) {
+          if (previous.session)
+            await supabase.auth.setSession({
+              access_token: previous.session.access_token,
+              refresh_token: previous.session.refresh_token,
+            });
+          else await supabase.auth.signOut({ scope: "local" });
+          throw new Error("Use the credentials for the staff member who opened this screen.");
+        }
+      } else {
+        if (!/^\d{6,8}$/.test(pin)) throw new Error("Enter the 6 to 8 digit device PIN.");
+        if (!savedPin) {
+          if (pin !== pinConfirmation) throw new Error("The device PIN entries do not match.");
+          const salt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join("");
+          const stored = { salt, hash: await pinDigest(pin, salt) };
+          await setSetting(pinSettingKey, stored);
+          setSavedPin(stored);
+        } else if ((await pinDigest(pin, savedPin.salt)) !== savedPin.hash) {
+          throw new Error("That device PIN is incorrect.");
+        }
+      }
+      idleRef.current = false;
+      lastActivity.current = Date.now();
+      setIdle(false);
+      setPassword("");
+      setPin("");
+      setPinConfirmation("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not verify this staff member.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <>
+      {children}
+      {idle && (
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950 p-4 text-white sm:p-8">
+          <div className="mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-6">
+            <header className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-sm text-white/60">RetailFlow · {profile.role.toLowerCase()}</p>
+                <h1 className="mt-1 text-3xl font-semibold">Store overview</h1>
+              </div>
+              <p className="text-sm text-white/60">
+                {new Intl.DateTimeFormat("en-IN", { dateStyle: "full", timeStyle: "short" }).format(
+                  new Date(),
+                )}
+              </p>
+            </header>
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <IdleMetric label="Bills today" value={String(stats.bills)} />
+              <IdleMetric
+                label="Sales today"
+                value={new Intl.NumberFormat("en-IN", {
+                  style: "currency",
+                  currency: "INR",
+                }).format(stats.sales)}
+              />
+              <IdleMetric label="Low stock items" value={String(stats.lowStock)} />
+              <IdleMetric label="Pending sync" value={String(stats.pendingSync)} />
+            </section>
+            <section className="rounded-2xl border border-white/15 bg-white/5 p-4">
+              <h2 className="font-medium">Action items</h2>
+              <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                <IdleAction label="Records waiting to sync" value={stats.pendingSync} />
+                <IdleAction label="Stock sync alerts" value={stats.syncAlerts} />
+                <IdleAction label="Items for Manager review" value={stats.enrichment} />
+                <IdleAction label="Purchases awaiting receipt" value={stats.purchases} />
+              </div>
+            </section>
+            <form
+              onSubmit={(event) => void resume(event)}
+              className="ml-auto w-full max-w-md space-y-3 rounded-2xl border border-white/15 bg-white/10 p-4"
+            >
+              <div className="flex items-center gap-2">
+                <LockKeyhole className="h-4 w-4" />
+                <h2 className="font-medium">Resume as {profile.display_name}</h2>
+              </div>
+              {online ? (
+                <div className="space-y-1">
+                  <Label htmlFor="idle-password" className="text-white/80">
+                    Staff password
+                  </Label>
+                  <Input
+                    id="idle-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </div>
+              ) : (
+                <>
+                  <p className="flex items-center gap-2 text-xs text-white/65">
+                    <WifiOff className="h-3.5 w-3.5" />
+                    Offline resume uses this device’s PIN.
+                  </p>
+                  <div className="space-y-1">
+                    <Label htmlFor="idle-pin" className="text-white/80">
+                      {savedPin ? "Device PIN" : "Create a 6 to 8 digit device PIN"}
+                    </Label>
+                    <Input
+                      id="idle-pin"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={pin}
+                      onChange={(event) => setPin(event.target.value)}
+                    />
+                  </div>
+                  {!savedPin && (
+                    <div className="space-y-1">
+                      <Label htmlFor="idle-pin-confirm" className="text-white/80">
+                        Confirm device PIN
+                      </Label>
+                      <Input
+                        id="idle-pin-confirm"
+                        type="password"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        value={pinConfirmation}
+                        onChange={(event) => setPinConfirmation(event.target.value)}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+              {message && (
+                <p role="alert" className="text-sm text-rose-200">
+                  {message}
+                </p>
+              )}
+              <Button className="w-full" disabled={working}>
+                {working ? "Verifying…" : "Resume POS"}
+              </Button>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function IdleMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/15 bg-white/5 p-4">
+      <p className="text-sm text-white/60">{label}</p>
+      <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function IdleAction({ label, value }: { label: string; value: number }) {
+  return (
+    <p className="flex items-center justify-between rounded-lg bg-white/5 px-3 py-2">
+      <span>{label}</span>
+      <span className="font-semibold tabular-nums">{value}</span>
+    </p>
+  );
 }
 
 function ChangePasswordScreen({
@@ -408,7 +891,12 @@ function SignInScreen({
       await onSignedIn(profile);
       window.dispatchEvent(new CustomEvent("retailflow:session-change", { detail: { profile } }));
       await navigate({
-        to: profile.role === "ADMIN" ? "/admin" : profile.role === "MANAGER" ? "/manager" : "/billing",
+        to:
+          profile.role === "ADMIN"
+            ? "/admin"
+            : profile.role === "MANAGER"
+              ? "/manager"
+              : "/cash-drawer",
       });
     } catch (error) {
       if (error instanceof RetailApiError && error.status === 401) {

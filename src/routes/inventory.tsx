@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, ArrowDownAZ, Boxes, Search, Truck } from "lucide-react";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
 import { IndentDialog } from "@/components/pos/indent-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -114,7 +115,7 @@ function InventoryPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/inventory" />
 
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
@@ -151,7 +152,7 @@ function InventoryPage() {
         />
       </div>
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 p-3">
+      <main className="mx-auto min-h-0 w-full max-w-[1600px] flex-1 overflow-y-auto p-3">
         <div className="mb-3 flex flex-wrap gap-2">
           <StatChip label="Total SKUs" value={String(products.length)} icon={Boxes} />
           <StatChip
@@ -174,134 +175,85 @@ function InventoryPage() {
           />
         </div>
 
-        <div className="overflow-hidden rounded-lg border bg-card">
-          <div className="max-h-[calc(100vh-230px)] overflow-auto">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 z-10 bg-muted/90 text-xs uppercase text-muted-foreground backdrop-blur">
-                <tr>
-                  <th className="px-3 py-2 text-left">Item</th>
-                  <th className="px-2 py-2 text-left">SKU</th>
-                  <th className="px-2 py-2 text-left">Rack</th>
-                  {allowedLocations.map((l) => (
-                    <th key={l.id} className="px-2 py-2 text-center">
-                      {l.code}
-                    </th>
-                  ))}
-                  <th className="px-2 py-2 text-right">Min</th>
-                  <th className="px-2 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={6 + locations.length}
-                      className="px-3 py-10 text-center text-muted-foreground"
-                    >
-                      {products.length === 0 ? (
-                        <div className="space-y-2">
-                          <p>No products are available in this device&apos;s catalog yet.</p>
-                          {profile?.role === "MANAGER" ? (
-                            <Button asChild size="sm" variant="outline">
-                              <Link to="/manager">Open Manager catalog and stock tools</Link>
-                            </Button>
-                          ) : profile?.role === "ADMIN" ? (
-                            <p>
-                              Provision a Manager in the Admin console to set up the catalog and
-                              opening stock.
-                            </p>
-                          ) : (
-                            <p>Ask your Manager to add products and opening stock.</p>
-                          )}
-                        </div>
-                      ) : (
-                        "No items match this search / filter."
-                      )}
-                    </td>
-                  </tr>
-                )}
-                {rows.map(({ product: p, qty, status }) => {
-                  const meta = STATUS_META[status];
-                  const otherQty = allowedLocations
-                    .filter((l) => l.id !== location?.id)
-                    .reduce((s, l) => s + stockAt(p.id, l.id), 0);
-                  const needsHelp = status !== "IN";
-                  return (
-                    <tr key={p.id} className="border-t transition-colors hover:bg-accent/40">
-                      <td className="px-3 py-1.5">
-                        <div className="font-medium">
-                          {p.name}
-                          {p.variant && (
-                            <span className="ml-1.5 text-xs text-muted-foreground">
-                              {p.variant}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {p.category ?? "Uncategorized"} · MRP {inr(p.mrp)} · Sell{" "}
-                          {inr(p.sale_price)}/{p.uom_sale}
-                        </div>
-                      </td>
-                      <td className="px-2 py-1.5 font-mono text-xs">{p.sku ?? "—"}</td>
-                      <td className="px-2 py-1.5 font-mono text-xs">{p.rack_location ?? "—"}</td>
-                      {allowedLocations.map((l) => {
-                        const q = stockAt(p.id, l.id);
-                        return (
-                          <td
-                            key={l.id}
-                            className={cn(
-                              "px-2 py-1.5 text-center font-mono text-xs tabular-nums",
-                              l.id === location?.id
-                                ? q <= p.min_stock
-                                  ? "font-semibold text-destructive"
-                                  : "text-foreground"
-                                : "text-muted-foreground",
-                            )}
-                          >
-                            {q}
-                          </td>
-                        );
-                      })}
-                      <td className="px-2 py-1.5 text-right font-mono text-xs tabular-nums">
-                        {p.min_stock}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <span
-                          className={cn(
-                            "rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                            meta.className,
-                          )}
-                        >
-                          {meta.label}
-                        </span>
-                      </td>
-                      <td className="px-3 py-1.5 text-right">
-                        {needsHelp ? (
-                          <Button
-                            size="sm"
-                            variant={status === "OUT" ? "default" : "outline"}
-                            className="h-7 gap-1 px-2 text-xs"
-                            onClick={() => setIndentProduct(p)}
-                            title={
-                              otherQty > 0
-                                ? `Other locations hold ${otherQty} ${p.uom_stock}`
-                                : "No stock at other locations — reorder from vendor"
-                            }
-                          >
-                            <Truck className="h-3 w-3" /> Transfer
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">OK</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable
+          rows={rows}
+          getRowId={(row) => row.product.id}
+          searchable={false}
+          resetKey={`${location?.id ?? ""}:${statusFilter}:${search}`}
+          emptyMessage="No inventory records match these filters."
+          columns={[
+            {
+              id: "item",
+              header: "Item",
+              accessor: (row) => row.product.name,
+              cell: (row) => (
+                <span className="font-medium">
+                  {row.product.name}
+                  {row.product.variant ? (
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      {row.product.variant}
+                    </span>
+                  ) : null}
+                  <span className="block text-[11px] text-muted-foreground">
+                    {row.product.category ?? "Uncategorized"} · MRP {inr(row.product.mrp)} · Sell{" "}
+                    {inr(row.product.sale_price)}/{row.product.uom_sale}
+                  </span>
+                </span>
+              ),
+            },
+            { id: "sku", header: "SKU", accessor: (row) => row.product.sku ?? "" },
+            { id: "rack", header: "Rack", accessor: (row) => row.product.rack_location ?? "" },
+            ...allowedLocations.map((locationRow) => ({
+              id: `stock-${locationRow.id}`,
+              header: locationRow.code,
+              accessor: (row: (typeof rows)[number]) => stockAt(row.product.id, locationRow.id),
+            })),
+            { id: "minimum", header: "Min", accessor: (row) => row.product.min_stock },
+            {
+              id: "status",
+              header: "Status",
+              accessor: (row) => STATUS_META[row.status].label,
+              cell: (row) => (
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                    STATUS_META[row.status].className,
+                  )}
+                >
+                  {STATUS_META[row.status].label}
+                </span>
+              ),
+            },
+            {
+              id: "action",
+              header: "Action",
+              accessor: (row) => (row.status === "IN" ? "OK" : "Transfer"),
+              sortable: false,
+              cell: (row) => {
+                if (row.status === "IN")
+                  return <span className="text-xs text-muted-foreground">OK</span>;
+                const otherQty = allowedLocations
+                  .filter((entry) => entry.id !== location?.id)
+                  .reduce((sum, entry) => sum + stockAt(row.product.id, entry.id), 0);
+                return (
+                  <Button
+                    size="sm"
+                    variant={row.status === "OUT" ? "default" : "outline"}
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={() => setIndentProduct(row.product)}
+                    title={
+                      otherQty > 0
+                        ? `Other locations hold ${otherQty} ${row.product.uom_stock}`
+                        : "No stock at other locations — reorder from vendor"
+                    }
+                  >
+                    <Truck className="h-3 w-3" /> Transfer
+                  </Button>
+                );
+              },
+            },
+          ]}
+        />
       </main>
 
       <IndentDialog

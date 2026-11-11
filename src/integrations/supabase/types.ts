@@ -20,14 +20,19 @@ export type Database = {
           cash_out: number
           cash_sales: number
           closed_at: string | null
+          closed_by_id: string | null
           closing_cash: number | null
           closing_denominations: Json | null
           id: string
           location_id: string
           opened_at: string
           opened_by: string
+          opened_by_id: string | null
           opening_cash: number
           opening_denominations: Json | null
+          override_by_id: string | null
+          override_difference: number | null
+          override_reason: string | null
           status: string
         }
         Insert: {
@@ -35,14 +40,19 @@ export type Database = {
           cash_out?: number
           cash_sales?: number
           closed_at?: string | null
+          closed_by_id?: string | null
           closing_cash?: number | null
           closing_denominations?: Json | null
           id?: string
           location_id: string
           opened_at?: string
           opened_by?: string
+          opened_by_id?: string | null
           opening_cash?: number
           opening_denominations?: Json | null
+          override_by_id?: string | null
+          override_difference?: number | null
+          override_reason?: string | null
           status?: string
         }
         Update: {
@@ -50,14 +60,19 @@ export type Database = {
           cash_out?: number
           cash_sales?: number
           closed_at?: string | null
+          closed_by_id?: string | null
           closing_cash?: number | null
           closing_denominations?: Json | null
           id?: string
           location_id?: string
           opened_at?: string
           opened_by?: string
+          opened_by_id?: string | null
           opening_cash?: number
           opening_denominations?: Json | null
+          override_by_id?: string | null
+          override_difference?: number | null
+          override_reason?: string | null
           status?: string
         }
         Relationships: [
@@ -161,6 +176,7 @@ export type Database = {
           mobile: string | null
           name: string
           notes: string | null
+          segment: string | null
           outstanding_balance: number
           visits: number
         }
@@ -173,6 +189,7 @@ export type Database = {
           mobile?: string | null
           name: string
           notes?: string | null
+          segment?: string | null
           outstanding_balance?: number
           visits?: number
         }
@@ -185,6 +202,7 @@ export type Database = {
           mobile?: string | null
           name?: string
           notes?: string | null
+          segment?: string | null
           outstanding_balance?: number
           visits?: number
         }
@@ -294,6 +312,7 @@ export type Database = {
           total: number
           unit_price: number
           uom: string
+          unit_cost_snapshot: number | null
         }
         Insert: {
           discount?: number
@@ -304,6 +323,7 @@ export type Database = {
           total?: number
           unit_price?: number
           uom?: string
+          unit_cost_snapshot?: number | null
         }
         Update: {
           discount?: number
@@ -314,6 +334,7 @@ export type Database = {
           total?: number
           unit_price?: number
           uom?: string
+          unit_cost_snapshot?: number | null
         }
         Relationships: [
           {
@@ -340,12 +361,14 @@ export type Database = {
           cashier_name: string | null
           created_at: string
           customer_id: string | null
+          customer_segment: string | null
           discount_amount: number
           draft_payload: Json | null
           id: string
           invoice_number: string | null
           invoice_status: string
           location_id: string
+          order_type: string | null
           paid_amount: number
           payment_status: string
           total_amount: number
@@ -358,12 +381,14 @@ export type Database = {
           cashier_name?: string | null
           created_at?: string
           customer_id?: string | null
+          customer_segment?: string | null
           discount_amount?: number
           draft_payload?: Json | null
           id?: string
           invoice_number?: string | null
           invoice_status?: string
           location_id: string
+          order_type?: string | null
           paid_amount?: number
           payment_status?: string
           total_amount?: number
@@ -376,12 +401,14 @@ export type Database = {
           cashier_name?: string | null
           created_at?: string
           customer_id?: string | null
+          customer_segment?: string | null
           discount_amount?: number
           draft_payload?: Json | null
           id?: string
           invoice_number?: string | null
           invoice_status?: string
           location_id?: string
+          order_type?: string | null
           paid_amount?: number
           payment_status?: string
           total_amount?: number
@@ -626,6 +653,7 @@ export type Database = {
           product_id: string
           quantity: number
           receipt_id: string
+          source_total: number | null
           unit_cost: number
         }
         Insert: {
@@ -633,6 +661,7 @@ export type Database = {
           product_id: string
           quantity: number
           receipt_id: string
+          source_total?: number | null
           unit_cost?: number
         }
         Update: {
@@ -640,6 +669,7 @@ export type Database = {
           product_id?: string
           quantity?: number
           receipt_id?: string
+          source_total?: number | null
           unit_cost?: number
         }
         Relationships: [
@@ -670,6 +700,7 @@ export type Database = {
           reviewed_at: string | null
           reviewed_by: string | null
           status: string
+          source_total: number | null
           supplier_invoice_number: string
           supplier_name: string
           warehouse_location_id: string
@@ -684,6 +715,7 @@ export type Database = {
           reviewed_at?: string | null
           reviewed_by?: string | null
           status: string
+          source_total?: number | null
           supplier_invoice_number: string
           supplier_name: string
           warehouse_location_id: string
@@ -698,6 +730,7 @@ export type Database = {
           reviewed_at?: string | null
           reviewed_by?: string | null
           status?: string
+          source_total?: number | null
           supplier_invoice_number?: string
           supplier_name?: string
           warehouse_location_id?: string
@@ -718,6 +751,69 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      retail_import_batches: {
+        Row: {
+          batch_key: string
+          committed_at: string
+          id: string
+          imported_by: string
+          location_mapping: Json
+          source_file_name: string
+          summary: Json
+        }
+        Insert: {
+          batch_key: string
+          committed_at?: string
+          id?: string
+          imported_by: string
+          location_mapping: Json
+          source_file_name: string
+          summary?: Json
+        }
+        Update: {
+          batch_key?: string
+          committed_at?: string
+          id?: string
+          imported_by?: string
+          location_mapping?: Json
+          source_file_name?: string
+          summary?: Json
+        }
+        Relationships: []
+      }
+      retail_import_source_rows: {
+        Row: {
+          batch_id: string
+          entity_id: string
+          entity_type: string
+          id: string
+          sheet_name: string
+          source_key: string
+          source_payload: Json
+          source_row_number: number
+        }
+        Insert: {
+          batch_id: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          sheet_name: string
+          source_key: string
+          source_payload: Json
+          source_row_number: number
+        }
+        Update: {
+          batch_id?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          sheet_name?: string
+          source_key?: string
+          source_payload?: Json
+          source_row_number?: number
+        }
+        Relationships: []
       }
       staff_location_access: {
         Row: {
@@ -752,8 +848,10 @@ export type Database = {
       stock_adjustments: {
         Row: {
           cost_loss: number
+          created_by: string | null
           created_at: string
           id: string
+          import_batch_id: string | null
           location_id: string
           product_id: string
           quantity: number
@@ -762,8 +860,10 @@ export type Database = {
         }
         Insert: {
           cost_loss?: number
+          created_by?: string | null
           created_at?: string
           id?: string
+          import_batch_id?: string | null
           location_id: string
           product_id: string
           quantity: number
@@ -772,8 +872,10 @@ export type Database = {
         }
         Update: {
           cost_loss?: number
+          created_by?: string | null
           created_at?: string
           id?: string
+          import_batch_id?: string | null
           location_id?: string
           product_id?: string
           quantity?: number
@@ -964,6 +1066,27 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      app_import_retailflow_workbook_batch: {
+        Args: {
+          p_actor_user_id: string
+          p_batch_key: string
+          p_location_mapping: Json
+          p_payload: Json
+          p_source_file_name: string
+          p_summary: Json
+        }
+        Returns: Json
+      }
+      app_override_cash_session_close: {
+        Args: {
+          p_closing_denominations: Json
+          p_counted_cash: number
+          p_manager_user_id: string
+          p_reason: string
+          p_session_id: string
+        }
+        Returns: undefined
+      }
       app_resolve_inventory_sync_alert: {
         Args: { p_actor_user_id: string; p_alert_id: string }
         Returns: undefined

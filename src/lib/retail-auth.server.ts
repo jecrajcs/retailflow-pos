@@ -1,4 +1,6 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
 
 export type StaffRole = "CASHIER" | "MANAGER" | "ADMIN";
 
@@ -137,6 +139,42 @@ export async function updateStaffAuthUser(
 export async function replaceStaffPassword(userId: string, password: string) {
   const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password });
   if (error) throw new Error(`Could not update the staff password: ${error.message}`);
+}
+
+export async function verifyStaffPasswordLogin(
+  userId: string,
+  login: string | Array<string | null>,
+  password: string,
+) {
+  const logins = (Array.isArray(login) ? login : [login]).filter(
+    (value): value is string => !!value,
+  );
+  if (!logins.length) return false;
+  const url = process.env["SUPABASE_URL"];
+  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
+  if (!url || !key) throw new Error("Supabase Auth verification is not configured.");
+
+  const authClient = createClient<Database>(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  for (const value of logins) {
+    const normalized = normalizeStaffIdentifier(value);
+    const credentials = normalized.startsWith("email:")
+      ? { email: normalized.slice("email:".length), password }
+      : { phone: normalized.slice("phone:".length), password };
+    const { data, error } = await authClient.auth.signInWithPassword(credentials);
+    if (error || data.user?.id !== userId) {
+      await authClient.auth.signOut({ scope: "local" });
+      continue;
+    }
+    const { error: signOutError } = await authClient.auth.signOut({ scope: "local" });
+    if (signOutError)
+      throw new Error(
+        `Password sign-in succeeded, but verification cleanup failed: ${signOutError.message}`,
+      );
+    return true;
+  }
+  return false;
 }
 
 export async function removeStaffAuthUser(userId: string) {

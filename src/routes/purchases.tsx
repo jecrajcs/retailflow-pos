@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileUp, Plus, ScanSearch, ShieldCheck, Warehouse } from "lucide-react";
+import { FileSpreadsheet, FileUp, Plus, ScanSearch, ShieldCheck, Warehouse } from "lucide-react";
 import { toast } from "sonner";
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
+import { QuickAddModal } from "@/components/pos/quick-add-modal";
+import { itemRowsFromOcr } from "@/lib/purchase-extraction";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,38 +54,129 @@ function dateFromOcr(text: string) {
     : null;
 }
 
-function itemRowsFromOcr(text: string, products: Product[]) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 4)
-    .flatMap((line) => {
-      const numbers = [...line.matchAll(/(?:₹|rs\.?\s*)?([0-9][0-9,]*(?:\.\d{1,3})?)/gi)];
-      if (numbers.length < 2) return [];
-      const quantityToken = numbers[numbers.length - 2];
-      const costToken = numbers[numbers.length - 1];
-      const quantity = Number(quantityToken?.[1]?.replace(/,/g, ""));
-      const unitCost = Number(costToken?.[1]?.replace(/,/g, ""));
-      const cutAt = quantityToken?.index ?? -1;
-      const name =
-        cutAt > 0
-          ? line
-              .slice(0, cutAt)
-              .replace(/[|:;#]+/g, " ")
-              .trim()
-          : "";
-      if (
-        !name ||
-        !Number.isFinite(quantity) ||
-        quantity <= 0 ||
-        !Number.isFinite(unitCost) ||
-        unitCost <= 0
-      )
-        return [];
-      const match = products.find((product) => matchesProductSearch(product, name));
-      return [{ product_id: match?.id ?? "", name, quantity, unit_cost: unitCost }];
+function normalizedHeader(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function excelDate(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime()))
+    return value.toISOString().slice(0, 10);
+  if (typeof value === "number" && value > 20000 && value < 80000) {
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    return new Date(excelEpoch + Math.round(value) * 86400000).toISOString().slice(0, 10);
+  }
+  const parsedFromText = dateFromOcr(String(value ?? ""));
+  if (parsedFromText) return parsedFromText;
+  const parsed = new Date(String(value ?? ""));
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+async function parseExcelPurchase(file: File, products: Product[]) {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
+  if (!sheet) throw new Error("The workbook has no sheets to read.");
+  const grid = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    raw: true,
+    defval: null,
+  }) as unknown[][];
+  const headerIndex = grid.findIndex((cells) => {
+    const headers = cells.map(normalizedHeader);
+    return (
+      headers.some((header) =>
+        ["productname", "itemname", "product", "item", "sku", "barcode", "itemcode"].includes(
+          header,
+        ),
+      ) &&
+      headers.some((header) => ["qty", "quantity", "qtybought", "receivedqty"].includes(header))
+    );
+  });
+  if (headerIndex < 0)
+    throw new Error("Could not find item, quantity, and price columns in this workbook.");
+  const headers = (grid[headerIndex] ?? []).map((value) => String(value ?? "").trim());
+  const rawRows = grid
+    .slice(headerIndex + 1)
+    .map((cells) =>
+      Object.fromEntries(
+        headers.flatMap((header, index) => (header ? [[header, cells[index] ?? null]] : [])),
+      ),
+    );
+  const value = (row: Record<string, unknown>, aliases: string[]) => {
+    const entry = Object.entries(row).find(([header]) =>
+      aliases.includes(normalizedHeader(header)),
+    );
+    return entry?.[1] ?? null;
+  };
+  const number = (input: unknown) => {
+    const result = Number(String(input ?? "").replace(/[₹,\s]/g, ""));
+    return Number.isFinite(result) ? result : 0;
+  };
+  const rows = rawRows
+    .flatMap((row) => {
+      const sku = String(value(row, ["sku", "barcode", "itemcode", "productcode"]) ?? "").trim();
+      const name = String(
+        value(row, ["productname", "itemname", "product", "item", "description", "particulars"]) ??
+          "",
+      ).trim();
+      const quantity = number(value(row, ["qty", "quantity", "qtybought", "receivedqty", "units"]));
+      const amount = number(
+        value(row, ["linetotal", "totalpurchaseamt", "amount", "totalamount", "netamount"]),
+      );
+      const unitCost =
+        number(
+          value(row, ["unitcost", "landingcost", "purchasecost", "buyprice", "costprice", "rate"]),
+        ) || (quantity > 0 ? amount / quantity : 0);
+      if ((!sku && !name) || quantity <= 0 || unitCost < 0) return [];
+      const product =
+        (sku
+          ? products.find(
+              (candidate) =>
+                candidate.sku?.toLowerCase() === sku.toLowerCase() ||
+                candidate.barcode?.toLowerCase() === sku.toLowerCase(),
+            )
+          : undefined) ??
+        products.find((candidate) => name && matchesProductSearch(candidate, name));
+      const retailPrice =
+        number(
+          value(row, [
+            "retailprice",
+            "sellprice",
+            "sellingprice",
+            "standardsellprice",
+            "standardrate",
+          ]),
+        ) ||
+        product?.sale_price ||
+        0;
+      const sourceTotal = amount > 0 ? amount : quantity * unitCost;
+      const resolvedSku = sku || product?.sku || undefined;
+      return [
+        {
+          id: newId(),
+          product_id: product?.id ?? "",
+          name: name || product?.name || sku,
+          quantity,
+          unit_cost: unitCost,
+          source_total: sourceTotal,
+          retail_price: retailPrice,
+          uom: String(value(row, ["unit", "uom", "saleunit"]) ?? product?.uom_sale ?? "Pcs").trim(),
+          ...(resolvedSku ? { sku: resolvedSku } : {}),
+          supplier: String(
+            value(row, ["supplier", "suppliername", "vendor", "vendorname"]) ?? "",
+          ).trim(),
+          invoice: String(
+            value(row, ["invoiceno", "invoicenumber", "billno", "billnumber"]) ?? "",
+          ).trim(),
+          date: excelDate(value(row, ["date", "invoicedate", "billdate"])),
+        },
+      ];
     })
-    .slice(0, 100);
+    .slice(0, 300);
+  return { sheetName, rows };
 }
 
 function PurchasesPage() {
@@ -95,6 +189,10 @@ function PurchasesPage() {
     (location) =>
       location.type.toUpperCase() === "WAREHOUSE" && canAccessLocation(profile, location.id),
   );
+  const accessibleWarehouseIds = new Set(warehouses.map((location) => location.id));
+  const visibleReceipts = receipts.filter((receipt) =>
+    accessibleWarehouseIds.has(receipt.warehouse_location_id),
+  );
   const [receiptId, setReceiptId] = useState(newId);
   const [supplier, setSupplier] = useState("");
   const [supplierInvoice, setSupplierInvoice] = useState("");
@@ -104,12 +202,14 @@ function PurchasesPage() {
   const [attachmentName, setAttachmentName] = useState("");
   const [ocrText, setOcrText] = useState("");
   const [items, setItems] = useState<LocalPurchaseReceipt["items"]>([]);
+  const [quickAddIndex, setQuickAddIndex] = useState<number | null>(null);
   const [status, setStatus] = useState<LocalPurchaseReceipt["status"]>("DRAFT");
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState("");
 
   const total = useMemo(
-    () => items.reduce((sum, item) => sum + item.quantity * item.unit_cost, 0),
+    () =>
+      items.reduce((sum, item) => sum + (item.source_total ?? item.quantity * item.unit_cost), 0),
     [items],
   );
 
@@ -178,15 +278,20 @@ function PurchasesPage() {
       );
       if (invoiceNumberMatch?.[1] && !supplierInvoice.trim())
         setSupplierInvoice(invoiceNumberMatch[1]);
-      const supplierCandidate = output
-        .split(/\r?\n/)
-        .map((line) => line.replace(/\s+/g, " ").trim())
-        .find(
-          (line) =>
-            line.length >= 3 &&
-            line.length <= 80 &&
-            !/(invoice|bill|gstin|gst no|phone|mobile|date|tax invoice)/i.test(line),
-        );
+      const explicitSupplier = output.match(/(?:supplier|vendor|from)\s*[:#-]\s*([^\r\n]+)/i)?.[1];
+      const supplierCandidate =
+        explicitSupplier?.trim() ||
+        output
+          .split(/\r?\n/)
+          .map((line) => line.replace(/\s+/g, " ").trim())
+          .find(
+            (line) =>
+              line.length >= 3 &&
+              line.length <= 80 &&
+              !/(invoice|bill|gstin|gst no|phone|mobile|date|tax invoice|\bqty\b|quantity|rate|cost|amount|mrp|sku|barcode)/i.test(
+                line,
+              ),
+          );
       if (supplierCandidate && !supplier.trim()) setSupplier(supplierCandidate);
       const detectedDate = dateFromOcr(output);
       if (detectedDate) setInvoiceDate(detectedDate);
@@ -206,6 +311,40 @@ function PurchasesPage() {
       });
     } finally {
       await cleanupWorker?.().catch(() => undefined);
+      setWorking(false);
+    }
+  }
+
+  async function processWorkbook(file: File) {
+    setAttachment(file);
+    setAttachmentName(file.name);
+    setWorking(true);
+    setProgress("Reading invoice workbook locally…");
+    try {
+      const parsed = await parseExcelPurchase(file, products);
+      if (!parsed.rows.length)
+        throw new Error("No purchase item rows with a valid quantity were found.");
+      const metadata =
+        parsed.rows.find((row) => row.supplier || row.invoice || row.date) ?? parsed.rows[0]!;
+      if (metadata.supplier && !supplier.trim()) setSupplier(metadata.supplier);
+      if (metadata.invoice && !supplierInvoice.trim()) setSupplierInvoice(metadata.invoice);
+      if (metadata.date) setInvoiceDate(metadata.date);
+      setItems(
+        parsed.rows.map(({ supplier: _supplier, invoice: _invoice, date: _date, ...item }) => item),
+      );
+      setOcrText(
+        `Excel sheet: ${parsed.sheetName}\nRows extracted: ${parsed.rows.length}\nReview item matches, quantities, source totals, and prices before saving.`,
+      );
+      setProgress("Excel details prefilled. Review each item before saving.");
+      toast.success("Purchase workbook read on this device", {
+        description: `${parsed.rows.length} item rows extracted. New SKUs can be created from their purchase lines.`,
+      });
+    } catch (error) {
+      setProgress("Workbook could not be read. You can still enter the invoice manually.");
+      toast.error("Could not read purchase workbook", {
+        description: userFacingError(error, "Check the workbook headers and try again."),
+      });
+    } finally {
       setWorking(false);
     }
   }
@@ -244,7 +383,15 @@ function PurchasesPage() {
         created_at:
           receipts.find((row) => row.id === receiptId)?.created_at ?? new Date().toISOString(),
         sync_status: "LOCAL",
-        items,
+        items: items.map((item) => ({
+          ...item,
+          id: item.id ?? newId(),
+          source_total: item.source_total ?? item.quantity * item.unit_cost,
+        })),
+        source_total: items.reduce(
+          (sum, item) => sum + (item.source_total ?? item.quantity * item.unit_cost),
+          0,
+        ),
       };
       await savePurchaseReceipt(receipt);
       void queryClient.invalidateQueries({ queryKey: ["purchases"] });
@@ -307,9 +454,47 @@ function PurchasesPage() {
     }
   }
 
+  const quickAddItem = quickAddIndex === null ? undefined : items[quickAddIndex];
+
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/purchases" />
+      <QuickAddModal
+        open={quickAddIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setQuickAddIndex(null);
+        }}
+        locationId={warehouseId}
+        prefill={quickAddItem?.name ?? ""}
+        {...(quickAddItem?.sku ? { prefillSku: quickAddItem.sku } : {})}
+        {...(quickAddItem?.retail_price !== undefined
+          ? { prefillRetailPrice: quickAddItem.retail_price }
+          : {})}
+        {...(quickAddItem ? { prefillPurchaseCost: quickAddItem.unit_cost } : {})}
+        {...(quickAddItem?.uom ? { prefillUom: quickAddItem.uom } : {})}
+        managerMode
+        context="purchase"
+        onAdded={(product) => {
+          if (quickAddIndex !== null)
+            setItems((current) =>
+              current.map((row, index) =>
+                index === quickAddIndex
+                  ? {
+                      ...row,
+                      product_id: product.id,
+                      name: product.name,
+                      unit_cost: row.unit_cost || product.purchase_cost,
+                      retail_price: product.sale_price,
+                      uom: product.uom_sale,
+                      ...(product.sku ? { sku: product.sku } : {}),
+                    }
+                  : row,
+              ),
+            );
+          setQuickAddIndex(null);
+          void queryClient.invalidateQueries({ queryKey: ["products"] });
+        }}
+      />
       {!canManage(profile) ? (
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
           <h1 className="font-semibold">Manager access required</h1>
@@ -318,7 +503,7 @@ function PurchasesPage() {
           </p>
         </main>
       ) : (
-        <main className="mx-auto grid w-full max-w-[1500px] flex-1 gap-4 p-3 lg:grid-cols-[minmax(0,1fr)_340px] sm:p-5">
+        <main className="mx-auto grid min-h-0 w-full max-w-[1500px] flex-1 gap-4 overflow-y-auto p-3 lg:grid-cols-[minmax(0,1fr)_340px] sm:p-5">
           <section className="space-y-4">
             <div>
               <p className="text-sm text-muted-foreground">Central warehouse receiving</p>
@@ -388,6 +573,20 @@ function PurchasesPage() {
                   <span className="min-w-0 truncate text-sm text-muted-foreground">
                     {attachmentName || "Or enter invoice details manually"}
                   </span>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                    <FileSpreadsheet className="h-4 w-4" /> Add Excel invoice
+                    <input
+                      hidden
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      disabled={working}
+                      onChange={(event) => {
+                        const file = event.currentTarget.files?.[0];
+                        if (file) void processWorkbook(file);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
                   {working && (
                     <Badge variant="secondary">
                       <ScanSearch className="mr-1 h-3 w-3" />
@@ -416,7 +615,7 @@ function PurchasesPage() {
                       onClick={() =>
                         setItems((current) => [
                           ...current,
-                          { product_id: "", quantity: 1, unit_cost: 0 },
+                          { id: newId(), product_id: "", quantity: 1, unit_cost: 0 },
                         ])
                       }
                     >
@@ -434,10 +633,12 @@ function PurchasesPage() {
                       key={`${receiptId}:${index}`}
                       className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[minmax(0,1fr)_100px_130px_auto]"
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 space-y-1">
                         {item.name && (
                           <p className="mb-1 truncate text-[10px] text-muted-foreground">
-                            OCR: {item.name}
+                            {item.sku ? `${item.sku} · ` : ""}
+                            {item.name}
+                            {item.retail_price ? ` · Sell ${inr(item.retail_price)}` : ""}
                           </p>
                         )}
                         <SearchableSelect
@@ -453,7 +654,14 @@ function PurchasesPage() {
                                 return {
                                   ...row,
                                   product_id: productId === "unmatched" ? "" : productId,
-                                  ...(name ? { name } : {}),
+                                  ...(matchedProduct?.sku ? { sku: matchedProduct.sku } : {}),
+                                  ...(matchedProduct
+                                    ? {
+                                        retail_price: matchedProduct.sale_price,
+                                        uom: matchedProduct.uom_sale,
+                                        ...(name ? { name } : {}),
+                                      }
+                                    : {}),
                                 };
                               }),
                             )
@@ -474,6 +682,19 @@ function PurchasesPage() {
                             })),
                           ]}
                         />
+                        {!item.product_id && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            disabled={!warehouseId || working}
+                            onClick={() => setQuickAddIndex(index)}
+                          >
+                            <Plus className="mr-1 h-3 w-3" />
+                            Add new SKU
+                          </Button>
+                        )}
                       </div>
                       <Input
                         type="number"
@@ -552,17 +773,43 @@ function PurchasesPage() {
                 New
               </Button>
             </div>
-            {receipts
-              .slice()
-              .sort((a, b) => b.created_at.localeCompare(a.created_at))
-              .map((receipt) => (
-                <button
-                  key={receipt.id}
-                  onClick={() => openReceipt(receipt)}
-                  className={`w-full rounded-xl border p-3 text-left hover:bg-accent/40 ${receipt.id === receiptId ? "border-primary" : ""}`}
-                >
-                  <span className="flex items-center justify-between gap-2">
-                    <b className="truncate">{receipt.supplier_name || "Supplier"}</b>
+            <DataTable<LocalPurchaseReceipt>
+              rows={visibleReceipts}
+              getRowId={(receipt) => receipt.id}
+              resetKey={warehouses.map((warehouse) => warehouse.id).join(":")}
+              searchPlaceholder="Search supplier, invoice or status…"
+              emptyMessage={
+                receipts.length
+                  ? "No purchase receipts are assigned to these warehouses."
+                  : "No purchase receipts found on this device."
+              }
+              tableHeightClass="max-h-[55dvh]"
+              columns={[
+                {
+                  id: "supplier",
+                  header: "Supplier",
+                  accessor: (receipt) => receipt.supplier_name || "Supplier",
+                },
+                {
+                  id: "invoice",
+                  header: "Invoice",
+                  accessor: (receipt) => receipt.supplier_invoice_number,
+                },
+                {
+                  id: "date",
+                  header: "Date",
+                  accessor: (receipt) => receipt.invoice_date,
+                },
+                {
+                  id: "items",
+                  header: "Lines",
+                  accessor: (receipt) => receipt.items.length,
+                },
+                {
+                  id: "status",
+                  header: "Status",
+                  accessor: (receipt) => receipt.status,
+                  cell: (receipt) => (
                     <Badge
                       variant={
                         receipt.status === "RECEIVED"
@@ -574,20 +821,25 @@ function PurchasesPage() {
                     >
                       {receipt.status}
                     </Badge>
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {receipt.supplier_invoice_number} · {receipt.invoice_date}
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {receipt.items.length} item rows · {receipt.attachment_name ?? "manual entry"}
-                  </span>
-                </button>
-              ))}
-            {!receipts.length && (
-              <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                Drafts remain on this device until sync is available.
-              </p>
-            )}
+                  ),
+                },
+                {
+                  id: "open",
+                  header: "",
+                  accessor: () => "Open",
+                  sortable: false,
+                  cell: (receipt) => (
+                    <Button
+                      size="sm"
+                      variant={receipt.id === receiptId ? "default" : "outline"}
+                      onClick={() => openReceipt(receipt)}
+                    >
+                      Open
+                    </Button>
+                  ),
+                },
+              ]}
+            />
             {warehouses.length === 0 && (
               <div className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm">
                 <p>No active location is marked as a warehouse yet.</p>

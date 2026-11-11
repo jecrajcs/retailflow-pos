@@ -17,10 +17,12 @@ import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as ManagerRouteImport } from './routes/manager'
 import { Route as PurchasesRouteImport } from './routes/purchases'
 import { Route as SalesRouteImport } from './routes/sales'
+import { Route as ApiCashSessionOverrideRouteImport } from './routes/api/cash-session-override'
 import { Route as ApiPublicOverviewRouteImport } from './routes/api/public-overview'
 import { Route as ApiResolveSyncAlertRouteImport } from './routes/api/resolve-sync-alert'
 import { Route as ApiRetailSnapshotRouteImport } from './routes/api/retail-snapshot'
 import { Route as ApiRetailSyncRouteImport } from './routes/api/retail-sync'
+import { Route as ApiRetailWorkbookImportRouteImport } from './routes/api/retail-workbook-import'
 import { Route as ApiStaffRouteImport } from './routes/api/staff'
 import { Route as ApiStaffPasswordRouteImport } from './routes/api/staff-password'
 import { Route as ApiStaffSessionRouteImport } from './routes/api/staff-session'
@@ -67,6 +69,11 @@ const SalesRoute = SalesRouteImport.update({
   path: '/sales',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiCashSessionOverrideRoute = ApiCashSessionOverrideRouteImport.update({
+  id: '/api/cash-session-override',
+  path: '/api/cash-session-override',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicOverviewRoute = ApiPublicOverviewRouteImport.update({
   id: '/api/public-overview',
   path: '/api/public-overview',
@@ -85,6 +92,11 @@ const ApiRetailSnapshotRoute = ApiRetailSnapshotRouteImport.update({
 const ApiRetailSyncRoute = ApiRetailSyncRouteImport.update({
   id: '/api/retail-sync',
   path: '/api/retail-sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRetailWorkbookImportRoute = ApiRetailWorkbookImportRouteImport.update({
+  id: '/api/retail-workbook-import',
+  path: '/api/retail-workbook-import',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiStaffRoute = ApiStaffRouteImport.update({
@@ -122,10 +134,12 @@ export interface FileRoutesByFullPath {
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
   '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
@@ -141,10 +155,12 @@ export interface FileRoutesByTo {
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
   '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
@@ -161,10 +177,12 @@ export interface FileRoutesById {
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
   '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
@@ -182,10 +200,12 @@ export interface FileRouteTypes {
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/api/cash-session-override'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
     | '/api/retail-sync'
+    | '/api/retail-workbook-import'
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
@@ -201,10 +221,12 @@ export interface FileRouteTypes {
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/api/cash-session-override'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
     | '/api/retail-sync'
+    | '/api/retail-workbook-import'
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
@@ -220,10 +242,12 @@ export interface FileRouteTypes {
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/api/cash-session-override'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
     | '/api/retail-sync'
+    | '/api/retail-workbook-import'
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
@@ -240,10 +264,12 @@ export interface RootRouteChildren {
   ManagerRoute: typeof ManagerRoute
   PurchasesRoute: typeof PurchasesRoute
   SalesRoute: typeof SalesRoute
+  ApiCashSessionOverrideRoute: typeof ApiCashSessionOverrideRoute
   ApiPublicOverviewRoute: typeof ApiPublicOverviewRoute
   ApiResolveSyncAlertRoute: typeof ApiResolveSyncAlertRoute
   ApiRetailSnapshotRoute: typeof ApiRetailSnapshotRoute
   ApiRetailSyncRoute: typeof ApiRetailSyncRoute
+  ApiRetailWorkbookImportRoute: typeof ApiRetailWorkbookImportRoute
   ApiStaffRoute: typeof ApiStaffRoute
   ApiStaffPasswordRoute: typeof ApiStaffPasswordRoute
   ApiStaffSessionRoute: typeof ApiStaffSessionRoute
@@ -309,6 +335,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SalesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/cash-session-override': {
+      id: '/api/cash-session-override'
+      path: '/api/cash-session-override'
+      fullPath: '/api/cash-session-override'
+      preLoaderRoute: typeof ApiCashSessionOverrideRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public-overview': {
       id: '/api/public-overview'
       path: '/api/public-overview'
@@ -335,6 +368,13 @@ declare module '@tanstack/react-router' {
       path: '/api/retail-sync'
       fullPath: '/api/retail-sync'
       preLoaderRoute: typeof ApiRetailSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/retail-workbook-import': {
+      id: '/api/retail-workbook-import'
+      path: '/api/retail-workbook-import'
+      fullPath: '/api/retail-workbook-import'
+      preLoaderRoute: typeof ApiRetailWorkbookImportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/staff': {
@@ -384,10 +424,12 @@ const rootRouteChildren: RootRouteChildren = {
   ManagerRoute: ManagerRoute,
   PurchasesRoute: PurchasesRoute,
   SalesRoute: SalesRoute,
+  ApiCashSessionOverrideRoute: ApiCashSessionOverrideRoute,
   ApiPublicOverviewRoute: ApiPublicOverviewRoute,
   ApiResolveSyncAlertRoute: ApiResolveSyncAlertRoute,
   ApiRetailSnapshotRoute: ApiRetailSnapshotRoute,
   ApiRetailSyncRoute: ApiRetailSyncRoute,
+  ApiRetailWorkbookImportRoute: ApiRetailWorkbookImportRoute,
   ApiStaffRoute: ApiStaffRoute,
   ApiStaffPasswordRoute: ApiStaffPasswordRoute,
   ApiStaffSessionRoute: ApiStaffSessionRoute,

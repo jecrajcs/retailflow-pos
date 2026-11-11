@@ -13,17 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BarcodePreview } from "@/components/pos/barcode-preview";
-import {
-  CATEGORIES,
-  UOMS,
-  barcodeForSku,
-  categoryIcon,
-  parsePriceTiers,
-  generateSku,
-  inr,
-  quickAddProduct,
-  type Product,
-} from "@/lib/pos";
+import { UOMS, barcodeForSku, generateSku, inr, quickAddProduct, type Product } from "@/lib/pos";
 import { userFacingError } from "@/lib/retail-api";
 
 export function QuickAddModal({
@@ -31,7 +21,12 @@ export function QuickAddModal({
   onOpenChange,
   locationId,
   prefill,
+  prefillSku,
+  prefillRetailPrice,
+  prefillPurchaseCost,
+  prefillUom,
   managerMode = false,
+  context = "pos",
   onAdded,
 }: {
   open: boolean;
@@ -39,21 +34,19 @@ export function QuickAddModal({
   locationId: string;
   /** Text typed/scanned in the billing search box that found no product. */
   prefill?: string;
+  prefillSku?: string;
+  prefillRetailPrice?: number;
+  prefillPurchaseCost?: number;
+  prefillUom?: string;
   managerMode?: boolean;
+  context?: "pos" | "purchase";
   onAdded: (product: Product) => void;
 }) {
   const [sku, setSku] = useState("");
   const [name, setName] = useState("");
   const [barcode, setBarcode] = useState("");
-  const [variant, setVariant] = useState("");
-  const [category, setCategory] = useState("");
-  const [rack, setRack] = useState("");
   const [uom, setUom] = useState("Pcs");
   const [salePrice, setSalePrice] = useState("");
-  const [priceTiers, setPriceTiers] = useState("");
-  const [minSalePrice, setMinSalePrice] = useState("");
-  const [purchaseCost, setPurchaseCost] = useState("");
-  const [mrp, setMrp] = useState("");
   const [openingQty, setOpeningQty] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -64,18 +57,12 @@ export function QuickAddModal({
       const isNumeric = /^\d{4,}$/.test(text);
       setName(isNumeric ? "" : text);
       setBarcode(isNumeric ? text : "");
-      setVariant("");
-      setCategory("");
-      setRack("");
-      setUom("Pcs");
-      setSalePrice("");
-      setPriceTiers("");
-      setMinSalePrice("");
-      setPurchaseCost("");
-      setMrp("");
+      if (prefillSku?.trim()) setSku(prefillSku.trim());
+      setUom(prefillUom?.trim() || "Pcs");
+      setSalePrice(prefillRetailPrice && prefillRetailPrice > 0 ? String(prefillRetailPrice) : "");
       setOpeningQty("");
       setBusy(false);
-      if (open)
+      if (open && !prefillSku?.trim())
         generateSku()
           .then((generatedSku) => {
             setSku(generatedSku);
@@ -83,36 +70,42 @@ export function QuickAddModal({
           })
           .catch(() => setSku(""));
     }
-  }, [open, prefill]);
+  }, [open, prefill, prefillSku, prefillRetailPrice, prefillPurchaseCost, prefillUom]);
 
-  const minPriceNum = Number(minSalePrice) || 0;
   const saleNum = Number(salePrice) || 0;
 
   async function handleSave() {
-    if (!sku || !name.trim() || !salePrice || busy) return;
+    if (
+      !sku ||
+      !name.trim() ||
+      !(saleNum > 0) ||
+      (context === "pos" && !(Number(openingQty) > 0)) ||
+      busy
+    )
+      return;
     setBusy(true);
     try {
       const product = await quickAddProduct({
         name: name.trim(),
         sku,
         barcode: barcode.trim() || null,
-        variant: variant.trim() || null,
-        category: category.trim() || null,
-        rackLocation: rack.trim() || null,
+        variant: null,
+        category: null,
+        rackLocation: null,
         salePrice: saleNum,
-        minSalePrice: Math.min(minPriceNum, saleNum),
-        priceTiers: managerMode ? parsePriceTiers(priceTiers) : [],
-        purchaseCost: Number(purchaseCost) || 0,
-        mrp: Number(mrp) || saleNum,
+        minSalePrice: 0,
+        priceTiers: [],
+        purchaseCost: Number(prefillPurchaseCost) || 0,
+        mrp: 0,
         uom,
         locationId,
-        openingQty: Number(openingQty) || 0,
+        openingQty: context === "pos" ? Number(openingQty) || 0 : 0,
         cashierQuickAdd: !managerMode,
       });
       onAdded(product);
       onOpenChange(false);
       toast.success(`${product.name} added — ${sku}`, {
-        description: `Rack ${product.rack_location ?? "—"} · ${inr(saleNum)}/${uom} · Catalog details flagged PENDING for the Manager queue.`,
+        description: `${inr(saleNum)}/${uom} · Catalog details are ready for Manager review.`,
       });
     } catch (e) {
       toast.error("Could not save item", {
@@ -131,8 +124,9 @@ export function QuickAddModal({
             <Zap className="h-4 w-4 text-warning" /> Quick add item
           </DialogTitle>
           <DialogDescription>
-            SKU khud generate ho gaya hai — naam, barcode aur rate bharein aur <Kbd>Enter</Kbd>{" "}
-            dabaein. Baaki details baad mein Manager ke Catalog Queue se complete honge.
+            {context === "purchase"
+              ? "Add the missing SKU with its item name, retail price, and sale unit. The invoice quantity will be added when the receipt is received."
+              : "Enter the item name, retail price, sale unit, and quantity available. Managers can complete the remaining catalog details later."}
           </DialogDescription>
         </DialogHeader>
 
@@ -169,54 +163,10 @@ export function QuickAddModal({
           {sku && (
             <div className="space-y-1">
               <Label>Scannable Code 128 barcode · auto-generated from SKU</Label>
-              <BarcodePreview
-                value={barcode || barcodeForSku(sku)}
-                caption={[name, variant].filter(Boolean).join(" · ") || sku}
-              />
+              <BarcodePreview value={barcode || barcodeForSku(sku)} caption={name || sku} />
             </div>
           )}
-
-          {managerMode && (
-            <div className="grid grid-cols-3 gap-2">
-              <div className="space-y-1">
-                <Label htmlFor="qa-variant">Variant</Label>
-                <Input
-                  id="qa-variant"
-                  value={variant}
-                  onChange={(e) => setVariant(e.target.value)}
-                  placeholder="50g, 100ml…"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="qa-category">Category</Label>
-                <Input
-                  id="qa-category"
-                  list="qa-category-list"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  placeholder="Snacks, FMCG…"
-                />
-                <datalist id="qa-category-list">
-                  {CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {categoryIcon(c)} {c}
-                    </option>
-                  ))}
-                </datalist>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="qa-rack">Rack location</Label>
-                <Input
-                  id="qa-rack"
-                  value={rack}
-                  onChange={(e) => setRack(e.target.value)}
-                  placeholder="Rack S1"
-                />
-              </div>
-            </div>
-          )}
-
-          <div className={`grid gap-2 ${managerMode ? "grid-cols-4" : "grid-cols-2"}`}>
+          <div className="grid gap-2 sm:grid-cols-2">
             <div className="space-y-1">
               <Label>UOM</Label>
               <SearchableSelect
@@ -226,92 +176,47 @@ export function QuickAddModal({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="qa-price">Sell price *</Label>
+              <Label htmlFor="qa-price">Retail sell price *</Label>
               <Input
                 id="qa-price"
                 type="number"
                 value={salePrice}
                 onChange={(e) => {
                   setSalePrice(e.target.value);
-                  const v = Number(e.target.value) || 0;
-                  if (minPriceNum > v) setMinSalePrice(String(v));
                 }}
                 placeholder="0"
               />
             </div>
-            {managerMode && (
-              <div className="space-y-1">
-                <Label htmlFor="qa-min-price">Min allowed rate</Label>
-                <Input
-                  id="qa-min-price"
-                  type="number"
-                  value={minSalePrice}
-                  onChange={(e) => setMinSalePrice(e.target.value)}
-                  placeholder="Floor price"
-                />
-              </div>
-            )}
-            {managerMode && (
-              <div className="space-y-1">
-                <Label htmlFor="qa-mrp">MRP</Label>
-                <Input
-                  id="qa-mrp"
-                  type="number"
-                  value={mrp}
-                  onChange={(e) => setMrp(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-            )}
           </div>
-
-          {managerMode && (
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label htmlFor="qa-cost">Cost price</Label>
-                <Input
-                  id="qa-cost"
-                  type="number"
-                  value={purchaseCost}
-                  onChange={(e) => setPurchaseCost(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="qa-qty">Opening qty at this store</Label>
-                <Input
-                  id="qa-qty"
-                  type="number"
-                  value={openingQty}
-                  onChange={(e) => setOpeningQty(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-            </div>
-          )}
-
-          {managerMode && (
+          {context === "pos" && (
             <div className="space-y-1">
-              <Label htmlFor="qa-price-tiers">Quantity pricing (minimum quantity:unit price)</Label>
+              <Label htmlFor="qa-qty">Quantity available *</Label>
               <Input
-                id="qa-price-tiers"
-                value={priceTiers}
-                onChange={(event) => setPriceTiers(event.target.value)}
-                placeholder="6:68, 12:64"
+                id="qa-qty"
+                type="number"
+                min="0.001"
+                step="any"
+                value={openingQty}
+                onChange={(e) => setOpeningQty(e.target.value)}
+                placeholder="0"
+                required
               />
-              <p className="text-xs text-muted-foreground">
-                Optional wholesale breaks. Retail applies below each minimum quantity; prices must
-                respect the floor price.
-              </p>
             </div>
           )}
 
           <Button
             className="w-full"
             onClick={handleSave}
-            disabled={!sku || !name.trim() || !salePrice || busy}
+            disabled={
+              !sku ||
+              !name.trim() ||
+              !(saleNum > 0) ||
+              (context === "pos" && !(Number(openingQty) > 0)) ||
+              busy
+            }
           >
-            Save & add to bill{salePrice ? ` — ${inr(saleNum)}/${uom}` : ""}
+            {managerMode ? "Save item" : "Add item to bill"}
+            {salePrice ? ` — ${inr(saleNum)}/${uom}` : ""}
           </Button>
         </div>
       </DialogContent>

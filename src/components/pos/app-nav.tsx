@@ -193,7 +193,7 @@ function guideFor(route: string) {
   const guides: Record<string, string[]> = {
     "/": [
       "Check today’s saved sales, outstanding balances, low stock and sync status.",
-      "Use New bill to start billing for an assigned outlet.",
+      "Open Billing to scan items for an assigned outlet.",
       "Sync now sends queued operations when the network is available.",
     ],
     "/admin": [
@@ -202,9 +202,9 @@ function guideFor(route: string) {
       "Use the network-wide inventory, sales and operations links to review all active locations.",
     ],
     "/billing": [
-      "Select the outlet and choose a customer or Walk-in before scanning.",
+      "Select the outlet. The bill starts as Walk-in; use customer search when needed.",
       "Scan or type a name/SKU; use arrow keys and Enter to select. F2 adds an unknown barcode.",
-      "Use the bill tabs to hold and switch customers. Pay saves the completed sale locally.",
+      "Pay completes the bill and starts the next one automatically.",
     ],
     "/sales": [
       "Search by bill, customer or phone; narrow the register by date, outlet or payment status.",

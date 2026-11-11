@@ -11,26 +11,18 @@ import {
   UserRoundCog,
   Zap,
   CircleAlert,
-  Copy,
-  UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
+import { WorkbookImporter } from "@/components/pos/workbook-importer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { StaffAccessPanel } from "@/components/pos/staff-access-panel";
@@ -183,7 +175,7 @@ function ManagerPage() {
 
   if (profile?.role !== "MANAGER")
     return (
-      <div className="flex min-h-dvh flex-col bg-background">
+      <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
         <AppNav active="/manager" />
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
           <h1 className="text-lg font-semibold">
@@ -204,7 +196,7 @@ function ManagerPage() {
     );
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/manager" />
       <div className="flex items-center gap-2 border-b bg-card px-3 py-2">
         <SearchableSelect
@@ -223,7 +215,7 @@ function ManagerPage() {
         />
       </div>
 
-      <main className="mx-auto w-full max-w-[1200px] flex-1 p-3">
+      <main className="mx-auto min-h-0 w-full max-w-[1200px] flex-1 overflow-y-auto p-3">
         <Tabs defaultValue="enrichment">
           <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="enrichment" className="gap-1.5">
@@ -270,84 +262,87 @@ function ManagerPage() {
               defaultFromId={allowedLocations.find((l) => l.type === "WAREHOUSE")?.id ?? ""}
               onCreated={() => void queryClient.invalidateQueries({ queryKey: ["transfers"] })}
             />
-            <section className="rounded-lg border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Route</TableHead>
-                    <TableHead>Items</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {transfers.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">
-                        No transfers yet. POS indents land here.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {transfers.map((t) => {
-                    const items = transferItems.filter((i) => i.transfer_id === t.id);
-                    return (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-xs">
-                          {new Date(t.created_at).toLocaleString("en-IN", {
-                            dateStyle: "short",
-                            timeStyle: "short",
-                          })}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {locName(t.from_location_id)} → {locName(t.to_location_id)}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {items
-                            .map((i) => `${i.products?.name ?? "?"} ×${i.quantity}`)
-                            .join(", ") || "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
+            <DataTable
+              rows={transfers}
+              getRowId={(row) => row.id}
+              searchPlaceholder="Search transfers…"
+              emptyMessage="No transfers recorded."
+              columns={[
+                {
+                  id: "created",
+                  header: "Created",
+                  accessor: (row) => row.created_at,
+                  cell: (row) =>
+                    new Date(row.created_at).toLocaleString("en-IN", {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    }),
+                },
+                {
+                  id: "route",
+                  header: "Route",
+                  accessor: (row) =>
+                    `${locName(row.from_location_id)} → ${locName(row.to_location_id)}`,
+                },
+                {
+                  id: "items",
+                  header: "Items",
+                  accessor: (row) =>
+                    transferItems
+                      .filter((item) => item.transfer_id === row.id)
+                      .map((item) => `${item.products?.name ?? "?"} ×${item.quantity}`)
+                      .join(", "),
+                },
+                {
+                  id: "status",
+                  header: "Status",
+                  accessor: (row) => row.status,
+                  cell: (row) => (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        row.status === "REQUESTED" && "border-amber-500/50 text-amber-600",
+                        row.status === "IN_TRANSIT" && "border-blue-500/50 text-blue-600",
+                        row.status === "RECEIVED" && "border-success/50 text-success",
+                      )}
+                    >
+                      {row.status}
+                    </Badge>
+                  ),
+                },
+                {
+                  id: "action",
+                  header: "Action",
+                  accessor: (row) => row.status,
+                  sortable: false,
+                  cell: (row) => (
+                    <div className="flex gap-1">
+                      {row.status === "REQUESTED" &&
+                        canAccessLocation(profile, row.from_location_id) && (
+                          <Button
+                            size="sm"
                             variant="outline"
-                            className={cn(
-                              t.status === "REQUESTED" && "border-amber-500/50 text-amber-600",
-                              t.status === "IN_TRANSIT" && "border-blue-500/50 text-blue-600",
-                              t.status === "RECEIVED" && "border-success/50 text-success",
-                            )}
+                            disabled={statusMut.isPending}
+                            onClick={() => statusMut.mutate({ id: row.id, action: "dispatch" })}
                           >
-                            {t.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {t.status === "REQUESTED" &&
-                            canAccessLocation(profile, t.from_location_id) && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={statusMut.isPending}
-                                onClick={() => statusMut.mutate({ id: t.id, action: "dispatch" })}
-                              >
-                                Dispatch
-                              </Button>
-                            )}
-                          {t.status === "IN_TRANSIT" &&
-                            canAccessLocation(profile, t.to_location_id) && (
-                              <Button
-                                size="sm"
-                                disabled={statusMut.isPending}
-                                onClick={() => statusMut.mutate({ id: t.id, action: "receive" })}
-                              >
-                                Receive
-                              </Button>
-                            )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </section>
+                            Dispatch
+                          </Button>
+                        )}
+                      {row.status === "IN_TRANSIT" &&
+                        canAccessLocation(profile, row.to_location_id) && (
+                          <Button
+                            size="sm"
+                            disabled={statusMut.isPending}
+                            onClick={() => statusMut.mutate({ id: row.id, action: "receive" })}
+                          >
+                            Receive
+                          </Button>
+                        )}
+                    </div>
+                  ),
+                },
+              ]}
+            />
           </TabsContent>
 
           <TabsContent value="writeoffs" className="mt-3 space-y-3">
@@ -362,52 +357,51 @@ function ManagerPage() {
               Total cost loss in last {adjustments.length} write-offs:{" "}
               <b className="text-destructive">{inr(totalLoss)}</b>
             </div>
-            <section className="rounded-lg border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>When</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Qty</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead>Returnable</TableHead>
-                    <TableHead className="text-right">Cost loss</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {adjustments.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground">
-                        No write-offs recorded.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {adjustments.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="text-xs">
-                        {new Date(a.created_at).toLocaleString("en-IN", {
-                          dateStyle: "short",
-                          timeStyle: "short",
-                        })}
-                      </TableCell>
-                      <TableCell>{a.products?.name ?? "—"}</TableCell>
-                      <TableCell className="text-xs">{a.locations?.name ?? "—"}</TableCell>
-                      <TableCell className="tabular-nums">{a.quantity}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{a.reason}</Badge>
-                      </TableCell>
-                      <TableCell>{a.returnable_to_vendor ? "Yes" : "No"}</TableCell>
-                      <TableCell className="text-right tabular-nums text-destructive">
-                        {inr(a.cost_loss)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </section>
+            <DataTable<AdjustmentRow>
+              rows={adjustments}
+              getRowId={(row) => row.id}
+              searchPlaceholder="Search adjustments…"
+              emptyMessage="No stock adjustments recorded."
+              columns={[
+                {
+                  id: "when",
+                  header: "When",
+                  accessor: (row) => row.created_at,
+                  cell: (row) =>
+                    new Date(row.created_at).toLocaleString("en-IN", {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    }),
+                },
+                { id: "product", header: "Product", accessor: (row) => row.products?.name ?? "—" },
+                {
+                  id: "location",
+                  header: "Location",
+                  accessor: (row) => row.locations?.name ?? "—",
+                },
+                { id: "quantity", header: "Qty", accessor: (row) => row.quantity },
+                {
+                  id: "reason",
+                  header: "Reason",
+                  accessor: (row) => row.reason,
+                  cell: (row) => <Badge variant="outline">{row.reason}</Badge>,
+                },
+                {
+                  id: "returnable",
+                  header: "Returnable",
+                  accessor: (row) => (row.returnable_to_vendor ? "Yes" : "No"),
+                },
+                {
+                  id: "cost",
+                  header: "Cost loss",
+                  accessor: (row) => row.cost_loss,
+                  cell: (row) => <span className="text-destructive">{inr(row.cost_loss)}</span>,
+                },
+              ]}
+            />
           </TabsContent>
-          <TabsContent value="spreadsheets" className="mt-3">
+          <TabsContent value="spreadsheets" className="mt-3 space-y-4">
+            <WorkbookImporter locations={allowedLocations} />
             <SpreadsheetTools
               products={products}
               locations={allowedLocations}
@@ -497,377 +491,51 @@ function SyncAlertList({
           reconciled their local snapshots.
         </p>
       </div>
-      {activeAlerts.map((alert) => (
-        <article
-          key={alert.id}
-          className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-warning/40 bg-warning/5 p-3"
-        >
-          <div className="flex gap-2">
-            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-            <div>
-              <p className="font-medium">
-                {products.find((product) => product.id === alert.product_id)?.name ??
-                  "Unknown product"}{" "}
-                ·{" "}
-                {locations.find((location) => location.id === alert.location_id)?.name ??
-                  "Location"}
-              </p>
-              <p className="text-sm text-muted-foreground">{alert.message}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Resulting server stock: {alert.resulting_quantity} ·{" "}
-                {new Date(alert.created_at).toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="destructive">Review needed</Badge>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!online}
-              onClick={() => void resolve(alert.id)}
-            >
-              Mark reviewed
-            </Button>
-          </div>
-        </article>
-      ))}
-      {!activeAlerts.length && (
-        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-          No unresolved stock sync alerts.
-        </p>
-      )}
-    </section>
-  );
-}
-
-type ManagedStaff = {
-  user_id: string;
-  display_name: string;
-  email: string | null;
-  phone: string | null;
-  role: "CASHIER" | "MANAGER" | "ADMIN";
-  is_active: boolean;
-  location_ids: string[];
-  has_login: boolean;
-};
-
-export function AdminStaffAccess({
-  locations,
-}: {
-  locations: Array<{ id: string; name: string; code: string }>;
-}) {
-  const { online, profile } = useAccess();
-  const [staff, setStaff] = useState<ManagedStaff[]>([]);
-  const [userId, setUserId] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [role, setRole] = useState<ManagedStaff["role"]>("CASHIER");
-  const [locationIds, setLocationIds] = useState<string[]>([]);
-  const [active, setActive] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [newCredential, setNewCredential] = useState<{
-    user_id: string;
-    login: string;
-    temporary_password: string;
-  } | null>(null);
-
-  const loadStaff = useCallback(async () => {
-    if (!online) return;
-    setLoading(true);
-    try {
-      const { staff: members } = await retailApi<{ staff: ManagedStaff[] }>("/api/staff");
-      setStaff(members);
-    } catch (error) {
-      toast.error("Could not load staff access", {
-        description: userFacingError(error, "Refresh staff access and try again."),
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [online]);
-
-  useEffect(() => {
-    void loadStaff();
-  }, [loadStaff]);
-
-  function editMember(member: ManagedStaff) {
-    setNewCredential(null);
-    setUserId(member.user_id);
-    setDisplayName(member.display_name);
-    setEmail(member.email ?? "");
-    setPhone(member.phone ?? "");
-    setRole(member.role);
-    setLocationIds(member.location_ids);
-    setActive(member.is_active);
-  }
-
-  function startNew() {
-    setNewCredential(null);
-    setUserId("");
-    setDisplayName("");
-    setEmail("");
-    setPhone("");
-    setRole("CASHIER");
-    setLocationIds([]);
-    setActive(true);
-  }
-
-  async function saveMember(resetPassword = false) {
-    const normalizedId = userId.trim();
-    if (!displayName.trim()) {
-      toast.error("Enter a staff display name.");
-      return;
-    }
-    if (role !== "ADMIN" && locationIds.length === 0) {
-      toast.error("Assign at least one location to this staff member.");
-      return;
-    }
-    if (!normalizedId && !email.trim() && !phone.trim()) {
-      toast.error("Enter an email address or mobile number for sign-in.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const result = await retailApi<{
-        user_id: string;
-        login: string | null;
-        temporary_password?: string;
-      }>("/api/staff", {
-        method: "POST",
-        json: {
-          user_id: normalizedId || null,
-          display_name: displayName.trim(),
-          email: email.trim() || null,
-          phone: phone.trim() || null,
-          role,
-          location_ids: locationIds,
-          is_active: active,
-          reset_password: resetPassword,
-        },
-      });
-      if (result.temporary_password) {
-        setNewCredential({
-          user_id: result.user_id,
-          login: result.login ?? (email.trim() || phone.trim()),
-          temporary_password: result.temporary_password,
-        });
-      }
-      toast.success(
-        resetPassword
-          ? "Temporary password created; the staff member must change it at sign-in"
-          : normalizedId
-            ? "Staff role and location access saved"
-            : "Staff login created and activated",
-      );
-      if (resetPassword && result.user_id === profile?.user_id) {
-        window.dispatchEvent(new CustomEvent("retailflow:session-change"));
-        return;
-      }
-      setUserId(result.user_id);
-      await loadStaff();
-    } catch (error) {
-      toast.error("Could not save staff access", {
-        description: userFacingError(error, "Check the staff details and try again."),
-      });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (profile?.role !== "ADMIN") return null;
-  return (
-    <section className="space-y-4">
-      <div className="rounded-xl border bg-primary/5 p-4">
-        <h2 className="flex items-center gap-2 font-semibold">
-          <UserPlus className="h-4 w-4" /> Staff login setup
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Staff credentials and sessions are managed by RetailFlow. Create accounts here with an
-          email and/or mobile number. A temporary password appears once and must be changed at first
-          sign-in; it is never stored in the staff profile.
-        </p>
-      </div>
-      {newCredential && (
-        <div className="space-y-2 rounded-xl border border-primary/40 bg-primary/5 p-4 text-sm">
-          <div className="flex items-center justify-between gap-2">
-            <strong>One-time login credentials — share securely now</strong>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                void navigator.clipboard.writeText(
-                  `Login: ${newCredential.login}\nTemporary password: ${newCredential.temporary_password}`,
-                )
-              }
-            >
-              <Copy className="mr-1 h-3.5 w-3.5" /> Copy
-            </Button>
-          </div>
-          <p>
-            Login: <span className="font-mono">{newCredential.login}</span>
-          </p>
-          <p>
-            Temporary password:{" "}
-            <span className="font-mono font-semibold">{newCredential.temporary_password}</span>
-          </p>
-          <p className="text-xs text-muted-foreground">
-            This password is shown only in this creation screen. The new user must change it before
-            RetailFlow opens.
-          </p>
-        </div>
-      )}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.75fr)]">
-        <div className="space-y-3 rounded-xl border bg-card p-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">{userId ? "Edit staff access" : "Create staff login"}</h3>
-            <Button variant="outline" size="sm" onClick={startNew}>
-              New assignment
-            </Button>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Display name">
-              <Input
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Cashier name"
-              />
-            </Field>
-            {!userId && (
-              <>
-                <Field label="Email (optional if mobile is given)">
-                  <Input
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="cashier@example.com"
-                  />
-                </Field>
-                <Field label="Mobile number (optional if email is given)">
-                  <Input
-                    type="tel"
-                    autoComplete="tel"
-                    value={phone}
-                    onChange={(event) => setPhone(event.target.value)}
-                    placeholder="+91 98765 43210"
-                  />
-                </Field>
-              </>
-            )}
-            <Field label="Role">
-              <SearchableSelect
-                value={role}
-                onValueChange={(value) => setRole(value as ManagedStaff["role"])}
-                options={[
-                  { value: "CASHIER", label: "Cashier" },
-                  { value: "MANAGER", label: "Manager" },
-                  { value: "ADMIN", label: "Admin / Owner" },
-                ]}
-              />
-            </Field>
-            {userId && (
-              <label className="flex items-center gap-2 self-end rounded-lg border p-3 text-sm">
-                <Checkbox
-                  checked={active}
-                  onCheckedChange={(checked) => setActive(checked === true)}
-                />{" "}
-                Active sign-in
-              </label>
-            )}
-          </div>
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Assigned locations</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {locations.map((location) => (
-                <label
-                  key={location.id}
-                  className="flex items-center gap-2 rounded-lg border p-2 text-sm"
-                >
-                  <Checkbox
-                    checked={locationIds.includes(location.id)}
-                    onCheckedChange={(checked) =>
-                      setLocationIds((current) =>
-                        checked === true
-                          ? [...new Set([...current, location.id])]
-                          : current.filter((id) => id !== location.id),
-                      )
-                    }
-                  />
-                  {location.name}
-                  <span className="ml-auto text-xs text-muted-foreground">{location.code}</span>
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Admins can access all locations. Cashiers and Managers see only their assignments.
-            </p>
-          </div>
-          <Button onClick={() => void saveMember()} disabled={!online || saving}>
-            {saving ? "Saving…" : userId ? "Update staff access" : "Create active login"}
-          </Button>
-          {userId && (
-            <Button
-              variant="outline"
-              onClick={() => void saveMember(true)}
-              disabled={!online || saving}
-            >
-              {saving ? "Working…" : "Reset staff password"}
-            </Button>
-          )}
-          {!online && (
-            <p className="text-xs text-warning">
-              Staff permissions require an online Admin sync. POS sales remain available offline.
-            </p>
-          )}
-        </div>
-        <div className="space-y-2 rounded-xl border bg-card p-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">Current staff</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void loadStaff()}
-              disabled={!online || loading}
-            >
-              {loading ? "Loading…" : "Refresh"}
-            </Button>
-          </div>
-          {staff.map((member) => (
-            <button
-              key={member.user_id}
-              onClick={() => editMember(member)}
-              className="w-full rounded-lg border p-3 text-left hover:bg-accent/40"
-            >
-              <span className="flex items-center justify-between gap-2">
-                <b>{member.display_name}</b>
-                <Badge variant={member.is_active ? "outline" : "destructive"}>
-                  {member.is_active ? member.role : "INACTIVE"}
-                </Badge>
-              </span>
-              <span className="mt-1 block break-all text-xs text-muted-foreground">
-                {member.email ?? member.phone ?? member.user_id}
-              </span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                {member.role === "ADMIN"
-                  ? "All locations"
-                  : member.location_ids
-                      .map((id) => locations.find((location) => location.id === id)?.name ?? id)
-                      .join(", ") || "No assigned locations"}
-              </span>
-            </button>
-          ))}
-          {!staff.length && (
-            <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-              {online
-                ? "No staff profile assignments found. Bootstrap the first Admin using the setup guide."
-                : "Staff list is not available offline."}
-            </p>
-          )}
-        </div>
-      </div>
+      <DataTable
+        rows={activeAlerts}
+        getRowId={(alert) => alert.id}
+        searchPlaceholder="Search product, location or discrepancy…"
+        emptyMessage="No unresolved stock sync alerts."
+        columns={[
+          {
+            id: "product",
+            header: "Product",
+            accessor: (alert) =>
+              products.find((product) => product.id === alert.product_id)?.name ??
+              "Unknown product",
+          },
+          {
+            id: "location",
+            header: "Location",
+            accessor: (alert) =>
+              locations.find((location) => location.id === alert.location_id)?.name ?? "Location",
+          },
+          { id: "issue", header: "Discrepancy", accessor: (alert) => alert.message },
+          { id: "stock", header: "Server stock", accessor: (alert) => alert.resulting_quantity },
+          {
+            id: "created",
+            header: "Reported",
+            accessor: (alert) => alert.created_at,
+            cell: (alert) => new Date(alert.created_at).toLocaleString(),
+          },
+          {
+            id: "action",
+            header: "",
+            accessor: () => "Review",
+            sortable: false,
+            cell: (alert) => (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!online}
+                onClick={() => void resolve(alert.id)}
+              >
+                Mark reviewed
+              </Button>
+            ),
+          },
+        ]}
+      />
     </section>
   );
 }
@@ -906,7 +574,7 @@ function SpreadsheetTools({
         mrp: 75,
         sale_price: 70,
         min_sale_price: 60,
-        price_tiers: "6:68, 12:64",
+        price_tiers: "Small:6:68; Medium:12:64",
         min_stock: 5,
         uom_purchase: "Pcs",
         uom_stock: "Pcs",
@@ -1321,39 +989,27 @@ function SpreadsheetTools({
               ))}
             </div>
           )}
-          <div className="max-h-48 overflow-auto rounded-lg border bg-background">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-muted">
-                <tr>
-                  <th className="px-2 py-1 text-left">Row</th>
-                  {Object.keys(previewRows[0] ?? {})
-                    .slice(0, 6)
-                    .map((key) => (
-                      <th className="px-2 py-1 text-left" key={key}>
-                        {key}
-                      </th>
-                    ))}
-                </tr>
-              </thead>
-              <tbody>
-                {previewRows.slice(0, 20).map((row, index) => (
-                  <tr key={index} className="border-t">
-                    <td className="px-2 py-1">{index + 2}</td>
-                    {Object.keys(previewRows[0] ?? {})
-                      .slice(0, 6)
-                      .map((key) => (
-                        <td className="max-w-48 truncate px-2 py-1" key={key}>
-                          {String(row[key] ?? "")}
-                        </td>
-                      ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {previewRows.length > 20 && (
-              <p className="p-2 text-center text-muted-foreground">Showing the first 20 rows.</p>
-            )}
-          </div>
+          <DataTable<Record<string, unknown>>
+            rows={previewRows.map((row, index) => ({ ...row, __preview_row: index + 2 }))}
+            getRowId={(row) => String(row["__preview_row"])}
+            searchPlaceholder="Search preview rows…"
+            emptyMessage="No preview rows match this search."
+            tableHeightClass="max-h-48"
+            columns={[
+              {
+                id: "row",
+                header: "Row",
+                accessor: (row) => Number(row["__preview_row"] ?? 0),
+              },
+              ...Object.keys(previewRows[0] ?? {})
+                .slice(0, 6)
+                .map((key) => ({
+                  id: key,
+                  header: key,
+                  accessor: (row: Record<string, unknown>) => row[key] ?? "",
+                })),
+            ]}
+          />
         </div>
       )}
       <div className="flex flex-wrap gap-2 border-t pt-4">
@@ -1388,17 +1044,15 @@ function CustomerManagement({
     outstanding_balance: number;
     age_group: string | null;
     gender: string | null;
+    visits?: number;
+    segment?: string | null;
   }>;
 }) {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
   const [drafts, setDrafts] = useState<
     Record<string, { name?: string; mobile?: string; credit_limit?: string }>
   >({});
   const [savingId, setSavingId] = useState<string | null>(null);
-  const filtered = customers
-    .filter((customer) => matchesSearchFields([customer.name, customer.mobile], search))
-    .slice(0, 100);
 
   async function save(customer: (typeof customers)[number]) {
     const patch = drafts[customer.id];
@@ -1436,58 +1090,93 @@ function CustomerManagement({
           Phone numbers may be shared by family members; profile balances remain member-specific.
         </p>
       </div>
-      <Input
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        placeholder="Search customer name or phone…"
-      />
-      <div className="max-h-[60dvh] space-y-2 overflow-auto">
-        {filtered.map((customer) => {
-          const draft = drafts[customer.id] ?? {};
-          const patch = (key: "name" | "mobile" | "credit_limit", value: string) =>
-            setDrafts((current) => ({
-              ...current,
-              [customer.id]: { ...current[customer.id], [key]: value },
-            }));
-          return (
-            <div
-              key={customer.id}
-              className="grid gap-2 rounded-xl border p-3 sm:grid-cols-[1.3fr_1fr_140px_auto]"
-            >
+      <DataTable<(typeof customers)[number]>
+        rows={customers}
+        getRowId={(customer) => customer.id}
+        searchPlaceholder="Search customer, phone or segment…"
+        emptyMessage="No customer records found."
+        tableHeightClass="max-h-[60dvh]"
+        columns={[
+          {
+            id: "name",
+            header: "Customer",
+            accessor: (customer) => customer.name,
+            cell: (customer) => (
               <Input
-                aria-label="Customer name"
-                value={draft.name ?? customer.name}
-                onChange={(event) => patch("name", event.target.value)}
+                aria-label={`Customer name ${customer.name}`}
+                value={drafts[customer.id]?.name ?? customer.name}
+                onChange={(event) =>
+                  setDrafts((current) => ({
+                    ...current,
+                    [customer.id]: { ...current[customer.id], name: event.target.value },
+                  }))
+                }
               />
+            ),
+          },
+          {
+            id: "mobile",
+            header: "Mobile",
+            accessor: (customer) => customer.mobile ?? "",
+            cell: (customer) => (
               <Input
-                aria-label="Optional phone"
-                value={draft.mobile ?? customer.mobile ?? ""}
-                onChange={(event) => patch("mobile", event.target.value)}
+                aria-label={`Mobile for ${customer.name}`}
+                value={drafts[customer.id]?.mobile ?? customer.mobile ?? ""}
+                onChange={(event) =>
+                  setDrafts((current) => ({
+                    ...current,
+                    [customer.id]: { ...current[customer.id], mobile: event.target.value },
+                  }))
+                }
                 placeholder="Phone optional"
               />
+            ),
+          },
+          { id: "segment", header: "Segment", accessor: (customer) => customer.segment ?? "—" },
+          {
+            id: "credit_limit",
+            header: "Credit limit",
+            accessor: (customer) => customer.credit_limit,
+            cell: (customer) => (
               <Input
-                aria-label="Credit limit"
+                aria-label={`Credit limit for ${customer.name}`}
                 type="number"
                 min="0"
-                value={draft.credit_limit ?? customer.credit_limit}
-                onChange={(event) => patch("credit_limit", event.target.value)}
+                className="w-28"
+                value={drafts[customer.id]?.credit_limit ?? customer.credit_limit}
+                onChange={(event) =>
+                  setDrafts((current) => ({
+                    ...current,
+                    [customer.id]: { ...current[customer.id], credit_limit: event.target.value },
+                  }))
+                }
               />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">
-                  Due {inr(customer.outstanding_balance)}
-                </span>
-                <Button
-                  size="sm"
-                  disabled={!drafts[customer.id] || savingId === customer.id}
-                  onClick={() => void save(customer)}
-                >
-                  {savingId === customer.id ? "Saving…" : "Save"}
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            ),
+          },
+          {
+            id: "due",
+            header: "Outstanding",
+            accessor: (customer) => customer.outstanding_balance,
+            cell: (customer) => inr(customer.outstanding_balance),
+          },
+          { id: "visits", header: "Visits", accessor: (customer) => customer.visits ?? 0 },
+          {
+            id: "save",
+            header: "",
+            accessor: () => "Save",
+            sortable: false,
+            cell: (customer) => (
+              <Button
+                size="sm"
+                disabled={!drafts[customer.id] || savingId === customer.id}
+                onClick={() => void save(customer)}
+              >
+                {savingId === customer.id ? "Saving…" : "Save"}
+              </Button>
+            ),
+          },
+        ]}
+      />
     </section>
   );
 }
@@ -1504,7 +1193,6 @@ function ShortcutTileManager({
   defaultLocationId: string;
 }) {
   const [locationId, setLocationId] = useState(defaultLocationId);
-  const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   useEffect(() => setLocationId(defaultLocationId), [defaultLocationId]);
@@ -1517,21 +1205,6 @@ function ShortcutTileManager({
         : [],
     );
   }, [locationId, shortcutRows]);
-  const filtered = products
-    .filter((product) =>
-      matchesSearchFields(
-        [
-          product.name,
-          product.name_hi,
-          product.sku,
-          product.barcode,
-          ...(product.search_aliases ?? []),
-        ],
-        search,
-      ),
-    )
-    .slice(0, 100);
-
   async function save() {
     if (!locationId) return;
     setSaving(true);
@@ -1565,45 +1238,69 @@ function ShortcutTileManager({
           label: `${location.code} · ${location.name}`,
         }))}
       />
-      <div className="flex gap-2">
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search English, Hindi, SKU or alias…"
-        />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">{selectedIds.length}/16 selected</p>
         <Button onClick={() => void save()} disabled={saving || !locationId}>
           {saving ? "Saving…" : "Save shortcuts"}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">{selectedIds.length}/16 selected</p>
-      <div className="grid max-h-[55dvh] gap-2 overflow-auto sm:grid-cols-2 xl:grid-cols-3">
-        {filtered.map((product) => {
-          const selected = selectedIds.includes(product.id);
-          return (
-            <button
-              key={product.id}
-              onClick={() =>
-                setSelectedIds((current) =>
-                  selected
-                    ? current.filter((id) => id !== product.id)
-                    : current.length < 16
-                      ? [...current, product.id]
-                      : current,
-                )
-              }
-              className={`rounded-lg border p-2 text-left text-sm ${selected ? "border-primary bg-primary/5" : "hover:bg-accent"}`}
-            >
+      <DataTable<Product>
+        rows={products}
+        getRowId={(product) => product.id}
+        searchPlaceholder="Search English, Hindi, SKU or alias…"
+        emptyMessage="No catalog items match this search."
+        tableHeightClass="max-h-[55dvh]"
+        columns={[
+          {
+            id: "item",
+            header: "Item",
+            accessor: (product) =>
+              `${product.name} ${product.name_hi ?? ""} ${product.sku ?? ""} ${product.barcode ?? ""} ${(product.search_aliases ?? []).join(" ")}`,
+            cell: (product) => (
               <span className="font-medium">
-                {selected ? `${selectedIds.indexOf(product.id) + 1}. ` : ""}
                 {product.name}
+                {product.name_hi ? (
+                  <span className="ml-1 block text-xs text-muted-foreground">
+                    {product.name_hi}
+                  </span>
+                ) : null}
               </span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {product.name_hi ?? product.sku ?? product.barcode ?? ""}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+            ),
+          },
+          {
+            id: "sku",
+            header: "SKU / Barcode",
+            accessor: (product) => product.sku ?? product.barcode ?? "",
+          },
+          {
+            id: "order",
+            header: "Tile order",
+            accessor: (product) => selectedIds.indexOf(product.id),
+            cell: (product) => {
+              const selected = selectedIds.includes(product.id);
+              return (
+                <Button
+                  variant={selected ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    if (!selected && selectedIds.length >= 16) {
+                      toast.error("Cashier quick tiles are limited to 16 products.");
+                      return;
+                    }
+                    setSelectedIds((current) =>
+                      selected
+                        ? current.filter((id) => id !== product.id)
+                        : [...current, product.id],
+                    );
+                  }}
+                >
+                  {selected ? `Selected ${selectedIds.indexOf(product.id) + 1}` : "Add tile"}
+                </Button>
+              );
+            },
+          },
+        ]}
+      />
     </section>
   );
 }
@@ -1660,32 +1357,27 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
     drafts[p.id]?.[key] ?? String((p[key] as string | number | boolean | null) ?? "");
 
   return (
-    <section className="overflow-x-auto rounded-lg border bg-card">
-      <div className="border-b px-3 py-2 text-sm font-medium">
-        {products.length} item(s) pending enrichment
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Item</TableHead>
-            <TableHead>Hindi name / aliases</TableHead>
-            <TableHead>Barcode</TableHead>
-            <TableHead>SKU</TableHead>
-            <TableHead>HSN</TableHead>
-            <TableHead>Cost</TableHead>
-            <TableHead>MRP</TableHead>
-            <TableHead>Sale</TableHead>
-            <TableHead>Qty tiers</TableHead>
-            <TableHead>UOM</TableHead>
-            <TableHead>Min</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {products.map((p) => (
-            <TableRow key={p.id}>
-              <TableCell className="text-xs font-medium">{p.name}</TableCell>
-              <TableCell className="min-w-48 space-y-1">
+    <section className="space-y-2 rounded-lg border bg-card p-3">
+      <div className="text-sm font-medium">{products.length} item(s) pending enrichment</div>
+      <DataTable<Product>
+        rows={products}
+        getRowId={(product) => product.id}
+        searchPlaceholder="Search catalog items…"
+        emptyMessage="No products need enrichment."
+        columns={[
+          {
+            id: "item",
+            header: "Item",
+            accessor: (product) => product.name,
+            cell: (product) => <span className="text-xs font-medium">{product.name}</span>,
+          },
+          {
+            id: "identity",
+            header: "Hindi name / aliases",
+            accessor: (product) =>
+              `${product.name_hi ?? ""} ${(product.search_aliases ?? []).join(" ")}`,
+            cell: (p) => (
+              <div className="min-w-48 space-y-1">
                 <Input
                   aria-label="Hindi product name"
                   className="h-7 w-40 text-xs"
@@ -1707,85 +1399,112 @@ function EnrichmentQueue({ products }: { products: Product[] }) {
                     }))
                   }
                 />
-              </TableCell>
-              {(["barcode", "sku", "hsn"] as const).map((k) => (
-                <TableCell key={k}>
-                  <Input
-                    className="h-7 w-28 text-xs"
-                    value={field(p, k) === "null" ? "" : field(p, k)}
-                    onChange={(e) =>
-                      setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], [k]: e.target.value } }))
-                    }
-                  />
-                </TableCell>
-              ))}
-              {(["purchase_cost", "mrp", "sale_price"] as const).map((k) => (
-                <TableCell key={k}>
-                  <Input
-                    type="number"
-                    className="h-7 w-20 text-right text-xs"
-                    value={field(p, k)}
-                    onChange={(e) =>
-                      setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], [k]: e.target.value } }))
-                    }
-                  />
-                </TableCell>
-              ))}
-              <TableCell>
-                <Input
-                  aria-label={`Quantity prices for ${p.name}`}
-                  className="h-7 w-28 text-xs"
-                  value={drafts[p.id]?.["price_tiers"] ?? formatPriceTiers(p.price_tiers)}
-                  onChange={(event) =>
-                    setDrafts((d) => ({
-                      ...d,
-                      [p.id]: { ...d[p.id], price_tiers: event.target.value },
-                    }))
-                  }
-                  placeholder="6:68,12:64"
-                  title="Minimum quantity: unit price, for example 6:68,12:64"
-                />
-              </TableCell>
-              <TableCell>
-                <SearchableSelect
-                  className="h-7 w-20 text-xs"
-                  value={field(p, "uom_stock")}
-                  onValueChange={(value) =>
-                    setDrafts((drafts) => ({
-                      ...drafts,
-                      [p.id]: {
-                        ...drafts[p.id],
-                        uom_stock: value,
-                        uom_sale: value,
-                        uom_purchase: value,
-                      },
-                    }))
-                  }
-                  options={["UNIT", "KG", "LITRE", "PKT", "BAG", "PIECE"].map((value) => ({
-                    value,
-                    label: value,
-                  }))}
-                />
-              </TableCell>
-              <TableCell>
-                <Input
-                  type="number"
-                  className="h-7 w-16 text-right text-xs"
-                  value={field(p, "min_stock")}
-                  onChange={(e) =>
-                    setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], min_stock: e.target.value } }))
-                  }
-                />
-              </TableCell>
-              <TableCell>
-                <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>
-                  Complete
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+              </div>
+            ),
+          },
+          ...(["barcode", "sku", "hsn"] as const).map((k) => ({
+            id: k,
+            header: k.toUpperCase(),
+            accessor: (p: Product) => p[k] ?? "",
+            cell: (p: Product) => (
+              <Input
+                className="h-7 w-28 text-xs"
+                value={field(p, k) === "null" ? "" : field(p, k)}
+                onChange={(e) =>
+                  setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], [k]: e.target.value } }))
+                }
+              />
+            ),
+          })),
+          ...(["purchase_cost", "mrp", "sale_price"] as const).map((k) => ({
+            id: k,
+            header: k === "purchase_cost" ? "Cost" : k === "mrp" ? "MRP" : "Sale",
+            accessor: (p: Product) => p[k],
+            cell: (p: Product) => (
+              <Input
+                type="number"
+                className="h-7 w-20 text-right text-xs"
+                value={field(p, k)}
+                onChange={(e) =>
+                  setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], [k]: e.target.value } }))
+                }
+              />
+            ),
+          })),
+          {
+            id: "tiers",
+            header: "Wholesale tiers",
+            accessor: (p) => formatPriceTiers(p.price_tiers),
+            cell: (p) => (
+              <Input
+                aria-label={`Quantity prices for ${p.name}`}
+                className="h-7 w-28 text-xs"
+                value={drafts[p.id]?.["price_tiers"] ?? formatPriceTiers(p.price_tiers)}
+                onChange={(event) =>
+                  setDrafts((d) => ({
+                    ...d,
+                    [p.id]: { ...d[p.id], price_tiers: event.target.value },
+                  }))
+                }
+                placeholder="Small:6:68; Medium:12:64; Large:24:60"
+                title="Pack tier:minimum quantity:unit price; threshold comes from this SKU’s packaging"
+              />
+            ),
+          },
+          {
+            id: "uom",
+            header: "UOM",
+            accessor: (p) => p.uom_stock,
+            cell: (p) => (
+              <SearchableSelect
+                className="h-7 w-20 text-xs"
+                value={field(p, "uom_stock")}
+                onValueChange={(value) =>
+                  setDrafts((drafts) => ({
+                    ...drafts,
+                    [p.id]: {
+                      ...drafts[p.id],
+                      uom_stock: value,
+                      uom_sale: value,
+                      uom_purchase: value,
+                    },
+                  }))
+                }
+                options={["UNIT", "KG", "LITRE", "PKT", "BAG", "PIECE"].map((value) => ({
+                  value,
+                  label: value,
+                }))}
+              />
+            ),
+          },
+          {
+            id: "minimum",
+            header: "Min",
+            accessor: (p) => p.min_stock,
+            cell: (p) => (
+              <Input
+                type="number"
+                className="h-7 w-16 text-right text-xs"
+                value={field(p, "min_stock")}
+                onChange={(e) =>
+                  setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], min_stock: e.target.value } }))
+                }
+              />
+            ),
+          },
+          {
+            id: "complete",
+            header: "",
+            accessor: () => "Complete",
+            sortable: false,
+            cell: (p) => (
+              <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>
+                Complete
+              </Button>
+            ),
+          },
+        ]}
+      />
     </section>
   );
 }

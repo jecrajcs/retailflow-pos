@@ -80,9 +80,7 @@ export function CustomerDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Customer</DialogTitle>
-          <DialogDescription>
-            Search by name or mobile — phone number is optional. Pick Walk-in to skip.
-          </DialogDescription>
+          <DialogDescription>Search by customer name or mobile.</DialogDescription>
         </DialogHeader>
 
         <div className="relative">
@@ -120,7 +118,7 @@ export function CustomerDialog({
             }}
             className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
           >
-            <UserRound className="h-4 w-4" /> Walk-in (no customer)
+            <UserRound className="h-4 w-4" /> No customer
           </button>
           {visibleCustomers.map((c, index) => (
             <button
@@ -158,6 +156,24 @@ export function CustomerDialog({
             </button>
           ))}
         </div>
+        {search.trim() &&
+          !adding &&
+          !customers.some((customer) =>
+            matchesSearchFields([customer.name, customer.mobile], search.trim()),
+          ) && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-primary hover:bg-accent"
+              onClick={() => {
+                const isPhone = /\d/.test(search);
+                setName(isPhone ? "" : search.trim());
+                setMobile(isPhone ? search.trim() : "");
+                setAdding(true);
+              }}
+            >
+              <Plus className="h-4 w-4" /> Create customer from this search
+            </button>
+          )}
         {filtered.length > visibleCustomers.length && (
           <p className="text-xs text-muted-foreground">
             Showing the first 100 matches. Type more to narrow the list.
@@ -224,11 +240,7 @@ export function CustomerDialog({
               </Button>
             </div>
           </div>
-        ) : (
-          <Button variant="outline" className="gap-1.5" onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> Add new customer
-          </Button>
-        )}
+        ) : null}
       </DialogContent>
     </Dialog>
   );

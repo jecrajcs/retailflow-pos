@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -14,22 +14,22 @@ import {
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
-import { userFacingError } from "@/lib/retail-api";
+import {
+  canAccessLocation,
+  canManage,
+  saveActiveLocation,
+  useAccess,
+  type UserAccessProfile,
+} from "@/lib/access";
+import { retailApi, userFacingError } from "@/lib/retail-api";
+import { refreshLocalReplica } from "@/lib/offline-sync";
 import {
   CASH_TXN_REASONS,
   closeSession,
@@ -42,6 +42,8 @@ import {
   useCashTransactions,
   useLocations,
   usePaymentsSince,
+  type CashTxnRow,
+  type PaymentRow,
   type CashSession,
 } from "@/lib/pos";
 
@@ -79,9 +81,20 @@ function CashDrawerPage() {
   const queryClient = useQueryClient();
   const { profile } = useAccess();
   const { data: locations = [] } = useLocations();
-  const allowedLocations = locations.filter((entry) => canAccessLocation(profile, entry.id));
+  const allowedLocations = locations.filter(
+    (entry) => entry.is_active && canAccessLocation(profile, entry.id),
+  );
   const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
-  const location = allowedLocations.find((l) => l.id === locationId) ?? allowedLocations[0];
+  const location =
+    allowedLocations.find((l) => l.id === locationId) ??
+    (allowedLocations.length === 1 ? allowedLocations[0] : undefined);
+
+  useEffect(() => {
+    if (allowedLocations.length === 1 && locationId !== allowedLocations[0]?.id) {
+      setLocationId(allowedLocations[0]!.id);
+      saveActiveLocation(allowedLocations[0]!.id);
+    }
+  }, [allowedLocations, locationId]);
 
   const [view, setView] = useState<"express" | "detailed">("express");
 
@@ -94,8 +107,15 @@ function CashDrawerPage() {
         .slice(0, 30),
     [localSessions],
   );
+  const closedSessions = useMemo(
+    () => sessions.filter((session) => session.status === "CLOSED"),
+    [sessions],
+  );
 
-  const open = sessions.find((s) => s.status === "OPEN");
+  const activeShift = sessions.find((s) => s.status === "OPEN");
+  const foreignShift =
+    profile?.role === "CASHIER" && activeShift && activeShift.opened_by_id !== profile.user_id;
+  const open = foreignShift ? undefined : activeShift;
   const since = open?.opened_at ?? startOfToday();
   const { data: payments = [] } = usePaymentsSince(location?.id ?? null, since);
   const { data: txns = [] } = useCashTransactions(location?.id ?? null, since);
@@ -138,7 +158,7 @@ function CashDrawerPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/cash-drawer" />
       <div className="flex items-center gap-2 border-b bg-card px-3 py-2">
         <SearchableSelect
@@ -154,15 +174,24 @@ function CashDrawerPage() {
         />
       </div>
 
-      <main className="mx-auto w-full max-w-[1100px] flex-1 p-3">
+      <main className="mx-auto min-h-0 w-full max-w-[1100px] flex-1 overflow-y-auto p-3">
         <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
           <TabsList>
             <TabsTrigger value="express">Express</TabsTrigger>
-            <TabsTrigger value="detailed">Detailed</TabsTrigger>
+            <TabsTrigger value="detailed" disabled={profile?.role === "CASHIER" && !open}>
+              Detailed
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="express" className="mt-3 space-y-3">
-            {open ? (
+            {foreignShift && activeShift ? (
+              <div className="rounded-xl border border-warning/50 bg-warning/5 p-4 text-sm">
+                <p className="font-medium">This drawer is open under {activeShift.opened_by}.</p>
+                <p className="mt-1 text-muted-foreground">
+                  Ask the operator to reconcile and close the shift before this drawer can be used.
+                </p>
+              </div>
+            ) : open ? (
               <>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                   <SummaryCard label="Opening cash" value={inr(open.opening_cash)} />
@@ -200,11 +229,7 @@ function CashDrawerPage() {
                 />
               </>
             ) : (
-              <OpenShiftCard
-                locationId={location?.id ?? ""}
-                cashSalesToday={byMode.CASH}
-                onOpened={refresh}
-              />
+              <OpenShiftCard locationId={location?.id ?? ""} profile={profile} onOpened={refresh} />
             )}
           </TabsContent>
 
@@ -230,60 +255,61 @@ function CashDrawerPage() {
                   In {inr(txnIn)} · Out {inr(txnOut)} · Net {inr(txnIn - txnOut)}
                 </span>
               </div>
-              <div className="max-h-72 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Direction</TableHead>
-                      <TableHead>Reason</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {txns.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center text-muted-foreground">
-                          No cash in/out events logged yet today.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                    {txns.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-xs">
-                          {new Date(t.created_at).toLocaleString("en-IN", { timeStyle: "short" })}
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium",
-                              t.direction === "IN"
-                                ? "bg-success/15 text-success"
-                                : "bg-destructive/15 text-destructive",
-                            )}
-                          >
-                            {t.direction === "IN" ? (
-                              <ArrowDownCircle className="h-3 w-3" />
-                            ) : (
-                              <ArrowUpCircle className="h-3 w-3" />
-                            )}
-                            {t.direction === "IN" ? "Cash In" : "Cash Out"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-sm">{t.reason}</TableCell>
-                        <TableCell
-                          className={cn(
-                            "text-right font-medium tabular-nums",
-                            t.direction === "IN" ? "text-success" : "text-destructive",
-                          )}
-                        >
-                          {t.direction === "IN" ? "+" : "−"} {inr(t.amount)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              <DataTable<CashTxnRow & { sync_status?: string }>
+                rows={txns}
+                getRowId={(row) => row.id}
+                resetKey={`${location?.id ?? ""}:${open?.id ?? ""}`}
+                searchPlaceholder="Search cash history…"
+                emptyMessage="No cash in/out events logged yet today."
+                tableHeightClass="max-h-72"
+                columns={[
+                  {
+                    id: "time",
+                    header: "Time",
+                    accessor: (row) => row.created_at,
+                    cell: (row) =>
+                      new Date(row.created_at).toLocaleString("en-IN", { timeStyle: "short" }),
+                  },
+                  {
+                    id: "direction",
+                    header: "Direction",
+                    accessor: (row) => row.direction,
+                    cell: (row) => (
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium",
+                          row.direction === "IN"
+                            ? "bg-success/15 text-success"
+                            : "bg-destructive/15 text-destructive",
+                        )}
+                      >
+                        {row.direction === "IN" ? (
+                          <ArrowDownCircle className="h-3 w-3" />
+                        ) : (
+                          <ArrowUpCircle className="h-3 w-3" />
+                        )}
+                        {row.direction === "IN" ? "Cash In" : "Cash Out"}
+                      </span>
+                    ),
+                  },
+                  { id: "reason", header: "Reason", accessor: (row) => row.reason },
+                  {
+                    id: "amount",
+                    header: "Amount",
+                    accessor: (row) => row.amount,
+                    cell: (row) => (
+                      <span
+                        className={cn(
+                          "font-medium tabular-nums",
+                          row.direction === "IN" ? "text-success" : "text-destructive",
+                        )}
+                      >
+                        {row.direction === "IN" ? "+" : "−"} {inr(row.amount)}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
             </section>
 
             <section className="overflow-hidden rounded-lg border bg-card">
@@ -294,110 +320,144 @@ function CashDrawerPage() {
                   timeStyle: "short",
                 })}
               </div>
-              <div className="max-h-72 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Mode</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Change returned</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {payments.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center text-muted-foreground">
-                          No payments yet.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                    {payments.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="text-xs">
-                          {new Date(p.created_at).toLocaleString("en-IN", { timeStyle: "short" })}
-                        </TableCell>
-                        <TableCell>
-                          <ModeChip mode={p.mode} />
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{inr(p.amount)}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {p.change_given ? inr(p.change_given) : "—"}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              <DataTable<PaymentRow>
+                rows={payments}
+                getRowId={(row) => row.id}
+                resetKey={`${location?.id ?? ""}:${open?.id ?? ""}`}
+                searchPlaceholder="Search payments…"
+                emptyMessage="No payments yet."
+                tableHeightClass="max-h-72"
+                columns={[
+                  {
+                    id: "time",
+                    header: "Time",
+                    accessor: (row) => row.created_at,
+                    cell: (row) =>
+                      new Date(row.created_at).toLocaleString("en-IN", { timeStyle: "short" }),
+                  },
+                  {
+                    id: "mode",
+                    header: "Mode",
+                    accessor: (row) => row.mode,
+                    cell: (row) => <ModeChip mode={row.mode} />,
+                  },
+                  {
+                    id: "amount",
+                    header: "Amount",
+                    accessor: (row) => row.amount,
+                    cell: (row) => inr(row.amount),
+                  },
+                  {
+                    id: "change",
+                    header: "Change returned",
+                    accessor: (row) => row.change_given ?? 0,
+                    cell: (row) => (row.change_given ? inr(row.change_given) : "—"),
+                  },
+                ]}
+              />
             </section>
 
             <section className="overflow-hidden rounded-lg border bg-card">
               <div className="border-b px-3 py-2 text-sm font-medium">Shift history</div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Opened</TableHead>
-                    <TableHead>By</TableHead>
-                    <TableHead className="text-right">Opening</TableHead>
-                    <TableHead className="text-right">Cash sales</TableHead>
-                    <TableHead className="text-right">In</TableHead>
-                    <TableHead className="text-right">Out</TableHead>
-                    <TableHead className="text-right">Closing</TableHead>
-                    <TableHead className="text-right">Diff</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sessions.filter((s) => s.status === "CLOSED").length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center text-muted-foreground">
-                        No closed shifts yet.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {sessions
-                    .filter((s) => s.status === "CLOSED")
-                    .map((s) => {
-                      const expected = s.opening_cash + s.cash_sales + s.cash_in - s.cash_out;
-                      const diff = (s.closing_cash ?? expected) - expected;
+              <DataTable<CashSession>
+                rows={closedSessions}
+                getRowId={(row) => row.id}
+                resetKey={location?.id ?? ""}
+                searchPlaceholder="Search shifts…"
+                emptyMessage="No closed shifts yet."
+                columns={[
+                  {
+                    id: "opened",
+                    header: "Opened",
+                    accessor: (row) => row.opened_at,
+                    cell: (row) =>
+                      new Date(row.opened_at).toLocaleString("en-IN", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      }),
+                  },
+                  { id: "operator", header: "By", accessor: (row) => row.opened_by },
+                  {
+                    id: "closed_by",
+                    header: "Closed / approved by",
+                    accessor: (row) =>
+                      row.override_by_id
+                        ? `Manager override ${row.override_by_id}`
+                        : `Closed by ${row.closed_by_id ?? row.opened_by}`,
+                    cell: (row) => (
+                      <div>
+                        <div>
+                          {row.override_by_id
+                            ? `Manager override · ${row.override_by_id}`
+                            : row.closed_by_id
+                              ? `Closed by · ${row.closed_by_id}`
+                              : "Closed by operator"}
+                        </div>
+                        {row.override_reason && (
+                          <div className="max-w-56 truncate text-xs text-muted-foreground">
+                            {row.override_reason}
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  },
+                  {
+                    id: "opening",
+                    header: "Opening",
+                    accessor: (row) => row.opening_cash,
+                    cell: (row) => inr(row.opening_cash),
+                  },
+                  {
+                    id: "sales",
+                    header: "Cash sales",
+                    accessor: (row) => row.cash_sales,
+                    cell: (row) => inr(row.cash_sales),
+                  },
+                  {
+                    id: "in",
+                    header: "In",
+                    accessor: (row) => row.cash_in,
+                    cell: (row) => <span className="text-success">{inr(row.cash_in)}</span>,
+                  },
+                  {
+                    id: "out",
+                    header: "Out",
+                    accessor: (row) => row.cash_out,
+                    cell: (row) => <span className="text-destructive">{inr(row.cash_out)}</span>,
+                  },
+                  {
+                    id: "closing",
+                    header: "Closing",
+                    accessor: (row) => row.closing_cash ?? 0,
+                    cell: (row) => inr(row.closing_cash ?? 0),
+                  },
+                  {
+                    id: "difference",
+                    header: "Diff",
+                    accessor: (row) =>
+                      (row.closing_cash ??
+                        row.opening_cash + row.cash_sales + row.cash_in - row.cash_out) -
+                      (row.opening_cash + row.cash_sales + row.cash_in - row.cash_out),
+                    cell: (row) => {
+                      const expected =
+                        row.opening_cash + row.cash_sales + row.cash_in - row.cash_out;
+                      const diff = (row.closing_cash ?? expected) - expected;
                       return (
-                        <TableRow key={s.id}>
-                          <TableCell className="text-xs">
-                            {new Date(s.opened_at).toLocaleString("en-IN", {
-                              dateStyle: "short",
-                              timeStyle: "short",
-                            })}
-                          </TableCell>
-                          <TableCell>{s.opened_by}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {inr(s.opening_cash)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {inr(s.cash_sales)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-success">
-                            {inr(s.cash_in)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-destructive">
-                            {inr(s.cash_out)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {inr(s.closing_cash ?? 0)}
-                          </TableCell>
-                          <TableCell
-                            className={cn(
-                              "text-right tabular-nums",
-                              Math.abs(diff) > 0.01
-                                ? "font-semibold text-destructive"
-                                : "text-success",
-                            )}
-                          >
-                            {inr(diff)}
-                          </TableCell>
-                        </TableRow>
+                        <span
+                          className={cn(
+                            "tabular-nums",
+                            Math.abs(diff) > 0.01
+                              ? "font-semibold text-destructive"
+                              : "text-success",
+                          )}
+                        >
+                          {inr(diff)}
+                        </span>
                       );
-                    })}
-                </TableBody>
-              </Table>
+                    },
+                  },
+                ]}
+              />
             </section>
           </TabsContent>
         </Tabs>
@@ -543,27 +603,28 @@ function ModeChip({ mode }: { mode: string }) {
 
 function OpenShiftCard({
   locationId,
-  cashSalesToday,
+  profile,
   onOpened,
 }: {
   locationId: string;
-  cashSalesToday: number;
+  profile: UserAccessProfile | null;
   onOpened: () => void;
 }) {
-  const [operator, setOperator] = useState("");
-  const [openingCash, setOpeningCash] = useState("");
   const [openingCounts, setOpeningCounts] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
 
   async function open() {
-    if (!locationId || busy) return;
+    if (!locationId || !profile || busy) return;
     setBusy(true);
     try {
       await openSession({
         locationId,
-        openedBy: operator.trim() || "Operator",
-        openingCash: denomTotal(openingCounts) || Number(openingCash) || 0,
-        openingDenominations: openingCounts,
+        openedBy: profile.display_name,
+        openedById: profile.user_id,
+        openingCash: denomTotal(openingCounts),
+        openingDenominations: Object.fromEntries(
+          DENOMINATIONS.map((value) => [String(value), openingCounts[String(value)] ?? 0]),
+        ),
       });
       toast.success("Shift opened");
       onOpened();
@@ -579,42 +640,13 @@ function OpenShiftCard({
   return (
     <div className="rounded-lg border bg-card p-4">
       <div className="mb-3 text-sm">
-        <div className="font-medium">No open shift</div>
-        <div className="text-muted-foreground">
-          Cash sales today so far (no shift): {inr(cashSalesToday)}. Open a shift to start drawer
-          reconciliation and cash in/out logging.
-        </div>
+        <div className="font-medium">Opening cash · {profile?.display_name ?? "Staff"}</div>
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <div className="space-y-1">
-          <Label htmlFor="op-name">Operator</Label>
-          <Input
-            id="op-name"
-            value={operator}
-            onChange={(e) => setOperator(e.target.value)}
-            placeholder="Name"
-          />
-        </div>
         <div className="basis-full">
-          <DenominationFields
-            counts={openingCounts}
-            onChange={(counts) => {
-              setOpeningCounts(counts);
-              setOpeningCash(String(denomTotal(counts)));
-            }}
-          />
+          <DenominationFields counts={openingCounts} onChange={setOpeningCounts} />
         </div>
-        <div className="space-y-1">
-          <Label htmlFor="op-cash">Opening cash (₹)</Label>
-          <Input
-            id="op-cash"
-            type="number"
-            value={openingCash}
-            onChange={(e) => setOpeningCash(e.target.value)}
-            placeholder="0"
-          />
-        </div>
-        <Button onClick={open} disabled={busy}>
+        <Button onClick={open} disabled={busy || !profile || !locationId}>
           <LockKeyhole className="mr-1.5 h-4 w-4" /> Open shift
         </Button>
       </div>
@@ -633,40 +665,77 @@ function CloseShiftCard({
   cashSales: number;
   onClosed: () => void;
 }) {
-  const [counted, setCounted] = useState("");
+  const { profile, online } = useAccess();
   const [closingCounts, setClosingCounts] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
+  const [managerIdentifier, setManagerIdentifier] = useState("");
+  const [managerPassword, setManagerPassword] = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
+  const counted = denomTotal(closingCounts);
+  const difference = counted - expectedCash;
+  const isSessionOwner = session.opened_by_id === profile?.user_id;
+  const managerClosingForOperator = canManage(profile) && !isSessionOwner;
 
   async function close() {
-    if (busy) return;
+    if (busy || !profile || Object.keys(closingCounts).length === 0 || Math.abs(difference) > 0.01)
+      return;
     setBusy(true);
     try {
       // cash_in / cash_out stay null — the shift already tracks them from the logged history.
       const result = await closeSession({
         sessionId: session.id,
+        actorUserId: profile.user_id,
         cashIn: null,
         cashOut: null,
-        countedCash: Object.keys(closingCounts).length
-          ? denomTotal(closingCounts)
-          : counted === ""
-            ? null
-            : Number(counted),
-        closingDenominations: closingCounts,
+        countedCash: counted,
+        closingDenominations: Object.fromEntries(
+          DENOMINATIONS.map((value) => [String(value), closingCounts[String(value)] ?? 0]),
+        ),
       });
-      const diff = result.difference;
-      if (Math.abs(diff) > 0.01) {
-        toast.warning(`Shift closed — difference ${inr(diff)}`, {
-          description: `Expected ${inr(result.expected_cash)} in drawer.`,
-        });
-      } else {
-        toast.success("Shift closed — drawer balanced", {
-          description: `Cash sales ${inr(result.cash_sales)}`,
-        });
-      }
+      toast.success("Shift closed — drawer balanced", {
+        description: `Cash sales ${inr(result.cash_sales)}`,
+      });
       onClosed();
     } catch (e) {
       toast.error("Could not close shift", {
         description: userFacingError(e, "Check the counted cash and try closing the shift again."),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeWithManagerOverride() {
+    if (
+      !online ||
+      busy ||
+      !managerIdentifier.trim() ||
+      !managerPassword ||
+      overrideReason.trim().length < 5 ||
+      Object.keys(closingCounts).length === 0
+    )
+      return;
+    setBusy(true);
+    try {
+      await retailApi<{ ok: boolean }>("/api/cash-session-override", {
+        method: "POST",
+        json: {
+          session_id: session.id,
+          counted_cash: counted,
+          closing_denominations: Object.fromEntries(
+            DENOMINATIONS.map((value) => [String(value), closingCounts[String(value)] ?? 0]),
+          ),
+          reason: overrideReason.trim(),
+          manager_identifier: managerIdentifier.trim(),
+          manager_password: managerPassword,
+        },
+      });
+      await refreshLocalReplica();
+      toast.success("Shift closed with Manager approval", { description: overrideReason.trim() });
+      onClosed();
+    } catch (error) {
+      toast.error("Manager override could not be completed", {
+        description: userFacingError(error, "Verify the Manager credentials and try again."),
       });
     } finally {
       setBusy(false);
@@ -689,30 +758,84 @@ function CloseShiftCard({
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <div className="space-y-1">
-          <Label htmlFor="counted">Counted cash (₹)</Label>
-          <Input
-            id="counted"
-            type="number"
-            value={counted}
-            onChange={(e) => setCounted(e.target.value)}
-            placeholder={String(expectedCash.toFixed(2))}
-            onKeyDown={(e) => e.key === "Enter" && close()}
-          />
-        </div>
         <div className="basis-full">
-          <DenominationFields
-            counts={closingCounts}
-            onChange={(counts) => {
-              setClosingCounts(counts);
-              setCounted(String(denomTotal(counts)));
-            }}
-          />
+          <DenominationFields counts={closingCounts} onChange={setClosingCounts} />
         </div>
-        <Button variant="destructive" onClick={close} disabled={busy}>
+        <div className="w-full text-sm">
+          <span className="text-muted-foreground">
+            Counted {inr(counted)} · expected {inr(expectedCash)}
+          </span>
+          {Object.keys(closingCounts).length > 0 && Math.abs(difference) > 0.01 && (
+            <span className="ml-2 font-medium text-destructive">Difference {inr(difference)}</span>
+          )}
+        </div>
+        <Button
+          variant="destructive"
+          onClick={close}
+          disabled={
+            busy ||
+            !profile ||
+            !isSessionOwner ||
+            Object.keys(closingCounts).length === 0 ||
+            Math.abs(difference) > 0.01
+          }
+        >
           Close shift
         </Button>
       </div>
+      {Object.keys(closingCounts).length > 0 &&
+        (Math.abs(difference) > 0.01 || managerClosingForOperator) && (
+          <div className="mt-4 space-y-3 rounded-lg border border-warning/50 bg-warning/5 p-3">
+            <p className="text-sm font-medium">
+              {managerClosingForOperator
+                ? "Manager approval is required to close this operator’s shift."
+                : "A Manager or Admin must approve this variance."}
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="override-manager-id">Manager email or mobile</Label>
+                <Input
+                  id="override-manager-id"
+                  autoComplete="username"
+                  value={managerIdentifier}
+                  onChange={(event) => setManagerIdentifier(event.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="override-manager-password">Password</Label>
+                <Input
+                  id="override-manager-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={managerPassword}
+                  onChange={(event) => setManagerPassword(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="override-reason">Reason for variance</Label>
+              <Input
+                id="override-reason"
+                value={overrideReason}
+                onChange={(event) => setOverrideReason(event.target.value)}
+                placeholder="Describe the cash difference"
+              />
+            </div>
+            <Button
+              onClick={closeWithManagerOverride}
+              disabled={
+                !online ||
+                busy ||
+                !managerIdentifier.trim() ||
+                !managerPassword ||
+                overrideReason.trim().length < 5 ||
+                Object.keys(closingCounts).length === 0
+              }
+            >
+              {online ? "Manager override & close" : "Reconnect to request approval"}
+            </Button>
+          </div>
+        )}
     </div>
   );
 }
@@ -737,12 +860,16 @@ function DenominationFields({
             <Input
               type="number"
               min="0"
+              step="1"
               inputMode="numeric"
               aria-label={`Count of ₹${value} notes or coins`}
               className="h-9 text-right tabular-nums"
               value={counts[String(value)] ?? ""}
               onChange={(event) =>
-                onChange({ ...counts, [value]: Math.max(0, Number(event.target.value) || 0) })
+                onChange({
+                  ...counts,
+                  [value]: Math.max(0, Math.floor(Number(event.target.value) || 0)),
+                })
               }
             />
           </label>

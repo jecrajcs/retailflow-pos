@@ -124,6 +124,8 @@ describe("app access policy and data projections", () => {
   it("exposes only the allowlisted public overview API", () => {
     expect(accessPolicy.api.public).toEqual(["/api/public-overview"]);
     expect(accessPolicy.api.staff).toContain("/api/retail-snapshot");
+    expect(accessPolicy.api.staff).toContain("/api/cash-session-override");
+    expect(accessPolicy.api.staff).toContain("/api/retail-workbook-import");
     expect(accessPolicy.api.signIn).toEqual(["/api/pos/login"]);
   });
 

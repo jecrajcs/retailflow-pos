@@ -2,12 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import {
   createStaffAuthUser,
-  getStaffAccessProfile,
   getStaffSession,
   normalizeStaffIdentifier,
   normalizeStaffPhone,
   removeStaffAuthUser,
   updateStaffAuthUser,
+  verifyStaffPasswordLogin,
   type StaffRole,
 } from "@/lib/retail-auth.server";
 import {
@@ -66,6 +66,34 @@ function normalizeContacts(emailInput: unknown, phoneInput: unknown) {
   }
   if (!email && !phone) throw new Error("Provide an email address or mobile number.");
   return { email, phone };
+}
+
+async function saveProfile(
+  service: StaffService,
+  values: {
+    actorId: string;
+    userId: string;
+    displayName: string;
+    email: string | null;
+    phone: string | null;
+    role: string;
+    locationIds: string[];
+    active: boolean;
+    mustChangePassword: boolean;
+  },
+) {
+  const { error } = await service.rpc("app_save_staff_profile", {
+    p_actor_user_id: values.actorId,
+    p_user_id: values.userId,
+    p_display_name: values.displayName,
+    p_email: values.email,
+    p_phone: values.phone,
+    p_role: values.role,
+    p_location_ids: values.locationIds,
+    p_is_active: values.active,
+    p_must_change_password: values.mustChangePassword,
+  });
+  if (error) throw new Error(error.message);
 }
 
 async function loadStaffRows() {
@@ -264,28 +292,72 @@ export const Route = createFileRoute("/api/staff")({
                 password: password!,
               });
               createdAuthUserId = userId;
+              await saveProfile(service, {
+                actorId: session.profile.user_id,
+                userId,
+                displayName,
+                email,
+                phone,
+                role,
+                locationIds,
+                active,
+                mustChangePassword: true,
+              });
+            } else if (password && previous) {
+              await saveProfile(service, {
+                actorId: session.profile.user_id,
+                userId,
+                displayName,
+                email,
+                phone,
+                role,
+                locationIds,
+                active,
+                mustChangePassword: true,
+              });
+              try {
+                await updateStaffAuthUser(userId, { displayName, email, phone, password });
+                authUserUpdated = true;
+              } catch (error) {
+                try {
+                  await saveProfile(service, {
+                    actorId: session.profile.user_id,
+                    userId,
+                    displayName: String(previous["display_name"]),
+                    email: previous["email"] ? String(previous["email"]) : null,
+                    phone: previous["phone"] ? String(previous["phone"]) : null,
+                    role: String(previous["role"]),
+                    locationIds: previous["location_ids"] as string[],
+                    active: previous["is_active"] !== false,
+                    mustChangePassword: previous["must_change_password"] === true,
+                  });
+                } catch (rollbackError) {
+                  console.error(
+                    "Could not restore the staff profile after password reset failed",
+                    rollbackError,
+                  );
+                }
+                throw error;
+              }
             } else {
               await updateStaffAuthUser(userId, {
                 displayName,
                 email,
                 phone,
-                ...(password ? { password } : {}),
               });
               authUserUpdated = true;
+              await saveProfile(service, {
+                actorId: session.profile.user_id,
+                userId,
+                displayName,
+                email,
+                phone,
+                role,
+                locationIds,
+                active,
+                mustChangePassword: previous?.["must_change_password"] === true,
+              });
             }
-
-            const { error } = await service.rpc("app_save_staff_profile", {
-              p_actor_user_id: session.profile.user_id,
-              p_user_id: userId,
-              p_display_name: displayName,
-              p_email: email,
-              p_phone: phone,
-              p_role: role,
-              p_location_ids: locationIds,
-              p_is_active: active,
-              p_must_change_password: password ? true : previous?.["must_change_password"] === true,
-            });
-            if (error) throw new Error(error.message);
           } catch (error) {
             if (createdAuthUserId) {
               try {
@@ -308,11 +380,21 @@ export const Route = createFileRoute("/api/staff")({
           }
 
           const login = email ?? phone;
+          if (!userId) throw new Error("Staff profile was saved without an Auth user ID.");
+          let credentialVerified: boolean | undefined;
+          if (password) {
+            try {
+              credentialVerified = await verifyStaffPasswordLogin(userId, login ?? "", password);
+            } catch (error) {
+              console.error("Could not verify the new staff password", error);
+              credentialVerified = false;
+            }
+          }
           return jsonResponse({
             user_id: userId,
             login,
             ...(password ? { temporary_password: password } : {}),
-            staff: await getStaffAccessProfile(userId),
+            ...(password ? { credential_verified: credentialVerified === true } : {}),
           });
         } catch (error) {
           return errorResponse(error, "Could not save staff access.");

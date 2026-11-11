@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Boxes, ChartNoAxesCombined, MapPin, Plus, Store, Users } from "lucide-react";
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
+import { WorkbookImporter } from "@/components/pos/workbook-importer";
 import { StaffAccessPanel } from "@/components/pos/staff-access-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +55,7 @@ function AdminPage() {
   const { data: inventory = [] } = useInventory();
   const { data: products = [] } = useProducts();
   const [locations, setLocations] = useState<Location[]>([]);
+  const [activeTab, setActiveTab] = useState("overview");
   const [form, setForm] = useState<LocationForm>(emptyLocation);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
@@ -105,6 +108,7 @@ function AdminPage() {
     setEditingId(null);
     setForm(emptyLocation);
     setLocationError("");
+    setActiveTab("locations");
   }
 
   async function saveLocation(event: FormEvent<HTMLFormElement>) {
@@ -149,7 +153,7 @@ function AdminPage() {
 
   if (profile?.role !== "ADMIN") {
     return (
-      <div className="flex min-h-dvh flex-col bg-background">
+      <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
         <AppNav active="/admin" />
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
           <h1 className="text-lg font-semibold">Admin access required</h1>
@@ -167,9 +171,9 @@ function AdminPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/admin" />
-      <main className="mx-auto w-full max-w-[1500px] flex-1 space-y-5 p-3 sm:p-5">
+      <main className="mx-auto min-h-0 w-full max-w-[1500px] flex-1 space-y-5 overflow-y-auto p-3 sm:p-5">
         <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4 sm:p-6">
           <div>
             <p className="text-sm text-muted-foreground">RetailFlow POS · Network administration</p>
@@ -240,11 +244,12 @@ function AdminPage() {
           />
         </section>
 
-        <Tabs defaultValue="overview">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="locations">Locations</TabsTrigger>
             <TabsTrigger value="staff">Staff access</TabsTrigger>
+            <TabsTrigger value="import">Data import</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="space-y-4 pt-3">
             <section className="grid gap-3 md:grid-cols-3">
@@ -271,35 +276,17 @@ function AdminPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {locations.length ? (
-                  <div className="space-y-2">
-                    {locations.map((location) => (
-                      <button
-                        key={location.id}
-                        onClick={() => editLocation(location)}
-                        className="flex w-full items-center gap-3 rounded-lg border p-3 text-left hover:bg-accent/40"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{location.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {location.code} · {location.type}
-                          </span>
-                        </span>
-                        <Badge variant={location.is_active ? "outline" : "secondary"}>
-                          {location.is_active ? "Active" : "Inactive"}
-                        </Badge>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    {loadingLocations
+                <LocationDataTable
+                  locations={locations}
+                  onEdit={editLocation}
+                  emptyMessage={
+                    loadingLocations
                       ? "Loading locations…"
                       : locationError
                         ? "Locations could not be loaded. Retry from the alert above."
-                        : "No locations found. Add your first store or warehouse from the Locations tab."}
-                  </p>
-                )}
+                        : "No locations found. Add your first store or warehouse from the Locations tab."
+                  }
+                />
               </CardContent>
             </Card>
           </TabsContent>
@@ -411,31 +398,16 @@ function AdminPage() {
                     {loadingLocations ? "Refreshing…" : "Refresh"}
                   </Button>
                 </CardHeader>
-                <CardContent className="space-y-2">
-                  {locations.map((location) => (
-                    <button
-                      key={location.id}
-                      onClick={() => editLocation(location)}
-                      className="flex w-full items-center gap-3 rounded-lg border p-3 text-left hover:bg-accent/40"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{location.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {location.code} · {location.type}
-                          {location.address ? ` · ${location.address}` : ""}
-                        </span>
-                      </span>
-                      <Badge variant={location.is_active ? "outline" : "secondary"}>
-                        {location.is_active ? "Active" : "Inactive"}
-                      </Badge>
-                    </button>
-                  ))}
-                  {!locations.length && !loadingLocations && (
-                    <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                      Create the first location with the form. Locations are deactivated, never
-                      deleted.
-                    </p>
-                  )}
+                <CardContent>
+                  <LocationDataTable
+                    locations={locations}
+                    onEdit={editLocation}
+                    emptyMessage={
+                      loadingLocations
+                        ? "Loading locations…"
+                        : "Create the first location with the form. Locations are deactivated, never deleted."
+                    }
+                  />
                 </CardContent>
               </Card>
             </div>
@@ -449,6 +421,9 @@ function AdminPage() {
                 .map(({ id, name, code }) => ({ id, name, code }))}
             />
           </TabsContent>
+          <TabsContent value="import" className="pt-3">
+            <WorkbookImporter locations={locations.filter((location) => location.is_active)} />
+          </TabsContent>
         </Tabs>
         <p className="text-xs text-muted-foreground">
           {localLocations.length} active location records are available to POS workflows on this
@@ -456,6 +431,56 @@ function AdminPage() {
         </p>
       </main>
     </div>
+  );
+}
+
+function LocationDataTable({
+  locations,
+  onEdit,
+  emptyMessage,
+}: {
+  locations: Location[];
+  onEdit: (location: Location) => void;
+  emptyMessage: string;
+}) {
+  return (
+    <DataTable<Location>
+      rows={locations}
+      getRowId={(location) => location.id}
+      searchPlaceholder="Search location, code, address or type…"
+      emptyMessage={emptyMessage}
+      columns={[
+        { id: "name", header: "Location", accessor: (location) => location.name },
+        { id: "code", header: "Code", accessor: (location) => location.code },
+        { id: "type", header: "Type", accessor: (location) => location.type },
+        {
+          id: "address",
+          header: "Address",
+          accessor: (location) => location.address ?? "",
+        },
+        {
+          id: "status",
+          header: "Status",
+          accessor: (location) => (location.is_active ? "Active" : "Inactive"),
+          cell: (location) => (
+            <Badge variant={location.is_active ? "outline" : "secondary"}>
+              {location.is_active ? "Active" : "Inactive"}
+            </Badge>
+          ),
+        },
+        {
+          id: "action",
+          header: "",
+          accessor: () => "Edit",
+          sortable: false,
+          cell: (location) => (
+            <Button size="sm" variant="outline" onClick={() => onEdit(location)}>
+              Edit
+            </Button>
+          ),
+        },
+      ]}
+    />
   );
 }
 

@@ -54,6 +54,8 @@ export interface ProductPriceTier {
   unit_price: number;
 }
 
+const WHOLESALE_TIER_LABELS = ["Wholesale Small", "Wholesale Medium", "Wholesale Large"] as const;
+
 /** Return the most favorable quantity tier the current basket quantity qualifies for. */
 export function getProductPrice(product: Product, quantity: number) {
   const tier = [...(product.price_tiers ?? [])]
@@ -67,7 +69,7 @@ export function getProductPrice(product: Product, quantity: number) {
   return { unitPrice: tier?.unit_price ?? product.sale_price, tier };
 }
 
-/** Excel/UI format: `6:68,12:64`; JSON arrays are also accepted for exported workbooks. */
+/** Supports named tiers and the legacy `6:68,12:64` format used by existing templates. */
 export function parsePriceTiers(value: unknown): ProductPriceTier[] {
   if (Array.isArray(value)) {
     const tiers = value.map((entry) => {
@@ -78,7 +80,7 @@ export function parsePriceTiers(value: unknown): ProductPriceTier[] {
         unit_price: Number(row.unit_price),
       };
     });
-    return validatePriceTiers(tiers);
+    return validatePriceTiers(nameWholesaleTiers(tiers));
   }
   const text = String(value ?? "").trim();
   if (!text) return [];
@@ -90,17 +92,45 @@ export function parsePriceTiers(value: unknown): ProductPriceTier[] {
       throw new Error("Price tiers must be quantity:price pairs, for example 6:68,12:64.");
     }
   }
-  const tiers = text.split(/[,;\n]/).map((part) => {
-    const match = part.trim().match(/^(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)$/);
-    if (!match) throw new Error("Enter quantity-based tiers like 6:68,12:64.");
-    const min_quantity = Number(match[1]);
+  const parts = text
+    .split(/[,;\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const named = parts.some((part) => /(?:wholesale\s+)?(?:small|medium|large)\s*[:=]/i.test(part));
+  const tiers = parts.map((part) => {
+    const namedMatch = part.match(
+      /^(?:wholesale\s+)?(small|medium|large)\s*[:=]\s*(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)$/i,
+    );
+    if (named && !namedMatch)
+      throw new Error("Use named wholesale tiers such as Small:6:68; Medium:12:64.");
+    const legacyMatch = part.match(/^(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)$/);
+    if (!namedMatch && !legacyMatch)
+      throw new Error(
+        "Enter named tiers like Small:6:68; Medium:12:64, or legacy quantity:price pairs.",
+      );
+    const min_quantity = Number(namedMatch?.[2] ?? legacyMatch?.[1]);
     return {
-      label: `${min_quantity}+ units`,
+      label: namedMatch
+        ? `Wholesale ${namedMatch[1]!.toLowerCase().replace(/^./, (letter) => letter.toUpperCase())}`
+        : `${min_quantity}+ units`,
       min_quantity,
-      unit_price: Number(match[2]),
+      unit_price: Number(namedMatch?.[3] ?? legacyMatch?.[2]),
     };
   });
-  return validatePriceTiers(tiers);
+  return validatePriceTiers(nameWholesaleTiers(tiers));
+}
+
+function nameWholesaleTiers(tiers: ProductPriceTier[]) {
+  const ordered = [...tiers].sort((a, b) => a.min_quantity - b.min_quantity);
+  if (ordered.length > WHOLESALE_TIER_LABELS.length)
+    throw new Error("Configure no more than Wholesale Small, Medium, and Large.");
+  return ordered.map((tier, index) => {
+    const normalized = tier.label.toLowerCase().replace(/^wholesale\s+/, "");
+    const label = WHOLESALE_TIER_LABELS.find(
+      (candidate) => candidate.toLowerCase().replace(/^wholesale\s+/, "") === normalized,
+    );
+    return { ...tier, label: label ?? WHOLESALE_TIER_LABELS[index]! };
+  });
 }
 
 function validatePriceTiers(tiers: ProductPriceTier[]) {
@@ -117,13 +147,25 @@ function validatePriceTiers(tiers: ProductPriceTier[]) {
     throw new Error("Every price tier needs a positive minimum quantity and unit price.");
   if (new Set(sorted.map((tier) => tier.min_quantity)).size !== sorted.length)
     throw new Error("Each price tier must use a different minimum quantity.");
+  if (new Set(sorted.map((tier) => tier.label)).size !== sorted.length)
+    throw new Error("Use each wholesale tier label only once.");
+  const tierOrder = sorted.map((tier) =>
+    WHOLESALE_TIER_LABELS.indexOf(tier.label as (typeof WHOLESALE_TIER_LABELS)[number]),
+  );
+  if (tierOrder.some((rank, index) => index > 0 && rank <= tierOrder[index - 1]!))
+    throw new Error("Wholesale Small, Medium, and Large thresholds must increase in that order.");
   if (sorted.some((tier, index) => index > 0 && tier.unit_price > sorted[index - 1]!.unit_price))
     throw new Error("A higher quantity tier cannot cost more per unit than the tier below it.");
   return sorted;
 }
 
 export function formatPriceTiers(tiers: ProductPriceTier[] | null | undefined) {
-  return (tiers ?? []).map((tier) => `${tier.min_quantity}:${tier.unit_price}`).join(", ");
+  return (tiers ?? [])
+    .map(
+      (tier) =>
+        `${tier.label.replace(/^Wholesale\s+/i, "")}:${tier.min_quantity}:${tier.unit_price}`,
+    )
+    .join("; ");
 }
 
 /** Internal Code 128 value derived from a unique local SKU; not a GS1-issued retail EAN. */
@@ -141,6 +183,7 @@ export interface Customer {
   credit_limit: number;
   outstanding_balance: number;
   visits: number;
+  segment?: string | null;
 }
 
 export interface CustomerFamily {
@@ -173,6 +216,10 @@ export interface CashSession {
   id: string;
   location_id: string;
   opened_by: string;
+  opened_by_id?: string | null;
+  closed_by_id?: string | null;
+  override_by_id?: string | null;
+  override_reason?: string | null;
   opening_cash: number;
   closing_cash: number | null;
   cash_sales: number;
@@ -200,6 +247,8 @@ export interface LocalInvoice {
   invoice_number: string;
   location_id: string;
   customer_id: string | null;
+  customer_segment?: string | null;
+  order_type?: string | null;
   cashier_id: string;
   cashier_name: string;
   total_amount: number;
@@ -232,8 +281,19 @@ export interface LocalPurchaseReceipt {
   reviewed_by?: string | null;
   reviewed_at?: string | null;
   received_at?: string | null;
+  source_total?: number | null;
   sync_status: SyncStatus;
-  items: Array<{ product_id: string; quantity: number; unit_cost: number; name?: string }>;
+  items: Array<{
+    id?: string;
+    product_id: string;
+    quantity: number;
+    unit_cost: number;
+    source_total?: number | null;
+    name?: string;
+    sku?: string;
+    retail_price?: number;
+    uom?: string;
+  }>;
 }
 
 export interface CartLine {
@@ -533,6 +593,7 @@ export interface InvoiceItemRow {
   uom: string;
   discount: number;
   total: number;
+  unit_cost_snapshot?: number | null;
   products?: { name: string } | null;
   product_snapshot?: Product | null;
 }
@@ -884,6 +945,8 @@ export async function createPosInvoice(input: {
   cashierId?: string | null | undefined;
   cashierName?: string | undefined;
   customerId: string | null;
+  customerSegment?: string | null;
+  orderType?: string | null;
   discount: number;
   businessDate: string;
   items: Array<{
@@ -893,6 +956,7 @@ export async function createPosInvoice(input: {
     uom: string;
     discount: number;
     total: number;
+    unit_cost_snapshot: number;
   }>;
   payments: PaymentSplitInput[];
 }): Promise<InvoiceResult> {
@@ -936,6 +1000,8 @@ export async function createPosInvoice(input: {
     invoice_number: invoiceNumber,
     location_id: input.locationId,
     customer_id: input.customerId,
+    customer_segment: input.customerSegment ?? null,
+    order_type: input.orderType ?? (input.customerId ? "Registered customer" : "Walk-in"),
     cashier_id: deviceId,
     cashier_name: input.cashierName ?? "Cashier",
     total_amount: total,
@@ -945,7 +1011,7 @@ export async function createPosInvoice(input: {
     payment_status: computePaymentStatus(total, paid),
     status: "COMPLETED",
     business_date: input.businessDate,
-    created_at: existing?.created_at ?? createdAt,
+    created_at: createdAt,
     updated_at: createdAt,
     sync_status: "PENDING",
   };
@@ -1134,6 +1200,14 @@ export async function quickAddProduct(input: {
   minStock?: number;
   cashierQuickAdd?: boolean;
 }): Promise<Product> {
+  if (!input.name.trim()) throw new Error("Enter an item name.");
+  if (!Number.isFinite(input.salePrice) || input.salePrice <= 0)
+    throw new Error("Retail sell price must be greater than zero.");
+  if (!Number.isFinite(input.openingQty) || input.openingQty < 0)
+    throw new Error("Available quantity cannot be negative.");
+  if (input.cashierQuickAdd && input.openingQty <= 0)
+    throw new Error("Enter the available quantity before adding this item to a bill.");
+  if (!input.uom.trim()) throw new Error("Choose a sale unit.");
   const sku = input.sku?.trim() || (await generateSku());
   const priceTiers = parsePriceTiers(input.priceTiers);
   const floorPrice = Math.min(input.minSalePrice ?? 0, input.salePrice);
@@ -1508,6 +1582,7 @@ export async function createAdjustment(input: {
 export async function openSession(input: {
   locationId: string;
   openedBy: string;
+  openedById: string;
   openingCash: number;
   openingDenominations?: Record<number, number> | null;
 }): Promise<string> {
@@ -1516,6 +1591,7 @@ export async function openSession(input: {
     id,
     location_id: input.locationId,
     opened_by: input.openedBy,
+    opened_by_id: input.openedById,
     opening_cash: input.openingCash,
     closing_cash: null,
     cash_sales: 0,
@@ -1548,6 +1624,7 @@ export async function openSession(input: {
 
 export async function closeSession(input: {
   sessionId: string;
+  actorUserId: string;
   cashIn: number | null;
   cashOut: number | null;
   countedCash: number | null;
@@ -1572,13 +1649,20 @@ export async function closeSession(input: {
   const cashIn = input.cashIn ?? session.cash_in;
   const cashOut = input.cashOut ?? session.cash_out;
   const expected = session.opening_cash + cashSales + cashIn - cashOut;
-  const difference = (input.countedCash ?? expected) - expected;
+  if (input.countedCash === null)
+    throw new Error("Enter the closing denomination count before closing the shift.");
+  const difference = input.countedCash - expected;
+  if (Math.abs(difference) > 0.01)
+    throw new Error(
+      `Drawer is out by ${inr(Math.abs(difference))}. Recount the cash or request a Manager override.`,
+    );
   const updated: CashSession = {
     ...session,
     cash_sales: cashSales,
     cash_in: cashIn,
     cash_out: cashOut,
-    closing_cash: input.countedCash ?? expected,
+    closing_cash: input.countedCash,
+    closed_by_id: input.actorUserId,
     status: "CLOSED",
     closed_at: new Date().toISOString(),
     closing_denominations: input.closingDenominations

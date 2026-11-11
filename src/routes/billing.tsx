@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  AlertTriangle,
   CalendarDays,
-  CheckCircle2,
   MapPin,
   Plus,
   ScanBarcode,
@@ -33,17 +31,14 @@ import { userFacingError } from "@/lib/retail-api";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  addCustomer,
   categoryIcon,
   createLocalDraft,
   discountFromInput,
-  familySummary,
   getProductPrice,
   inr,
   loadLocalDraftPayload,
   matchesProductSearch,
   maxLineDiscount,
-  matchesSearchFields,
   saveLocalDraft,
   voidLocalDraft,
   useCustomers,
@@ -67,13 +62,13 @@ export const Route = createFileRoute("/billing")({
       {
         name: "description",
         content:
-          "Fast customer-first POS billing with barcode scanning, rack locations, floor-price protection, split payments, cash tendered and change return.",
+          "POS billing with barcode scanning, customer lookup, quantity pricing, split payments and cash reconciliation.",
       },
       { property: "og:title", content: "RetailHub POS — Billing" },
       {
         property: "og:description",
         content:
-          "Fast customer-first POS billing with barcode scanning, rack locations, floor-price protection, split payments, cash tendered and change return.",
+          "POS billing with barcode scanning, customer lookup, quantity pricing, split payments and cash reconciliation.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -84,15 +79,7 @@ export const Route = createFileRoute("/billing")({
 
 const LS_KEY = "pos-location-id";
 
-type CustomerMode = "unset" | "chosen" | "walkin";
-type HeldBill = {
-  id: string;
-  invoice_number: string;
-  customer_id: string | null;
-  location_id: string;
-  business_date: string;
-  created_at: string;
-};
+type CustomerMode = "chosen" | "walkin";
 
 function todayBusinessDate() {
   const now = new Date();
@@ -106,10 +93,11 @@ function PosPage() {
   const { data: products = [] } = useProducts();
   const { data: inventory = [] } = useInventory();
   const { data: customers = [] } = useCustomers();
-  const { data: sales = [] } = useSales();
+  const salesQuery = useSales();
+  const sales = useMemo(() => salesQuery.data ?? [], [salesQuery.data]);
   const { data: shortcutRows = [] } = useShortcutTiles();
-  const allowedLocations = locations.filter((candidate) =>
-    canAccessLocation(profile, candidate.id),
+  const allowedLocations = locations.filter(
+    (candidate) => candidate.is_active && canAccessLocation(profile, candidate.id),
   );
 
   const [locationId, setLocationId] = useState("");
@@ -117,14 +105,26 @@ function PosPage() {
   const [currentInvoice, setCurrentInvoice] = useState<LocalInvoice | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
 
+  useEffect(() => {
+    if (locationId || !allowedLocations.length) return;
+    const savedLocationId = localStorage.getItem(LS_KEY);
+    const selected =
+      allowedLocations.find((candidate) => candidate.id === savedLocationId) ??
+      (allowedLocations.length === 1 ? allowedLocations[0] : undefined);
+    if (selected) {
+      setLocationId(selected.id);
+      saveActiveLocation(selected.id);
+    }
+  }, [allowedLocations, locationId]);
+
   function changeLocation(id: string) {
     if (!canAccessLocation(profile, id)) {
       toast.error("Your account is not assigned to this location.");
       return;
     }
-    if ((lines.length > 0 || customerMode !== "unset") && id !== locationId) {
+    if ((lines.length > 0 || discount > 0) && id !== locationId) {
       toast.warning("Current bill is active", {
-        description: "Hold or finish this bill before changing the store.",
+        description: "Complete this bill before changing the store.",
       });
       return;
     }
@@ -133,19 +133,12 @@ function PosPage() {
     if (currentInvoice && currentInvoice.location_id !== id) void voidLocalDraft(currentInvoice.id);
     if (id !== locationId) {
       setCurrentInvoice(null);
-      void createLocalDraft(id, businessDate, profile?.user_id, profile?.display_name)
-        .then(setCurrentInvoice)
-        .catch((error) =>
-          toast.error("Could not start a local bill", {
-            description: userFacingError(error, "Please refresh the page and try again."),
-          }),
-        );
     }
   }
 
   const [lines, setLines] = useState<CartLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
-  const [customerMode, setCustomerMode] = useState<CustomerMode>("unset");
+  const [customerMode, setCustomerMode] = useState<CustomerMode>("walkin");
   const [barcode, setBarcode] = useState("");
   const [activeProductIndex, setActiveProductIndex] = useState(0);
   const [discount, setDiscount] = useState(0);
@@ -158,26 +151,9 @@ function PosPage() {
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
-  const custSearchRef = useRef<HTMLInputElement>(null);
-
-  const heldBills = useMemo<HeldBill[]>(
-    () =>
-      sales
-        .filter((invoice) => invoice.status === "DRAFT" && invoice.id !== currentInvoice?.id)
-        .map((invoice) => ({
-          id: invoice.id,
-          invoice_number: invoice.invoice_number,
-          customer_id: invoice.customer_id,
-          location_id: invoice.location_id,
-          business_date: invoice.business_date,
-          created_at: invoice.created_at,
-        }))
-        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-    [sales, currentInvoice?.id],
-  );
 
   useEffect(() => {
-    if (draftRestored || !sales.length) return;
+    if (draftRestored || salesQuery.isLoading) return;
     let active = true;
     const storedLocation = localStorage.getItem(LS_KEY);
     const existing = sales
@@ -190,24 +166,52 @@ function PosPage() {
       .sort((a, b) =>
         (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at),
       )[0];
-    if (existing) {
-      void loadLocalDraftPayload(existing.id).then((payload) => {
-        if (!active || !payload) return;
-        setCurrentInvoice(existing);
-        setLocationId(existing.location_id);
-        setCustomer(payload.customer);
-        setCustomerMode(payload.customer_mode);
-        setLines(payload.items);
-        setDiscount(payload.discount_input);
-        setDiscountMode(payload.discount_mode);
-        setBusinessDate(existing.business_date);
-      });
-    }
-    setDraftRestored(true);
+    void (async () => {
+      try {
+        if (existing) {
+          const payload = await loadLocalDraftPayload(existing.id);
+          if (!active) return;
+          if (payload) {
+            setCurrentInvoice(existing);
+            setLocationId(existing.location_id);
+            setCustomer(payload.customer);
+            setCustomerMode(payload.customer_mode === "chosen" ? "chosen" : "walkin");
+            setLines(payload.items);
+            setDiscount(payload.discount_input);
+            setDiscountMode(payload.discount_mode);
+            setBusinessDate(existing.business_date);
+          }
+        }
+      } catch (error) {
+        toast.error("Could not restore the previous bill", {
+          description: userFacingError(error, "The bill could not be loaded from this device."),
+        });
+      } finally {
+        if (active) setDraftRestored(true);
+      }
+    })();
     return () => {
       active = false;
     };
-  }, [sales, draftRestored, profile]);
+  }, [sales, draftRestored, profile, salesQuery.isLoading]);
+
+  useEffect(() => {
+    if (!draftRestored || !locationId || currentInvoice) return;
+    let active = true;
+    void createLocalDraft(locationId, businessDate, profile?.user_id, profile?.display_name)
+      .then((invoice) => {
+        if (active) setCurrentInvoice(invoice);
+        else void voidLocalDraft(invoice.id);
+      })
+      .catch((error) =>
+        toast.error("Could not start a local bill", {
+          description: userFacingError(error, "Please refresh the page and try again."),
+        }),
+      );
+    return () => {
+      active = false;
+    };
+  }, [draftRestored, locationId, currentInvoice, businessDate, profile]);
 
   useEffect(() => {
     if (!currentInvoice) return;
@@ -265,49 +269,6 @@ function PosPage() {
       ? ((discount / subtotal) * 100).toFixed(2)
       : discount || "";
 
-  /** New bill starts here: preserve a live draft, then allocate a fresh local number. */
-  async function startNewBill() {
-    if (currentInvoice) {
-      if (customerMode !== "unset" || lines.length > 0 || discount > 0) {
-        await saveLocalDraft({
-          invoice: { ...currentInvoice, location_id: locationId, business_date: businessDate },
-          customer,
-          customer_mode: customerMode,
-          items: lines,
-          discount_mode: discountMode,
-          discount_input: discount,
-        });
-      } else {
-        await voidLocalDraft(currentInvoice.id);
-      }
-    }
-    setLines([]);
-    setCustomer(null);
-    setCustomerMode("unset");
-    setDiscount(0);
-    setBusinessDate(todayBusinessDate());
-    setBarcode("");
-    setPayOpen(false);
-    setCurrentInvoice(null);
-    if (locationId) {
-      try {
-        setCurrentInvoice(
-          await createLocalDraft(
-            locationId,
-            todayBusinessDate(),
-            profile?.user_id,
-            profile?.display_name,
-          ),
-        );
-      } catch (error) {
-        toast.error("Could not start a local bill", {
-          description: userFacingError(error, "Please refresh the page and try again."),
-        });
-      }
-    }
-    setTimeout(() => custSearchRef.current?.focus(), 30);
-  }
-
   function resolveCustomer(c: Customer | null) {
     setCustomer(c);
     setCustomerMode(c ? "chosen" : "walkin");
@@ -318,12 +279,6 @@ function PosPage() {
   function addToCart(product: Product) {
     if (!locationId) {
       toast.error("Select the store first");
-      return;
-    }
-    if (customerMode === "unset") {
-      toast.error("Customer pehle chunein", {
-        description: "Search, add or pick Walk-in above — then scan items.",
-      });
       return;
     }
     if (stockAt(product.id, locationId) <= 0) {
@@ -412,10 +367,6 @@ function PosPage() {
   }
 
   function handleBarcodeSubmit() {
-    if (customerMode === "unset") {
-      toast.error("Customer pehle chunein");
-      return;
-    }
     const q = barcode.trim().toLowerCase();
     if (!q) return;
     const hit =
@@ -432,63 +383,9 @@ function PosPage() {
   }
 
   function openQuickAdd() {
-    if (customerMode === "unset") {
-      toast.error("Customer pehle chunein");
-      return;
-    }
     setQuickPrefill(barcode.trim());
     if (barcode.trim()) setBarcode("");
     setQuickOpen(true);
-  }
-
-  async function holdCurrentBill() {
-    if (customerMode === "unset") {
-      toast.error("Choose a customer or Walk-in before holding this bill");
-      return;
-    }
-    if (currentInvoice)
-      await saveLocalDraft({
-        invoice: { ...currentInvoice, location_id: locationId, business_date: businessDate },
-        customer,
-        customer_mode: customerMode,
-        items: lines,
-        discount_mode: discountMode,
-        discount_input: discount,
-      });
-    await startNewBill();
-  }
-
-  async function switchToHeldBill(id: string) {
-    const held = sales.find((bill) => bill.id === id && bill.status === "DRAFT");
-    if (!held || !canAccessLocation(profile, held.location_id)) return;
-    if (held.id === currentInvoice?.id) return;
-    if (currentInvoice) {
-      if (customerMode !== "unset" || lines.length || discount > 0)
-        await saveLocalDraft({
-          invoice: { ...currentInvoice, location_id: locationId, business_date: businessDate },
-          customer,
-          customer_mode: customerMode,
-          items: lines,
-          discount_mode: discountMode,
-          discount_input: discount,
-        });
-      else await voidLocalDraft(currentInvoice.id);
-    }
-    const payload = await loadLocalDraftPayload(id);
-    if (!payload) {
-      toast.error("This held bill has no recoverable draft data.");
-      return;
-    }
-    setCurrentInvoice(held);
-    setLines(payload.items);
-    setCustomer(payload.customer);
-    setCustomerMode(payload.customer_mode);
-    setDiscount(payload.discount_input);
-    setDiscountMode(payload.discount_mode);
-    setLocationId(held.location_id);
-    saveActiveLocation(held.location_id);
-    saveActiveLocation(held.location_id);
-    setBusinessDate(held.business_date);
   }
 
   const searchResults = useMemo(() => {
@@ -524,8 +421,7 @@ function PosPage() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "F1") {
         e.preventDefault();
-        if (customerMode === "unset") custSearchRef.current?.focus();
-        else barcodeRef.current?.focus();
+        barcodeRef.current?.focus();
       } else if (e.key === "F2") {
         e.preventDefault();
         openQuickAdd();
@@ -536,15 +432,12 @@ function PosPage() {
         e.preventDefault();
         if (lines.length > 0) setPayOpen(true);
         else toast.error("Bill is empty");
-      } else if (e.key === "F5") {
-        e.preventDefault();
-        startNewBill();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines.length, barcode, customerMode]);
+  }, [lines.length, barcode]);
 
   function handlePaid(result: InvoiceResult, payments: ReceiptPayment[]) {
     setReceipt({
@@ -566,35 +459,18 @@ function PosPage() {
     });
     setLines([]);
     setCustomer(null);
-    setCustomerMode("unset");
+    setCustomerMode("walkin");
     setDiscount(0);
     setBusinessDate(todayBusinessDate());
     setPayOpen(false);
     setCurrentInvoice(null);
-    if (locationId) {
-      void createLocalDraft(
-        locationId,
-        todayBusinessDate(),
-        profile?.user_id,
-        profile?.display_name,
-      )
-        .then(setCurrentInvoice)
-        .catch((error) =>
-          toast.error("Bill is saved; could not start the next local bill", {
-            description: userFacingError(
-              error,
-              "The bill was saved, but another bill could not be started.",
-            ),
-          }),
-        );
-    }
     void queryClient.invalidateQueries({ queryKey: ["inventory"] });
     void queryClient.invalidateQueries({ queryKey: ["customers"] });
     void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
     void queryClient.invalidateQueries({ queryKey: ["cash-transactions"] });
     void queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
     toast.success(`Bill ${result.invoice_number} saved`);
-    setTimeout(() => custSearchRef.current?.focus(), 30);
+    setTimeout(() => barcodeRef.current?.focus(), 30);
   }
 
   const lowStockIds = useMemo(
@@ -626,14 +502,10 @@ function PosPage() {
       })
       .slice(0, 16);
   }, [products, shortcutRows, locationId]);
-  const customerUnset = customerMode === "unset";
-  const familyDue = customer?.mobile ? familySummary(customers, customer.mobile) : null;
-
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/billing" />
 
-      {/* Store selector + New Bill */}
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
         <SearchableSelect
           className="w-60"
@@ -647,19 +519,6 @@ function PosPage() {
             keywords: [l.type, l.address ?? ""],
           }))}
         />
-        <Button className="gap-1.5" onClick={startNewBill}>
-          <Plus className="h-4 w-4" /> New Bill
-          <span className="rounded border border-primary-foreground/40 px-1 font-mono text-[10px]">
-            F5
-          </span>
-        </Button>
-        <Button
-          variant="outline"
-          onClick={holdCurrentBill}
-          disabled={!locationId || customerMode === "unset"}
-        >
-          Hold bill
-        </Button>
         <button
           onClick={() => setCustOpen(true)}
           className={cn(
@@ -670,35 +529,9 @@ function PosPage() {
           )}
         >
           <UserRound className="h-4 w-4" />
-          {customerMode === "chosen"
-            ? customer?.name
-            : customerMode === "walkin"
-              ? "Walk-in customer"
-              : "No customer yet"}
+          {customerMode === "chosen" ? customer?.name : "Walk-in"}
         </button>
-      </div>
-
-      <div className="flex min-h-11 items-center gap-2 overflow-x-auto border-b bg-background px-3 py-1.5">
-        <span className="shrink-0 text-xs font-semibold text-muted-foreground">BILLS</span>
-        <Button variant="secondary" size="sm" className="shrink-0">
-          {currentInvoice
-            ? `Current · ${currentInvoice.invoice_number}`
-            : "Select location to start"}
-        </Button>
-        {heldBills.map((bill, index) => (
-          <Button
-            key={bill.id}
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            onClick={() => switchToHeldBill(bill.id)}
-          >
-            {customers.find((customerRow) => customerRow.id === bill.customer_id)?.name ??
-              "Held bill"}{" "}
-            · {bill.invoice_number} · Hold {index + 1}
-          </Button>
-        ))}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Bill date</span>
           <Popover>
             <PopoverTrigger asChild>
@@ -725,109 +558,17 @@ function PosPage() {
         </div>
       </div>
 
-      {/* Customer-first inline section — the bill cannot start before this is resolved */}
-      <div className="border-b bg-muted/40 px-3 py-2">
-        {customerUnset ? (
-          <InlineCustomerSection
-            customers={customers}
-            searchRef={custSearchRef}
-            onSelect={resolveCustomer}
-          />
-        ) : (
-          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-1.5 rounded-xl border bg-card px-4 py-2.5 shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <UserRound className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-sm font-semibold leading-tight">
-                  {customer?.name ?? "Walk-in customer"}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {customer?.mobile ?? "No mobile"}
-                </div>
-              </div>
-            </div>
-            {customer && (
-              <>
-                {profile?.role !== "CASHIER" && (
-                  <>
-                    <BannerStat label="Visits" value={String(customer.visits)} />
-                    <BannerStat label="Age group" value={customer.age_group ?? "—"} />
-                    <BannerStat label="Gender" value={customer.gender ?? "—"} />
-                  </>
-                )}
-                <BannerStat
-                  label="Credit limit"
-                  value={customer.credit_limit > 0 ? inr(customer.credit_limit) : "—"}
-                />
-                {customer.outstanding_balance > 0 ? (
-                  <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
-                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE:{" "}
-                    {inr(familyDue?.outstanding ?? customer.outstanding_balance)}
-                  </span>
-                ) : (
-                  <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
-                    <CheckCircle2 className="h-4 w-4" /> Udhar Clear
-                  </span>
-                )}
-                {familyDue && familyDue.members.length > 1 && (
-                  <details className="basis-full border-t pt-2 text-xs">
-                    <summary className="cursor-pointer font-medium">
-                      Family account · {inr(familyDue.outstanding)} total due ·{" "}
-                      {familyDue.members.length} members
-                    </summary>
-                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
-                      {familyDue.members.map((member) => (
-                        <span key={member.id}>
-                          {member.name}: {inr(member.outstanding_balance)}
-                        </span>
-                      ))}
-                    </div>
-                  </details>
-                )}
-              </>
-            )}
-            {customerMode === "walkin" && (
-              <span className="ml-auto rounded-lg bg-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">
-                Walk-in — udhar N/A
-              </span>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-auto"
-              onClick={() => {
-                setCustomer(null);
-                setCustomerMode("unset");
-                setTimeout(() => custSearchRef.current?.focus(), 30);
-              }}
-            >
-              Change customer
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <main className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 p-3 lg:flex-row lg:gap-4">
+      <main className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4">
         {/* Left: scan + cart */}
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
           <div className="relative">
             <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               ref={barcodeRef}
-              disabled={customerUnset || !locationId}
-              className={cn(
-                "h-11 pl-8 text-base",
-                customerUnset && "opacity-50",
-                !customerUnset && "ring-2 ring-ring/40",
-              )}
+              disabled={!locationId}
+              className={cn("h-11 pl-8 text-base", "ring-2 ring-ring/40")}
               placeholder={
-                !locationId
-                  ? "Select the billing store to enable scanning…"
-                  : customerUnset
-                    ? "Customer choose karne ke baad scan enable hoga…"
-                    : "Scan barcode or type item name / SKU…"
+                !locationId ? "Select a store to scan items" : "Scan barcode or search items…"
               }
               value={barcode}
               onChange={(e) => setBarcode(e.target.value)}
@@ -896,35 +637,6 @@ function PosPage() {
                 </tr>
               </thead>
               <tbody>
-                {lines.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
-                      {products.length === 0 ? (
-                        <div className="space-y-2">
-                          <p>No products are available to bill from this device&apos;s catalog.</p>
-                          {profile?.role === "MANAGER" ? (
-                            <Button asChild size="sm" variant="outline">
-                              <Link to="/manager">Open Manager catalog and stock tools</Link>
-                            </Button>
-                          ) : profile?.role === "ADMIN" ? (
-                            <p>
-                              Create a Manager in Admin staff access to prepare products and opening
-                              stock.
-                            </p>
-                          ) : (
-                            <p>
-                              Ask your Manager to add products and opening stock before billing.
-                            </p>
-                          )}
-                        </div>
-                      ) : customerUnset ? (
-                        "Customer choose karein — phir scan ya quick tile se bill shuru karein."
-                      ) : (
-                        "Scan an item or tap a quick tile to start the bill."
-                      )}
-                    </td>
-                  </tr>
-                )}
                 {lines.map((l) => {
                   const stock = stockAt(l.product.id, location?.id);
                   const lineMax = maxLineDiscount(
@@ -1052,7 +764,7 @@ function PosPage() {
         </div>
 
         {/* Right: quick tiles + totals */}
-        <div className="flex w-full flex-col gap-3 lg:w-80 lg:shrink-0">
+        <div className="flex min-h-0 w-full flex-col gap-3 overflow-y-auto lg:w-80 lg:shrink-0">
           <div className="rounded-xl border bg-card p-3 shadow-sm">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-semibold uppercase text-muted-foreground">
@@ -1072,11 +784,10 @@ function PosPage() {
               {tiles.map((p) => (
                 <button
                   key={p.id}
-                  disabled={customerUnset || !locationId}
+                  disabled={!locationId}
                   onClick={() => addToCart(p)}
                   className={cn(
                     "flex items-start gap-1.5 rounded-lg border bg-background px-2 py-1.5 text-left text-xs hover:border-primary/40 hover:bg-accent",
-                    customerUnset && "opacity-50",
                   )}
                 >
                   <span aria-hidden className="text-sm leading-none">
@@ -1140,17 +851,6 @@ function PosPage() {
                 <span className="tabular-nums">{inr(total)}</span>
               </div>
             </div>
-            <Button
-              size="lg"
-              className="mt-4 h-14 w-full bg-success text-base text-success-foreground hover:bg-success/90"
-              disabled={lines.length === 0}
-              onClick={() => setPayOpen(true)}
-            >
-              <span className="rounded border border-success-foreground/40 px-1 font-mono text-xs">
-                F4
-              </span>
-              Pay & print ({inr(total)})
-            </Button>
           </div>
 
           {customer && customer.outstanding_balance > 0 && (
@@ -1165,8 +865,8 @@ function PosPage() {
             <div className="mb-1 flex items-center gap-1 font-medium text-foreground">
               <Plus className="h-3 w-3" /> Shortcuts
             </div>
-            F1 scan · F2 quick add · F3 customer · F4 pay · F5 new bill · Enter adds scanned item.
-            Floor price (min allowed rate) protects every line and bill discount.
+            F1 scan · F2 quick add · F3 customer · F4 pay · Enter adds scanned item. Floor price
+            (min allowed rate) protects every line and bill discount.
           </div>
         </div>
       </main>
@@ -1175,7 +875,7 @@ function PosPage() {
         <div className="mx-auto flex max-w-[1600px] items-center gap-2">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[10px] text-muted-foreground sm:text-xs">
-              {currentInvoice?.invoice_number ?? "Bill number assigned when location is selected"}
+              {currentInvoice?.invoice_number ?? ""}
             </div>
             <div className="font-display text-lg font-bold tabular-nums sm:text-xl">
               {inr(total)}
@@ -1185,8 +885,7 @@ function PosPage() {
             <span className="rounded border px-1 font-mono">F1</span> scan{" "}
             <span className="rounded border px-1 font-mono">F2</span> add{" "}
             <span className="rounded border px-1 font-mono">F3</span> customer{" "}
-            <span className="rounded border px-1 font-mono">F4</span> pay{" "}
-            <span className="rounded border px-1 font-mono">F5</span> new
+            <span className="rounded border px-1 font-mono">F4</span> pay
           </div>
           <Button
             size="lg"
@@ -1202,7 +901,6 @@ function PosPage() {
           <span>F2 add</span>
           <span>F3 customer</span>
           <span>F4 pay</span>
-          <span>F5 new bill</span>
         </div>
       </div>
 
@@ -1248,205 +946,6 @@ function PosPage() {
         locations={allowedLocations}
       />
       <ReceiptDialog open={!!receipt} onOpenChange={(o) => !o && setReceipt(null)} data={receipt} />
-    </div>
-  );
-}
-
-/**
- * Inline customer-first picker shown on every new bill: search by name or
- * mobile, add a customer in three fields, or pick Walk-in — no modal.
- */
-function InlineCustomerSection({
-  customers,
-  searchRef,
-  onSelect,
-}: {
-  customers: Customer[];
-  searchRef: React.RefObject<HTMLInputElement | null>;
-  onSelect: (c: Customer | null) => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [mobile, setMobile] = useState("");
-  const [ageGroup, setAgeGroup] = useState("Adult");
-  const [gender, setGender] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-
-  const results = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return [];
-    return customers.filter((c) => matchesSearchFields([c.name, c.mobile], q)).slice(0, 6);
-  }, [customers, search]);
-
-  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown" && results.length) {
-      event.preventDefault();
-      setActiveIndex((index) => (index + 1) % results.length);
-    } else if (event.key === "ArrowUp" && results.length) {
-      event.preventDefault();
-      setActiveIndex((index) => (index - 1 + results.length) % results.length);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      if (results[activeIndex]) onSelect(results[activeIndex]);
-      else {
-        setAdding(true);
-        setName(search.trim());
-        setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
-      }
-    }
-  }
-
-  async function handleAdd() {
-    if (!name.trim() || busy) return;
-    setBusy(true);
-    try {
-      const created = await addCustomer({
-        name: name.trim(),
-        mobile: mobile.trim() || null,
-        creditLimit: 0,
-        ageGroup,
-        gender: gender || null,
-      });
-      onSelect(created);
-    } catch (e) {
-      toast.error("Could not save customer", {
-        description: userFacingError(e, "Check the customer details and try again."),
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="mx-auto max-w-[1600px] rounded-xl border bg-card p-3 shadow-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-72 flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            ref={searchRef}
-            autoFocus
-            className="pl-8"
-            placeholder="Customer ka naam ya mobile search karein…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-          />
-        </div>
-        <Button
-          variant="outline"
-          className="gap-1.5"
-          onClick={() => {
-            setAdding((a) => !a);
-            if (!adding) setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
-          }}
-        >
-          <Plus className="h-4 w-4" /> New customer
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => onSelect(null)}
-          className="gap-1.5"
-          title="Bill without a registered customer — udhar unavailable"
-        >
-          <UserRound className="h-4 w-4" /> Walk-in customer
-        </Button>
-      </div>
-
-      {adding && (
-        <div className="mt-2 grid gap-2 rounded-lg border bg-muted/40 p-3 md:grid-cols-[1fr_1fr_auto]">
-          <div className="space-y-1">
-            <Label htmlFor="ic-name">Name *</Label>
-            <Input
-              id="ic-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Customer name"
-              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="ic-mobile">Mobile (optional)</Label>
-            <Input
-              id="ic-mobile"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-              placeholder="10-digit number"
-              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            />
-          </div>
-          <div className="flex items-end gap-2">
-            <SearchableSelect
-              className="w-32"
-              value={ageGroup}
-              onValueChange={setAgeGroup}
-              options={["Child", "Teen", "Adult", "Senior"].map((value) => ({
-                value,
-                label: value,
-              }))}
-            />
-            <SearchableSelect
-              className="w-28"
-              value={gender}
-              onValueChange={setGender}
-              placeholder="Gender"
-              options={["Male", "Female", "Other"].map((value) => ({ value, label: value }))}
-            />
-            <Button onClick={handleAdd} disabled={!name.trim() || busy}>
-              Save & start bill
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {results.length > 0 && (
-        <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((c, index) => (
-            <button
-              key={c.id}
-              onClick={() => onSelect(c)}
-              className={cn(
-                "flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent",
-                activeIndex === index && "border-primary bg-accent",
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <UserRound className="h-4 w-4 text-muted-foreground" />
-                <span className="font-medium">{c.name}</span>
-                {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
-                {c.visits > 0 && (
-                  <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
-                    {c.visits} visits
-                  </span>
-                )}
-              </span>
-              {c.mobile && familySummary(customers, c.mobile).outstanding > 0 ? (
-                <span className="text-xs font-semibold text-destructive">
-                  ⚠️ Family due {inr(familySummary(customers, c.mobile).outstanding)}
-                </span>
-              ) : (
-                <span className="text-[10px] font-medium text-success">Clear</span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-      {!adding && results.length === 0 && (
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          Bill customer ke bina start nahi hota — upar se search karein, naya customer add karein,
-          ya Walk-in chunein.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function BannerStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold">{value}</div>
     </div>
   );
 }

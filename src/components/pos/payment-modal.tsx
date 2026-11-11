@@ -183,6 +183,8 @@ export function PaymentModal({
         cashierId,
         cashierName,
         customerId: customer?.id ?? null,
+        customerSegment: customer?.segment ?? null,
+        orderType: customer ? "Registered customer" : "Walk-in",
         discount,
         businessDate,
         items: lines.map((l) => ({
@@ -192,6 +194,7 @@ export function PaymentModal({
           uom: l.uom,
           discount: l.discount,
           total: l.quantity * l.unit_price - l.discount,
+          unit_cost_snapshot: l.product.purchase_cost,
         })),
         payments,
       });

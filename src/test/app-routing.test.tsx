@@ -22,4 +22,12 @@ describe("App routing", () => {
 
     expect(matches.at(-1)?.routeId).not.toBe(rootRouteId);
   });
+
+  it("registers the new Cash Drawer and import approval routes", () => {
+    const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
+
+    expect(router.matchRoutes("/cash-drawer").at(-1)?.routeId).not.toBe(rootRouteId);
+    expect(router.matchRoutes("/api/retail-workbook-import").at(-1)?.routeId).not.toBe(rootRouteId);
+    expect(router.matchRoutes("/api/cash-session-override").at(-1)?.routeId).not.toBe(rootRouteId);
+  });
 });

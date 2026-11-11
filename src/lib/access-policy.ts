@@ -14,6 +14,8 @@ export const accessPolicy = {
       "/api/staff",
       "/api/staff-password",
       "/api/staff-session",
+      "/api/cash-session-override",
+      "/api/retail-workbook-import",
     ],
     signIn: ["/api/pos/login"],
   },
