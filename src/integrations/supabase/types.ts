@@ -448,9 +448,11 @@ export type Database = {
           created_at: string
           id: string
           is_active: boolean
+          is_default_warehouse: boolean
           name: string
           phone: string | null
           type: string
+          upi_vpa: string | null
         }
         Insert: {
           address?: string | null
@@ -458,9 +460,11 @@ export type Database = {
           created_at?: string
           id?: string
           is_active?: boolean
+          is_default_warehouse?: boolean
           name: string
           phone?: string | null
           type?: string
+          upi_vpa?: string | null
         }
         Update: {
           address?: string | null
@@ -468,9 +472,11 @@ export type Database = {
           created_at?: string
           id?: string
           is_active?: boolean
+          is_default_warehouse?: boolean
           name?: string
           phone?: string | null
           type?: string
+          upi_vpa?: string | null
         }
         Relationships: []
       }
@@ -1267,6 +1273,19 @@ export type Database = {
           p_reason: string
           p_status: string
         }
+        Returns: undefined
+      }
+      app_review_category_suggestion: {
+        Args: {
+          p_actor_user_id: string
+          p_category_id: string
+          p_reason: string
+          p_status: string
+        }
+        Returns: undefined
+      }
+      app_set_default_warehouse: {
+        Args: { p_actor_user_id: string; p_location_id: string }
         Returns: undefined
       }
       app_assign_product_barcode: {

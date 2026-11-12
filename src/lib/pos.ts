@@ -12,6 +12,7 @@ import {
   type SyncStatus,
 } from "@/lib/local-db";
 import { DENOMINATIONS } from "@/lib/cash-denominations";
+import { validateRecordedPaymentSplit } from "@/lib/payment-policy";
 export { DENOMINATIONS } from "@/lib/cash-denominations";
 
 export interface Location {
@@ -22,6 +23,7 @@ export interface Location {
   address: string | null;
   phone: string | null;
   upi_vpa?: string | null;
+  is_default_warehouse?: boolean;
   is_active: boolean;
 }
 
@@ -536,7 +538,11 @@ export function useLocations() {
 }
 
 export function useProducts() {
-  return useLocalRows<Product & KeyedRecord>("catalog", ["products"], (product) => product.is_active !== false);
+  return useLocalRows<Product & KeyedRecord>(
+    "catalog",
+    ["products"],
+    (product) => product.is_active !== false,
+  );
 }
 
 export interface InventoryRow {
@@ -582,7 +588,9 @@ export function useInventory() {
 }
 
 export function useLocationProducts() {
-  return useLocalRows<LocationProductAssignment & KeyedRecord>("location_products", ["location-products"]);
+  return useLocalRows<LocationProductAssignment & KeyedRecord>("location_products", [
+    "location-products",
+  ]);
 }
 
 export function useBarcodeCandidates() {
@@ -773,7 +781,10 @@ async function localStockDelta(
   ];
   if (delta > 0) {
     const assignmentId = `${productId}:${locationId}`;
-    const currentAssignment = await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId);
+    const currentAssignment = await getLocal<LocationProductAssignment & KeyedRecord>(
+      "location_products",
+      assignmentId,
+    );
     entries.push({
       store: "location_products",
       value: {
@@ -1038,7 +1049,8 @@ export async function createPosInvoice(input: {
   if (!input.customerId) throw new Error("Select a customer before completing the bill.");
   for (const item of input.items) {
     const product = (await getLocal<Product & KeyedRecord>("catalog", item.product_id)) ?? null;
-    if (item.quantity <= 0 || !Number.isFinite(item.quantity)) throw new Error("Enter a valid item quantity.");
+    if (item.quantity <= 0 || !Number.isFinite(item.quantity))
+      throw new Error("Enter a valid item quantity.");
     if (product && !product.is_loose && !Number.isInteger(item.quantity))
       throw new Error(`${product.name} is sold in whole units. Enter a whole-number quantity.`);
     if (product?.is_loose) {
@@ -1050,7 +1062,9 @@ export async function createPosInvoice(input: {
   }
   const inventory = await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot");
   const products = await getAllLocal<Product & KeyedRecord>("catalog");
-  const assignments = await getAllLocal<LocationProductAssignment & KeyedRecord>("location_products");
+  const assignments = await getAllLocal<LocationProductAssignment & KeyedRecord>(
+    "location_products",
+  );
   const existing = input.draftId
     ? await getLocal<LocalInvoice & KeyedRecord>("bills", input.draftId)
     : undefined;
@@ -1082,6 +1096,20 @@ export async function createPosInvoice(input: {
   const id = existing?.id ?? input.draftId ?? localId();
   const subtotal = input.items.reduce((sum, item) => sum + item.total, 0);
   const total = Math.max(0, subtotal - input.discount);
+  const paymentError = validateRecordedPaymentSplit(total, input.payments);
+  if (paymentError) throw new Error(paymentError);
+  const creditAllocated = input.payments
+    .filter((payment) => payment.mode === "CREDIT")
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  if (creditAllocated > 0) {
+    const customer = await getLocal<Customer & KeyedRecord>("customers", input.customerId);
+    const availableCredit = Math.max(
+      (customer?.credit_limit ?? 0) - (customer?.outstanding_balance ?? 0),
+      0,
+    );
+    if (creditAllocated > availableCredit)
+      throw new Error(`Customer credit limit exceeded. Available credit: ${inr(availableCredit)}.`);
+  }
   const paid = input.payments
     .filter((payment) => payment.mode !== "CREDIT")
     .reduce((sum, payment) => sum + payment.amount, 0);
@@ -1136,20 +1164,20 @@ export async function createPosInvoice(input: {
   const movements = [...grouped.entries()]
     .filter(([productId]) => trackedProductIds.has(productId))
     .map(([productId, quantity]) => {
-    const stock = stockRows.find(
-      (row) => row.product_id === productId && row.location_id === input.locationId,
-    );
-    return {
-      id: localId(),
-      product_id: productId,
-      location_id: input.locationId,
-      movement_type: "SALE",
-      quantity_delta: -quantity,
-      quantity_on_hand: stock?.quantity_on_hand ?? 0,
-      reference: invoiceNumber,
-      created_at: createdAt,
-      sync_status: "PENDING",
-    } as KeyedRecord;
+      const stock = stockRows.find(
+        (row) => row.product_id === productId && row.location_id === input.locationId,
+      );
+      return {
+        id: localId(),
+        product_id: productId,
+        location_id: input.locationId,
+        movement_type: "SALE",
+        quantity_delta: -quantity,
+        quantity_on_hand: stock?.quantity_on_hand ?? 0,
+        reference: invoiceNumber,
+        created_at: createdAt,
+        sync_status: "PENDING",
+      } as KeyedRecord;
     });
   const uncountedSales = [...grouped.entries()]
     .filter(([productId]) => !trackedProductIds.has(productId))
@@ -1221,6 +1249,10 @@ export async function createPosInvoice(input: {
 export async function addPayment(input: { invoiceId: string; amount: number; mode: string }) {
   const invoice = await getLocal<LocalInvoice & KeyedRecord>("bills", input.invoiceId);
   if (!invoice) throw new Error("Bill not found on this device.");
+  if (!Number.isFinite(input.amount) || input.amount <= 0 || input.amount > invoice.balance_amount)
+    throw new Error("Enter a valid collection amount within the bill balance.");
+  if (!["CASH", "UPI", "CARD"].includes(input.mode))
+    throw new Error("Choose Cash, UPI or Card for a collected payment.");
   const payment = {
     id: localId(),
     invoice_id: invoice.id,
@@ -1329,7 +1361,10 @@ export async function quickAddProduct(input: {
     throw new Error("Quantity prices must be between the minimum allowed price and retail price.");
   const allProducts = await getAllLocal<Product & KeyedRecord>("catalog");
   const barcode = input.barcode?.trim() || null;
-  if (barcode && allProducts.some((product) => product.barcode?.toLowerCase() === barcode.toLowerCase())) {
+  if (
+    barcode &&
+    allProducts.some((product) => product.barcode?.toLowerCase() === barcode.toLowerCase())
+  ) {
     throw new Error("This barcode is already assigned to another product.");
   }
   if (allProducts.some((product) => product.sku?.toLowerCase() === sku.toLowerCase()))
@@ -1346,7 +1381,9 @@ export async function quickAddProduct(input: {
     category: input.category || null,
     subcategory: input.subcategory || null,
     variant: input.variant || null,
-    barcode_type: barcode ? (input.barcodeType ?? (input.cashierQuickAdd ? "UNVERIFIED" : "MANUFACTURER")) : null,
+    barcode_type: barcode
+      ? (input.barcodeType ?? (input.cashierQuickAdd ? "UNVERIFIED" : "MANUFACTURER"))
+      : null,
     quantity_precision: 0,
     review_status: "PENDING",
     review_reason: null,
@@ -1394,7 +1431,10 @@ export async function quickAddProduct(input: {
       },
     });
   }
-  for (const [kind, value] of [["CATEGORY", input.category], ["SUBCATEGORY", input.subcategory]] as const) {
+  for (const [kind, value] of [
+    ["CATEGORY", input.category],
+    ["SUBCATEGORY", input.subcategory],
+  ] as const) {
     const normalized = value?.trim();
     if (!normalized) continue;
     const reviewId = `${input.locationId}:${kind}:${normalized.toLowerCase()}`;
@@ -1415,14 +1455,8 @@ export async function quickAddProduct(input: {
     }
   }
   const movement =
-      openingQty > 0
-      ? await localStockDelta(
-          product.id,
-          input.locationId,
-          openingQty,
-          "OPENING",
-          `SKU ${sku}`,
-        )
+    openingQty > 0
+      ? await localStockDelta(product.id, input.locationId, openingQty, "OPENING", `SKU ${sku}`)
       : null;
   if (movement) entries.push(...movement.entries);
   await commitLocalOperation(
@@ -1462,8 +1496,15 @@ export async function resubmitRejectedProduct(input: {
 }): Promise<Product> {
   const current = await getLocal<Product & KeyedRecord>("catalog", input.productId);
   if (!current || current.review_status !== "REJECTED")
-    throw new Error("This SKU is no longer awaiting correction. Refresh the catalog and try again.");
-  if (!input.name.trim() || !input.uom.trim() || !Number.isFinite(input.salePrice) || input.salePrice <= 0)
+    throw new Error(
+      "This SKU is no longer awaiting correction. Refresh the catalog and try again.",
+    );
+  if (
+    !input.name.trim() ||
+    !input.uom.trim() ||
+    !Number.isFinite(input.salePrice) ||
+    input.salePrice <= 0
+  )
     throw new Error("Enter the item name, sale unit and a valid retail price.");
   const sku = input.sku.trim();
   if (!sku) throw new Error("Enter a valid SKU.");
@@ -1485,18 +1526,35 @@ export async function resubmitRejectedProduct(input: {
     enrichment_status: "PENDING",
   };
   const assignmentId = `${product.id}:${input.locationId}`;
-  const assignment = await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId);
+  const assignment = await getLocal<LocationProductAssignment & KeyedRecord>(
+    "location_products",
+    assignmentId,
+  );
   if (!assignment) throw new Error("This SKU is not assigned to the active store.");
-  const updatedAssignment = { ...assignment, review_status: "PENDING", review_reason: null, sync_status: "PENDING" };
+  const updatedAssignment = {
+    ...assignment,
+    review_status: "PENDING",
+    review_reason: null,
+    sync_status: "PENDING",
+  };
   const categoryReviews: KeyedRecord[] = [];
-  for (const [kind, value] of [["CATEGORY", product.category], ["SUBCATEGORY", product.subcategory]] as const) {
+  for (const [kind, value] of [
+    ["CATEGORY", product.category],
+    ["SUBCATEGORY", product.subcategory],
+  ] as const) {
     if (!value) continue;
     const id = `${input.locationId}:${kind}:${value.toLowerCase()}`;
     const existingReview = await getLocal<KeyedRecord>("category_reviews", id);
-    if (!existingReview || existingReview["status"] === "REJECTED") categoryReviews.push({
-      ...existingReview,
-      id, location_id: input.locationId, kind, name: value, status: "PENDING", created_at: new Date().toISOString(),
-    });
+    if (!existingReview || existingReview["status"] === "REJECTED")
+      categoryReviews.push({
+        ...existingReview,
+        id,
+        location_id: input.locationId,
+        kind,
+        name: value,
+        status: "PENDING",
+        created_at: new Date().toISOString(),
+      });
   }
   await commitLocalOperation(
     [
@@ -1529,7 +1587,8 @@ export async function addCustomer(input: {
 }): Promise<Customer> {
   const normalizedName = input.name?.trim().toLocaleLowerCase("hi-IN") || null;
   const normalizedMobile = input.mobile?.replace(/\D/g, "") || null;
-  if (!normalizedName && !normalizedMobile) throw new Error("Enter a customer name or mobile number.");
+  if (!normalizedName && !normalizedMobile)
+    throw new Error("Enter a customer name or mobile number.");
   const duplicate = (await getAllLocal<Customer & KeyedRecord>("customers")).find(
     (customer) =>
       (customer.name?.trim().toLocaleLowerCase("hi-IN") || null) === normalizedName &&
@@ -1614,11 +1673,12 @@ export async function updateProductProfile(productId: string, patch: Partial<Pro
     ...patch,
     sku: nextSku,
     barcode: nextBarcode,
-    barcode_type: nextBarcode === barcodeForSku(nextSku ?? "")
-      ? "INTERNAL" as const
-      : nextBarcode
-        ? (patch.barcode_type ?? current.barcode_type ?? "MANUFACTURER")
-        : null,
+    barcode_type:
+      nextBarcode === barcodeForSku(nextSku ?? "")
+        ? ("INTERNAL" as const)
+        : nextBarcode
+          ? (patch.barcode_type ?? current.barcode_type ?? "MANUFACTURER")
+          : null,
     price_tiers: priceTiers,
     sync_status: "PENDING",
   };
@@ -1849,18 +1909,13 @@ export async function countLocationStock(input: {
   if (product.is_loose && Math.abs(counted * scale - Math.round(counted * scale)) > 0.0001)
     throw new Error(`This SKU supports up to ${precision} decimal places.`);
 
-  const current = (await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot")).find(
-    (row) => row.product_id === input.productId && row.location_id === input.locationId,
-  )?.quantity_on_hand ?? 0;
+  const current =
+    (await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot")).find(
+      (row) => row.product_id === input.productId && row.location_id === input.locationId,
+    )?.quantity_on_hand ?? 0;
   const delta = counted - current;
   const reason = `Physical count: ${current} → ${counted}`;
-  const stock = await localStockDelta(
-    input.productId,
-    input.locationId,
-    delta,
-    "COUNT",
-    reason,
-  );
+  const stock = await localStockDelta(input.productId, input.locationId, delta, "COUNT", reason);
   const assignmentId = `${input.productId}:${input.locationId}`;
   const assignment = {
     ...(await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId)),
@@ -1955,16 +2010,20 @@ export async function closeSession(input: {
     throw new Error("No open cash session found on this device.");
   const invoices = await getAllLocal<LocalInvoice & KeyedRecord>("bills");
   const payments = await getAllLocal<PaymentRow & KeyedRecord>("payments");
-  const invoiceIds = new Set(
+  const locationByInvoiceId = new Map(
     invoices
-      .filter(
-        (invoice) =>
-          invoice.location_id === session.location_id && invoice.created_at >= session.opened_at,
-      )
-      .map((invoice) => invoice.id),
+      .filter((invoice) => invoice.location_id === session.location_id)
+      .map((invoice) => [invoice.id, invoice.location_id]),
   );
+  const closedAt = new Date().toISOString();
   const cashSales = payments
-    .filter((payment) => invoiceIds.has(payment.invoice_id) && payment.mode === "CASH")
+    .filter(
+      (payment) =>
+        locationByInvoiceId.has(payment.invoice_id) &&
+        payment.mode === "CASH" &&
+        payment.created_at >= session.opened_at &&
+        payment.created_at <= closedAt,
+    )
     .reduce((sum, payment) => sum + payment.amount, 0);
   const cashIn = input.cashIn ?? session.cash_in;
   const cashOut = input.cashOut ?? session.cash_out;
@@ -1984,7 +2043,7 @@ export async function closeSession(input: {
     closing_cash: input.countedCash,
     closed_by_id: input.actorUserId,
     status: "CLOSED",
-    closed_at: new Date().toISOString(),
+    closed_at: closedAt,
     closing_denominations: input.closingDenominations
       ? Object.fromEntries(
           Object.entries(input.closingDenominations).map(([key, value]) => [key, Number(value)]),

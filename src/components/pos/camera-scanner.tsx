@@ -11,17 +11,41 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+async function lowResolutionJpeg(source: CanvasImageSource, width: number, height: number) {
+  for (const maxEdge of [640, 480, 360]) {
+    const scale = Math.min(1, maxEdge / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not prepare the review image.");
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    for (const quality of [0.42, 0.32, 0.24]) {
+      const blob = await new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not prepare the review image.")), "image/jpeg", quality),
+      );
+      if (blob.size <= 32_000) return blob;
+    }
+  }
+  throw new Error("Could not reduce this photo enough for local POS review.");
+}
+
 export function CameraScannerPanel({
   active,
   onScan,
+  onImageReview,
+  requestReviewImage = false,
   compact = false,
 }: {
   active: boolean;
   onScan: (value: string) => void;
+  onImageReview?: (image: Blob) => void | Promise<void>;
+  requestReviewImage?: boolean;
   compact?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const callbackRef = useRef(onScan);
+  const imageReviewRef = useRef(onImageReview);
   const lastCode = useRef({ value: "", at: 0 });
   const [cameraState, setCameraState] = useState<"starting" | "ready" | "failed">("starting");
   const [cameraError, setCameraError] = useState("");
@@ -30,6 +54,10 @@ export function CameraScannerPanel({
   useEffect(() => {
     callbackRef.current = onScan;
   }, [onScan]);
+
+  useEffect(() => {
+    imageReviewRef.current = onImageReview;
+  }, [onImageReview]);
 
   useEffect(() => {
     if (!active || !videoRef.current) return;
@@ -72,9 +100,10 @@ export function CameraScannerPanel({
   async function decodeImage(file?: File) {
     if (!file || imageBusy) return;
     setImageBusy(true);
+    let reviewBlob: Blob | null = null;
     try {
       const bitmap = await createImageBitmap(file);
-      const scale = Math.min(1, 1280 / Math.max(bitmap.width, bitmap.height));
+      const scale = Math.min(1, 640 / Math.max(bitmap.width, bitmap.height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(bitmap.width * scale));
       canvas.height = Math.max(1, Math.round(bitmap.height * scale));
@@ -85,6 +114,7 @@ export function CameraScannerPanel({
       const blob = await new Promise<Blob>((resolve, reject) =>
         canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("Could not prepare this image."))), "image/jpeg", 0.72),
       );
+      reviewBlob = await lowResolutionJpeg(canvas, canvas.width, canvas.height);
       const imageUrl = URL.createObjectURL(blob);
       try {
         const result = await new BrowserMultiFormatReader().decodeFromImageUrl(imageUrl);
@@ -95,6 +125,14 @@ export function CameraScannerPanel({
         URL.revokeObjectURL(imageUrl);
       }
     } catch (error) {
+      if (reviewBlob && imageReviewRef.current) {
+        try {
+          await imageReviewRef.current(reviewBlob);
+          toast.info("Photo sent to the POS for staff review");
+        } catch {
+          toast.error("Could not send the photo to the POS");
+        }
+      }
       toast.error("Could not read this barcode image", {
         description: error instanceof Error ? error.message : "Try another photo.",
       });
@@ -102,6 +140,32 @@ export function CameraScannerPanel({
       setImageBusy(false);
     }
   }
+
+  async function sendCurrentFrameForReview() {
+    const video = videoRef.current;
+    if (!video || !imageReviewRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      toast.error("Wait for the camera preview before sending a review image.");
+      return;
+    }
+    setImageBusy(true);
+    try {
+      const blob = await lowResolutionJpeg(video, video.videoWidth, video.videoHeight);
+      await imageReviewRef.current(blob);
+      toast.success("Low-resolution photo sent to the POS");
+    } catch (error) {
+      toast.error("Could not send the camera image", {
+        description: error instanceof Error ? error.message : "Try again on the same local network.",
+      });
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (active && requestReviewImage && cameraState === "ready")
+      void sendCurrentFrameForReview();
+    // A single requested photo is sent per true request; the parent clears it on acknowledgement.
+  }, [active, requestReviewImage, cameraState]);
 
   return (
     <div className="space-y-3">
@@ -139,6 +203,11 @@ export function CameraScannerPanel({
             }}
           />
         </label>
+        {onImageReview && (
+          <Button type="button" variant="outline" size="sm" disabled={imageBusy || cameraState !== "ready"} onClick={() => void sendCurrentFrameForReview()}>
+            Send photo to POS for review
+          </Button>
+        )}
       </div>
     </div>
   );

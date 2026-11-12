@@ -89,7 +89,9 @@ function todayBusinessDate() {
 
 function playScanBeep() {
   if (typeof window === "undefined") return;
-  const AudioContextClass = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const AudioContextClass =
+    window.AudioContext ??
+    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) return;
   try {
     const context = new AudioContextClass();
@@ -261,16 +263,7 @@ function PosPage() {
       });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [
-    currentInvoice,
-    locationId,
-    businessDate,
-    customer,
-    customer,
-    lines,
-    discountMode,
-    discount,
-  ]);
+  }, [currentInvoice, locationId, businessDate, customer, lines, discountMode, discount]);
 
   const stockAt = useCallback(
     (productId: string, locId: string | undefined) =>
@@ -281,14 +274,20 @@ function PosPage() {
 
   const awaitingCount = useCallback(
     (productId: string, locId: string | undefined) =>
-      !!locId && locationProducts.some(
-        (row) => row.product_id === productId && row.location_id === locId && row.stock_count_status === "AWAITING_COUNT",
+      !!locId &&
+      locationProducts.some(
+        (row) =>
+          row.product_id === productId &&
+          row.location_id === locId &&
+          row.stock_count_status === "AWAITING_COUNT",
       ),
     [locationProducts],
   );
 
   function stockLabel(productId: string, locId: string | undefined) {
-    return awaitingCount(productId, locId) ? "Awaiting count" : `${stockAt(productId, locId)} in stock`;
+    return awaitingCount(productId, locId)
+      ? "Awaiting count"
+      : `${stockAt(productId, locId)} in stock`;
   }
 
   const subtotal = useMemo(
@@ -383,7 +382,9 @@ function PosPage() {
 
   function setQuantity(productId: string, quantity: number) {
     const product = products.find((item) => item.id === productId);
-    const precision = product?.is_loose ? Math.max(0, Math.min(3, product.quantity_precision ?? 3)) : 0;
+    const precision = product?.is_loose
+      ? Math.max(0, Math.min(3, product.quantity_precision ?? 3))
+      : 0;
     const scale = 10 ** precision;
     quantity = Math.round(quantity * scale) / scale;
     if (!awaitingCount(productId, locationId) && quantity > stockAt(productId, locationId)) {
@@ -614,9 +615,7 @@ function PosPage() {
           onClick={() => setCustOpen(true)}
           className={cn(
             "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm",
-            customer
-              ? "border-primary/40 bg-primary/5"
-              : "border-dashed text-muted-foreground",
+            customer ? "border-primary/40 bg-primary/5" : "border-dashed text-muted-foreground",
           )}
         >
           <UserRound className="h-4 w-4" />
@@ -654,62 +653,64 @@ function PosPage() {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
           <div className="flex items-start gap-2">
             <div className="relative min-w-0 flex-1">
-            <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              ref={barcodeRef}
-              disabled={!locationId || !customer}
-              className={cn("h-11 pl-8 text-base", "ring-2 ring-ring/40")}
-              placeholder={!locationId ? "Select a store to scan items" : "Scan barcode or search items…"}
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-              onKeyDown={handleProductKeyDown}
-            />
-            {searchResults.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border bg-popover shadow-md">
-                {searchResults.map((p, index) => (
-                  <button
-                    key={p.id}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      addToCart(p);
-                      setBarcode("");
-                      barcodeRef.current?.focus();
-                    }}
-                    className={cn(
-                      "flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-accent",
-                      activeProductIndex === index && "bg-accent",
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Search className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>
-                        {p.name}
-                        {p.name_hi && (
-                          <span className="ml-1 text-muted-foreground">{p.name_hi}</span>
-                        )}
-                      </span>
-                      {p.variant && (
-                        <span className="text-xs text-muted-foreground">{p.variant}</span>
+              <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                ref={barcodeRef}
+                disabled={!locationId || !customer}
+                className={cn("h-11 pl-8 text-base", "ring-2 ring-ring/40")}
+                placeholder={
+                  !locationId ? "Select a store to scan items" : "Scan barcode or search items…"
+                }
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                onKeyDown={handleProductKeyDown}
+              />
+              {searchResults.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border bg-popover shadow-md">
+                  {searchResults.map((p, index) => (
+                    <button
+                      key={p.id}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        addToCart(p);
+                        setBarcode("");
+                        barcodeRef.current?.focus();
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-accent",
+                        activeProductIndex === index && "bg-accent",
                       )}
-                    </span>
-                    <span className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="rounded bg-info/10 px-1 py-0.5 font-mono text-info">
-                        {p.rack_location ?? "—"}
-                      </span>
-                      <span className="font-mono">{p.barcode ?? p.sku ?? "—"}</span>
-                      <b className="text-foreground">{inr(p.sale_price)}</b>
-                      <span
-                        className={cn(
-                          stockAt(p.id, location?.id) <= p.min_stock && "text-destructive",
+                    >
+                      <span className="flex items-center gap-2">
+                        <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span>
+                          {p.name}
+                          {p.name_hi && (
+                            <span className="ml-1 text-muted-foreground">{p.name_hi}</span>
+                          )}
+                        </span>
+                        {p.variant && (
+                          <span className="text-xs text-muted-foreground">{p.variant}</span>
                         )}
-                      >
-                        {stockLabel(p.id, location?.id)}
                       </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
+                      <span className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span className="rounded bg-info/10 px-1 py-0.5 font-mono text-info">
+                          {p.rack_location ?? "—"}
+                        </span>
+                        <span className="font-mono">{p.barcode ?? p.sku ?? "—"}</span>
+                        <b className="text-foreground">{inr(p.sale_price)}</b>
+                        <span
+                          className={cn(
+                            stockAt(p.id, location?.id) <= p.min_stock && "text-destructive",
+                          )}
+                        >
+                          {stockLabel(p.id, location?.id)}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <Button
               type="button"
@@ -776,7 +777,8 @@ function PosPage() {
                                 )}
                                 title={`${loc.name}: ${stockLabel(l.product.id, loc.id)}`}
                               >
-                                {loc.code} {awaitingCount(l.product.id, loc.id) ? "count pending" : q}
+                                {loc.code}{" "}
+                                {awaitingCount(l.product.id, loc.id) ? "count pending" : q}
                               </span>
                             );
                           })}
@@ -815,7 +817,15 @@ function PosPage() {
                           </Button>
                           <Input
                             type="number"
-                            step={l.product.is_loose ? String(1 / 10 ** Math.max(0, Math.min(3, l.product.quantity_precision ?? 3))) : "1"}
+                            step={
+                              l.product.is_loose
+                                ? String(
+                                    1 /
+                                      10 **
+                                        Math.max(0, Math.min(3, l.product.quantity_precision ?? 3)),
+                                  )
+                                : "1"
+                            }
                             min="0"
                             className="h-6 w-14 px-1 text-center text-xs tabular-nums"
                             value={l.quantity}
@@ -1011,6 +1021,8 @@ function PosPage() {
         businessDate={businessDate}
         minTotal={minTotal}
         customer={customer}
+        upiVpa={location?.upi_vpa ?? null}
+        upiPayeeName={location?.name ?? "RetailFlow Store"}
         onPaid={handlePaid}
       />
       <CustomerDialog

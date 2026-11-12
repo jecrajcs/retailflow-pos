@@ -11,6 +11,7 @@ import {
   UserRoundCog,
   Zap,
   CircleAlert,
+  Tags,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -55,6 +56,8 @@ import {
   useInventory,
   useProducts,
   useSyncAlerts,
+  useCategoryReviews,
+  type CategoryReview,
   type Product,
 } from "@/lib/pos";
 import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
@@ -119,6 +122,10 @@ function ManagerPage() {
   const { data: sales = [] } = useSales();
   const { data: shortcutRows = [] } = useShortcutTiles();
   const { data: syncAlerts = [] } = useSyncAlerts();
+  const { data: categoryReviews = [] } = useCategoryReviews();
+  const pendingCategories = categoryReviews.filter(
+    (review) => review.location_id === location?.id && review.status === "PENDING",
+  );
   const transfers = allTransfers.filter(
     (row) =>
       canAccessLocation(profile, row.from_location_id) ||
@@ -212,6 +219,9 @@ function ManagerPage() {
             <TabsTrigger value="enrichment" className="gap-1.5">
               <Tag className="h-3.5 w-3.5" /> Catalog Queue
             </TabsTrigger>
+            <TabsTrigger value="categories" className="gap-1.5">
+              <Tags className="h-3.5 w-3.5" /> Categories ({pendingCategories.length})
+            </TabsTrigger>
             <TabsTrigger value="transfers" className="gap-1.5">
               <ArrowRightLeft className="h-3.5 w-3.5" /> Stock Transfers
             </TabsTrigger>
@@ -244,6 +254,16 @@ function ManagerPage() {
             <EnrichmentQueue
               products={products.filter((p) => p.enrichment_status !== "COMPLETE")}
               canArchive={profile?.role === "ADMIN"}
+            />
+          </TabsContent>
+
+          <TabsContent value="categories" className="mt-3">
+            <CategoryReviewQueue
+              reviews={pendingCategories}
+              locations={locations}
+              onReviewed={() =>
+                void queryClient.invalidateQueries({ queryKey: ["category-reviews"] })
+              }
             />
           </TabsContent>
 
@@ -1297,6 +1317,109 @@ function ShortcutTileManager({
   );
 }
 
+function CategoryReviewQueue({
+  reviews,
+  locations,
+  onReviewed,
+}: {
+  reviews: CategoryReview[];
+  locations: Array<{ id: string; name: string }>;
+  onReviewed: () => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function review(row: CategoryReview, status: "APPROVED" | "REJECTED") {
+    const reason =
+      status === "REJECTED"
+        ? (window.prompt(`Why should “${row.name}” be returned?`)?.trim() ?? "")
+        : "";
+    if (status === "REJECTED" && reason.length < 5) return;
+    setBusyId(row.id);
+    try {
+      await retailApi("/api/category-review", {
+        method: "POST",
+        json: { category_id: row.id, status, reason },
+      });
+      await refreshLocalReplica();
+      onReviewed();
+      toast.success(
+        status === "APPROVED"
+          ? `${row.name} is available for quick-add`
+          : `${row.name} returned for correction`,
+      );
+    } catch (error) {
+      toast.error("Could not update category", {
+        description: userFacingError(error, "Refresh the review queue and try again."),
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <DataTable<CategoryReview>
+      rows={reviews}
+      getRowId={(row) => row.id}
+      searchPlaceholder="Search category suggestions…"
+      emptyMessage="No category suggestions are waiting for review."
+      columns={[
+        {
+          id: "name",
+          header: "Suggested value",
+          accessor: (row) => row.name,
+          cell: (row) => <span className="font-medium">{row.name}</span>,
+        },
+        {
+          id: "kind",
+          header: "Type",
+          accessor: (row) => (row.kind === "CATEGORY" ? "Category" : "Subcategory"),
+        },
+        {
+          id: "location",
+          header: "Location",
+          accessor: (row) =>
+            locations.find((location) => location.id === row.location_id)?.name ?? "—",
+        },
+        {
+          id: "created",
+          header: "Added",
+          accessor: (row) => row.created_at,
+          cell: (row) =>
+            new Date(row.created_at).toLocaleString("en-IN", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            }),
+        },
+        {
+          id: "actions",
+          header: "Review",
+          accessor: () => "Approve or return",
+          sortable: false,
+          cell: (row) => (
+            <div className="flex gap-1">
+              <Button
+                size="sm"
+                disabled={busyId !== null}
+                onClick={() => void review(row, "APPROVED")}
+              >
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busyId !== null}
+                onClick={() => void review(row, "REJECTED")}
+              >
+                Return
+              </Button>
+            </div>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 /* ------------------------------ Enrichment ------------------------------ */
 
 function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArchive: boolean }) {
@@ -1353,19 +1476,27 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
       toast.success("SKU returned for correction");
       void queryClient.invalidateQueries({ queryKey: ["products"] });
     },
-    onError: (error) => toast.error("Could not reject SKU", { description: userFacingError(error, "Check the reason and try again.") }),
+    onError: (error) =>
+      toast.error("Could not reject SKU", {
+        description: userFacingError(error, "Check the reason and try again."),
+      }),
   });
 
   async function archive(p: Product) {
     const reason = window.prompt(`Archive ${p.name}? Enter the reason.`, "Incorrect item entry");
     if (!reason || reason.trim().length < 5) return;
     try {
-      await retailApi("/api/admin/archive-product", { method: "POST", json: { product_id: p.id, reason: reason.trim() } });
+      await retailApi("/api/admin/archive-product", {
+        method: "POST",
+        json: { product_id: p.id, reason: reason.trim() },
+      });
       await refreshLocalReplica();
       toast.success(`${p.name} archived. Historical bills remain intact.`);
       void queryClient.invalidateQueries({ queryKey: ["products"] });
     } catch (error) {
-      toast.error("Could not archive SKU", { description: userFacingError(error, "Refresh the catalog and try again.") });
+      toast.error("Could not archive SKU", {
+        description: userFacingError(error, "Refresh the catalog and try again."),
+      });
     }
   }
 
@@ -1432,8 +1563,28 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
             accessor: (p) => `${p.category ?? ""} ${p.subcategory ?? ""}`,
             cell: (p) => (
               <div className="min-w-40 space-y-1">
-                <Input aria-label={`Category for ${p.name}`} value={field(p, "category")} placeholder="Category" onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], category: event.target.value } }))} />
-                <Input aria-label={`Subcategory for ${p.name}`} value={field(p, "subcategory")} placeholder="Subcategory" onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], subcategory: event.target.value } }))} />
+                <Input
+                  aria-label={`Category for ${p.name}`}
+                  value={field(p, "category")}
+                  placeholder="Category"
+                  onChange={(event) =>
+                    setDrafts((d) => ({
+                      ...d,
+                      [p.id]: { ...d[p.id], category: event.target.value },
+                    }))
+                  }
+                />
+                <Input
+                  aria-label={`Subcategory for ${p.name}`}
+                  value={field(p, "subcategory")}
+                  placeholder="Subcategory"
+                  onChange={(event) =>
+                    setDrafts((d) => ({
+                      ...d,
+                      [p.id]: { ...d[p.id], subcategory: event.target.value },
+                    }))
+                  }
+                />
               </div>
             ),
           },
@@ -1530,15 +1681,43 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
           {
             id: "quantity-type",
             header: "Measured sale",
-            accessor: (p) => p.is_loose ? `Decimal · ${p.quantity_precision ?? 0} places` : "Whole units",
+            accessor: (p) =>
+              p.is_loose ? `Decimal · ${p.quantity_precision ?? 0} places` : "Whole units",
             cell: (p) => (
               <div className="space-y-1">
                 <label className="flex items-center gap-1 text-xs">
-                  <Checkbox checked={drafts[p.id]?.["is_loose"] === undefined ? p.is_loose : drafts[p.id]?.["is_loose"] === "true"} onCheckedChange={(checked) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], is_loose: checked === true ? "true" : "false" } }))} />
+                  <Checkbox
+                    checked={
+                      drafts[p.id]?.["is_loose"] === undefined
+                        ? p.is_loose
+                        : drafts[p.id]?.["is_loose"] === "true"
+                    }
+                    onCheckedChange={(checked) =>
+                      setDrafts((d) => ({
+                        ...d,
+                        [p.id]: { ...d[p.id], is_loose: checked === true ? "true" : "false" },
+                      }))
+                    }
+                  />
                   Allow decimal quantity
                 </label>
-                {(drafts[p.id]?.["is_loose"] === "true" || (drafts[p.id]?.["is_loose"] === undefined && p.is_loose)) && (
-                  <Input aria-label={`Quantity precision for ${p.name}`} type="number" min="1" max="3" step="1" className="h-7 w-16" value={field(p, "quantity_precision")} onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], quantity_precision: event.target.value } }))} />
+                {(drafts[p.id]?.["is_loose"] === "true" ||
+                  (drafts[p.id]?.["is_loose"] === undefined && p.is_loose)) && (
+                  <Input
+                    aria-label={`Quantity precision for ${p.name}`}
+                    type="number"
+                    min="1"
+                    max="3"
+                    step="1"
+                    className="h-7 w-16"
+                    value={field(p, "quantity_precision")}
+                    onChange={(event) =>
+                      setDrafts((d) => ({
+                        ...d,
+                        [p.id]: { ...d[p.id], quantity_precision: event.target.value },
+                      }))
+                    }
+                  />
                 )}
               </div>
             ),
@@ -1549,8 +1728,27 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
             accessor: (p) => p.review_status ?? "PENDING",
             cell: (p) => (
               <div className="min-w-48 space-y-1">
-                <Input aria-label={`Rejection reason for ${p.name}`} value={drafts[p.id]?.["review_reason"] ?? p.review_reason ?? ""} onChange={(event) => setDrafts((d) => ({ ...d, [p.id]: { ...d[p.id], review_reason: event.target.value } }))} placeholder="Reason if returning to cashier" />
-                <Button size="sm" variant="outline" onClick={() => rejectMut.mutate(p)} disabled={rejectMut.isPending || (drafts[p.id]?.["review_reason"] ?? "").trim().length < 5}>Reject with reason</Button>
+                <Input
+                  aria-label={`Rejection reason for ${p.name}`}
+                  value={drafts[p.id]?.["review_reason"] ?? p.review_reason ?? ""}
+                  onChange={(event) =>
+                    setDrafts((d) => ({
+                      ...d,
+                      [p.id]: { ...d[p.id], review_reason: event.target.value },
+                    }))
+                  }
+                  placeholder="Reason if returning to cashier"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => rejectMut.mutate(p)}
+                  disabled={
+                    rejectMut.isPending || (drafts[p.id]?.["review_reason"] ?? "").trim().length < 5
+                  }
+                >
+                  Reject with reason
+                </Button>
               </div>
             ),
           },
@@ -1561,8 +1759,14 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
             sortable: false,
             cell: (p) => (
               <div className="flex gap-1">
-                <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>Approve</Button>
-                {canArchive && <Button size="sm" variant="destructive" onClick={() => void archive(p)}>Archive</Button>}
+                <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>
+                  Approve
+                </Button>
+                {canArchive && (
+                  <Button size="sm" variant="destructive" onClick={() => void archive(p)}>
+                    Archive
+                  </Button>
+                )}
               </div>
             ),
           },

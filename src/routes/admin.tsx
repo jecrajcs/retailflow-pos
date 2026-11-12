@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 import { useAccess } from "@/lib/access";
 import { refreshLocalReplica } from "@/lib/offline-sync";
 import { inr, useInventory, useLocations, useProducts, useSales, type Location } from "@/lib/pos";
@@ -26,6 +27,7 @@ type LocationForm = {
   type: LocationType;
   address: string;
   phone: string;
+  upi_vpa: string;
   is_active: boolean;
 };
 
@@ -35,6 +37,7 @@ const emptyLocation: LocationForm = {
   type: "RETAIL",
   address: "",
   phone: "",
+  upi_vpa: "",
   is_active: true,
 };
 
@@ -60,6 +63,7 @@ function AdminPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [savingLocation, setSavingLocation] = useState(false);
+  const [savingDefaultWarehouseId, setSavingDefaultWarehouseId] = useState<string | null>(null);
   const [locationError, setLocationError] = useState("");
 
   const loadLocations = useCallback(async () => {
@@ -99,6 +103,7 @@ function AdminPage() {
         : "RETAIL",
       address: location.address ?? "",
       phone: location.phone ?? "",
+      upi_vpa: location.upi_vpa ?? "",
       is_active: location.is_active,
     });
     setLocationError("");
@@ -148,6 +153,39 @@ function AdminPage() {
       setLocationError(userFacingError(error, "Could not save this location."));
     } finally {
       setSavingLocation(false);
+    }
+  }
+
+  async function setDefaultWarehouse(location: Location) {
+    if (
+      location.type !== "WAREHOUSE" ||
+      !location.is_active ||
+      location.is_default_warehouse ||
+      savingDefaultWarehouseId
+    )
+      return;
+    setSavingDefaultWarehouseId(location.id);
+    try {
+      const result = await retailApi<{ location: Location }>("/api/admin/locations", {
+        method: "PATCH",
+        json: { id: location.id, set_default_warehouse: true },
+      });
+      setLocations((current) =>
+        current.map((item) => ({
+          ...item,
+          is_default_warehouse: item.id === result.location.id,
+        })),
+      );
+      await refreshLocalReplica();
+      toast.success("Default Warehouse updated", {
+        description: `${result.location.name} will be used when an import has no Warehouse location.` ,
+      });
+    } catch (error) {
+      toast.error("Could not set the default Warehouse", {
+        description: userFacingError(error, "Choose an active Warehouse and try again."),
+      });
+    } finally {
+      setSavingDefaultWarehouseId(null);
     }
   }
 
@@ -279,6 +317,8 @@ function AdminPage() {
                 <LocationDataTable
                   locations={locations}
                   onEdit={editLocation}
+                  onSetDefaultWarehouse={setDefaultWarehouse}
+                  savingDefaultWarehouseId={savingDefaultWarehouseId}
                   emptyMessage={
                     loadingLocations
                       ? "Loading locations…"
@@ -362,6 +402,17 @@ function AdminPage() {
                     placeholder="+91 98765 43210"
                   />
                 </Field>
+                <Field label="Merchant UPI ID for payment QR (optional)">
+                  <Input
+                    value={form.upi_vpa}
+                    onChange={(event) => setForm({ ...form, upi_vpa: event.target.value })}
+                    placeholder="store@bank"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    A QR appears at checkout only after a valid merchant UPI ID is saved here.
+                  </p>
+                </Field>
                 {editingId && (
                   <label className="flex items-center gap-2 rounded-lg border p-3 text-sm">
                     <Checkbox
@@ -402,6 +453,8 @@ function AdminPage() {
                   <LocationDataTable
                     locations={locations}
                     onEdit={editLocation}
+                    onSetDefaultWarehouse={setDefaultWarehouse}
+                    savingDefaultWarehouseId={savingDefaultWarehouseId}
                     emptyMessage={
                       loadingLocations
                         ? "Loading locations…"
@@ -437,10 +490,14 @@ function AdminPage() {
 function LocationDataTable({
   locations,
   onEdit,
+  onSetDefaultWarehouse,
+  savingDefaultWarehouseId,
   emptyMessage,
 }: {
   locations: Location[];
   onEdit: (location: Location) => void;
+  onSetDefaultWarehouse: (location: Location) => void;
+  savingDefaultWarehouseId: string | null;
   emptyMessage: string;
 }) {
   return (
@@ -467,6 +524,25 @@ function LocationDataTable({
               {location.is_active ? "Active" : "Inactive"}
             </Badge>
           ),
+        },
+        {
+          id: "defaultWarehouse",
+          header: "Default Warehouse",
+          accessor: (location) => (location.is_default_warehouse ? "Default" : ""),
+          sortable: false,
+          cell: (location) =>
+            location.type !== "WAREHOUSE" ? null : location.is_default_warehouse ? (
+              <Badge variant="outline">Default</Badge>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!location.is_active || savingDefaultWarehouseId !== null}
+                onClick={() => onSetDefaultWarehouse(location)}
+              >
+                {savingDefaultWarehouseId === location.id ? "Saving…" : "Set default"}
+              </Button>
+            ),
         },
         {
           id: "action",

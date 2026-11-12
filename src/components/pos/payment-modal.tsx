@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowDownToLine,
-  Banknote,
-  CreditCard,
-  QrCode,
-  Trash2,
-  Wallet,
-} from "lucide-react";
+import { ArrowDownToLine, Banknote, CreditCard, QrCode, Trash2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import QRCodeSVG from "react-qr-code";
 import { Button } from "@/components/ui/button";
@@ -31,6 +24,7 @@ import {
   type PaymentSplitInput,
 } from "@/lib/pos";
 import { userFacingError } from "@/lib/retail-api";
+import { calculatePaymentAllocation } from "@/lib/payment-policy";
 
 const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }> = [
   { value: "CASH", label: "Cash", icon: Banknote },
@@ -72,6 +66,8 @@ export function PaymentModal({
   onDiscountChange,
   minTotal,
   customer,
+  upiVpa,
+  upiPayeeName,
   onPaid,
 }: {
   open: boolean;
@@ -89,6 +85,8 @@ export function PaymentModal({
   /** Sum of qty × floor (min allowed) price — bill discount cannot go below this. */
   minTotal: number;
   customer: Customer | null;
+  upiVpa: string | null;
+  upiPayeeName: string;
   onPaid: (result: InvoiceResult, payments: PaymentSplitInput[]) => void;
 }) {
   const maxDiscount = Math.max(subtotal - minTotal, 0);
@@ -108,19 +106,17 @@ export function PaymentModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const nonCashPaid = useMemo(
-    () => splits.filter((s) => s.mode !== "CASH").reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
-    [splits],
+  const allocation = useMemo(() => calculatePaymentAllocation(total, splits), [total, splits]);
+  const { nonCashPaid, creditAllocated, cashTendered, cashApplied, paid, remaining, change } =
+    allocation;
+  const creditAvailable = Math.max(
+    (customer?.credit_limit ?? 0) - (customer?.outstanding_balance ?? 0),
+    0,
   );
-  const cashTendered = useMemo(
-    () => splits.filter((s) => s.mode === "CASH").reduce((sum, s) => sum + (Number(s.amount) || 0), 0),
-    [splits],
+  const changeDenominationTotal = changeNotes.reduce(
+    (sum, item) => sum + item.denomination * item.count,
+    0,
   );
-  const cashApplied = Math.min(cashTendered, Math.max(total - nonCashPaid, 0));
-  const paid = nonCashPaid + cashApplied;
-  const remaining = Math.max(total - paid, 0);
-  const change = Math.max(cashTendered - cashApplied, 0);
-  const changeDenominationTotal = changeNotes.reduce((sum, item) => sum + item.denomination * item.count, 0);
 
   useEffect(() => setChangeNotes(suggestChange(change)), [change]);
 
@@ -144,16 +140,32 @@ export function PaymentModal({
       });
       return;
     }
-    if (paid > total + 0.01) {
-      toast.error("Payment amounts exceed the bill total", {
-        description: `Reduce the split by ${inr(paid - total)}.`,
+    if (nonCashPaid + creditAllocated > total + 0.01) {
+      toast.error("Payment split exceeds the bill total", {
+        description: `Reduce UPI, card or customer credit by ${inr(nonCashPaid + creditAllocated - total)}.`,
+      });
+      return;
+    }
+    if (creditAllocated > creditAvailable + 0.01) {
+      toast.error("Customer credit limit would be exceeded", {
+        description: `Available credit is ${inr(creditAvailable)}. Reduce the credit amount or collect another payment mode.`,
+      });
+      return;
+    }
+    if (paid + creditAllocated <= 0) {
+      toast.error("Enter a payment or customer credit amount");
+      return;
+    }
+    if (remaining > 0.01) {
+      toast.error("Allocate the full bill amount", {
+        description: `Collect the remaining ${inr(remaining)} or assign it to customer credit.`,
       });
       return;
     }
     setBusy(true);
     try {
       let changeRemaining = change;
-      let cashApplyRemaining = Math.max(total - nonCashPaid, 0);
+      let cashApplyRemaining = Math.max(total - nonCashPaid - creditAllocated, 0);
       const payments: PaymentSplitInput[] = valid.map((s) => {
         const amount = Number(s.amount);
         if (s.mode === "CASH") {
@@ -167,7 +179,11 @@ export function PaymentModal({
             tendered: amount,
             change_given: changeGiven,
             ...(changeGiven > 0
-              ? { change_denominations: Object.fromEntries(changeNotes.map(({ denomination, count }) => [String(denomination), count])) }
+              ? {
+                  change_denominations: Object.fromEntries(
+                    changeNotes.map(({ denomination, count }) => [String(denomination), count]),
+                  ),
+                }
               : {}),
           };
         }
@@ -283,7 +299,11 @@ export function PaymentModal({
                     className="w-44"
                     value={s.mode}
                     onValueChange={(value) => updateSplit(i, { mode: value as PaymentMode })}
-                    options={MODES.map((mode) => ({ value: mode.value, label: mode.label }))}
+                    options={MODES.filter(
+                      (mode) =>
+                        mode.value === s.mode ||
+                        !splits.some((split, index) => index !== i && split.mode === mode.value),
+                    ).map((mode) => ({ value: mode.value, label: mode.label }))}
                   />
                   <Input
                     type="number"
@@ -317,12 +337,26 @@ export function PaymentModal({
                       </button>
                     ))}
                     <button
-                      onClick={() => updateSplit(i, { amount: String(Math.max(total - nonCashPaid, 0).toFixed(2)) })}
+                      onClick={() =>
+                        updateSplit(i, {
+                          amount: String(
+                            Math.max(total - nonCashPaid - creditAllocated, 0).toFixed(2),
+                          ),
+                        })
+                      }
                       className="rounded-md border bg-primary/10 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/15"
                     >
                       Exact
                     </button>
-                    <span className="ml-auto text-xs text-muted-foreground">Applied {inr(Math.min(Number(s.amount) || 0, Math.max(total - nonCashPaid, 0)))}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      Applied{" "}
+                      {inr(
+                        Math.min(
+                          Number(s.amount) || 0,
+                          Math.max(total - nonCashPaid - creditAllocated, 0),
+                        ),
+                      )}
+                    </span>
                   </div>
                 )}
               </div>
@@ -332,27 +366,35 @@ export function PaymentModal({
             <Button
               variant="outline"
               size="sm"
+              disabled={!MODES.some((mode) => !splits.some((split) => split.mode === mode.value))}
               onClick={() =>
-                setSplits((prev) => [...prev, { mode: "UPI", amount: "", tendered: "" }])
+                setSplits((prev) => {
+                  const nextMode = MODES.find(
+                    (mode) => !prev.some((split) => split.mode === mode.value),
+                  )?.value;
+                  return nextMode ? [...prev, { mode: nextMode, amount: "", tendered: "" }] : prev;
+                })
               }
             >
               + Add split
             </Button>
             <div className="text-sm">
-              Remaining:{" "}
+              Unallocated balance:{" "}
               <b className={remaining > 0 ? "text-warning" : "text-success"}>{inr(remaining)}</b>
-              {remaining > 0 && (
-                <span className="ml-1 text-xs text-muted-foreground">(stays on invoice)</span>
+              {creditAllocated > 0 && (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  · {inr(creditAllocated)} on customer credit
+                </span>
               )}
             </div>
           </div>
         </div>
 
-        {upiAmount > 0 && (
+        {upiAmount > 0 && upiVpa && (
           <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-3">
             <div className="h-28 w-28 rounded bg-white p-1" aria-label="UPI payment QR code">
               <QRCodeSVG
-                value={`upi://pay?pn=${encodeURIComponent("RetailHub Store")}&am=${upiAmount.toFixed(2)}&cu=INR`}
+                value={`upi://pay?pa=${encodeURIComponent(upiVpa)}&pn=${encodeURIComponent(upiPayeeName)}&am=${upiAmount.toFixed(2)}&cu=INR`}
                 size={104}
               />
             </div>
@@ -360,10 +402,16 @@ export function PaymentModal({
               <div className="font-medium">Scan to pay via UPI</div>
               <div className="text-muted-foreground">Amount: {inr(upiAmount)}</div>
               <div className="text-xs text-muted-foreground">
-                Any UPI app · shows in customer's scanner
+                Scan with a UPI app. Confirm the payment in your merchant app.
               </div>
             </div>
           </div>
+        )}
+        {upiAmount > 0 && !upiVpa && (
+          <p className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+            No merchant UPI ID is configured for this store. Collect UPI using the store’s verified
+            merchant app, then record the amount here.
+          </p>
         )}
 
         {cashTendered > 0 && (
@@ -441,14 +489,35 @@ export function PaymentModal({
                 </div>
               ))}
             </div>
-            <div className={cn("mt-2 text-xs", Math.abs(changeDenominationTotal - change) > 0.01 ? "text-destructive" : "text-success")}>
-              Returned: {inr(changeDenominationTotal)} · {Math.abs(changeDenominationTotal - change) <= 0.01 ? "matches change" : `adjust by ${inr(Math.abs(changeDenominationTotal - change))}`}
+            <div
+              className={cn(
+                "mt-2 text-xs",
+                Math.abs(changeDenominationTotal - change) > 0.01
+                  ? "text-destructive"
+                  : "text-success",
+              )}
+            >
+              Returned: {inr(changeDenominationTotal)} ·{" "}
+              {Math.abs(changeDenominationTotal - change) <= 0.01
+                ? "matches change"
+                : `adjust by ${inr(Math.abs(changeDenominationTotal - change))}`}
             </div>
           </div>
         )}
 
-        <Button className="h-11 text-base" onClick={confirm} disabled={busy || paid <= 0 || !customer || (change > 0 && Math.abs(changeDenominationTotal - change) > 0.01)}>
-          {busy ? "Saving…" : `Confirm bill — ${inr(Math.min(paid, total))}`}
+        <Button
+          className="h-11 text-base"
+          onClick={confirm}
+          disabled={
+            busy ||
+            paid + creditAllocated <= 0 ||
+            remaining > 0.01 ||
+            !customer ||
+            creditAllocated > creditAvailable + 0.01 ||
+            (change > 0 && Math.abs(changeDenominationTotal - change) > 0.01)
+          }
+        >
+          {busy ? "Saving…" : `Confirm bill — ${inr(Math.min(paid + creditAllocated, total))}`}
         </Button>
       </DialogContent>
     </Dialog>

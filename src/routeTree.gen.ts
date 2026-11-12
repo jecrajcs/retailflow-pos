@@ -21,6 +21,7 @@ import { Route as SalesRouteImport } from './routes/sales'
 import { Route as ScannerRouteImport } from './routes/scanner'
 import { Route as ApiBarcodeCandidateRouteImport } from './routes/api/barcode-candidate'
 import { Route as ApiCashSessionOverrideRouteImport } from './routes/api/cash-session-override'
+import { Route as ApiCategoryReviewRouteImport } from './routes/api/category-review'
 import { Route as ApiPublicOverviewRouteImport } from './routes/api/public-overview'
 import { Route as ApiResolveSyncAlertRouteImport } from './routes/api/resolve-sync-alert'
 import { Route as ApiRetailSnapshotRouteImport } from './routes/api/retail-snapshot'
@@ -92,6 +93,11 @@ const ApiBarcodeCandidateRoute = ApiBarcodeCandidateRouteImport.update({
 const ApiCashSessionOverrideRoute = ApiCashSessionOverrideRouteImport.update({
   id: '/api/cash-session-override',
   path: '/api/cash-session-override',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCategoryReviewRoute = ApiCategoryReviewRouteImport.update({
+  id: '/api/category-review',
+  path: '/api/category-review',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicOverviewRoute = ApiPublicOverviewRouteImport.update({
@@ -168,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/scanner': typeof ScannerRoute
   '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
+  '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
@@ -194,6 +201,7 @@ export interface FileRoutesByTo {
   '/scanner': typeof ScannerRoute
   '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
+  '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
@@ -221,6 +229,7 @@ export interface FileRoutesById {
   '/scanner': typeof ScannerRoute
   '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
+  '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
@@ -249,6 +258,7 @@ export interface FileRouteTypes {
     | '/scanner'
     | '/api/barcode-candidate'
     | '/api/cash-session-override'
+    | '/api/category-review'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
@@ -275,6 +285,7 @@ export interface FileRouteTypes {
     | '/scanner'
     | '/api/barcode-candidate'
     | '/api/cash-session-override'
+    | '/api/category-review'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
@@ -301,6 +312,7 @@ export interface FileRouteTypes {
     | '/scanner'
     | '/api/barcode-candidate'
     | '/api/cash-session-override'
+    | '/api/category-review'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
@@ -328,6 +340,7 @@ export interface RootRouteChildren {
   ScannerRoute: typeof ScannerRoute
   ApiBarcodeCandidateRoute: typeof ApiBarcodeCandidateRoute
   ApiCashSessionOverrideRoute: typeof ApiCashSessionOverrideRoute
+  ApiCategoryReviewRoute: typeof ApiCategoryReviewRoute
   ApiPublicOverviewRoute: typeof ApiPublicOverviewRoute
   ApiResolveSyncAlertRoute: typeof ApiResolveSyncAlertRoute
   ApiRetailSnapshotRoute: typeof ApiRetailSnapshotRoute
@@ -426,6 +439,13 @@ declare module '@tanstack/react-router' {
       path: '/api/cash-session-override'
       fullPath: '/api/cash-session-override'
       preLoaderRoute: typeof ApiCashSessionOverrideRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/category-review': {
+      id: '/api/category-review'
+      path: '/api/category-review'
+      fullPath: '/api/category-review'
+      preLoaderRoute: typeof ApiCategoryReviewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public-overview': {
@@ -528,6 +548,7 @@ const rootRouteChildren: RootRouteChildren = {
   ScannerRoute: ScannerRoute,
   ApiBarcodeCandidateRoute: ApiBarcodeCandidateRoute,
   ApiCashSessionOverrideRoute: ApiCashSessionOverrideRoute,
+  ApiCategoryReviewRoute: ApiCategoryReviewRoute,
   ApiPublicOverviewRoute: ApiPublicOverviewRoute,
   ApiResolveSyncAlertRoute: ApiResolveSyncAlertRoute,
   ApiRetailSnapshotRoute: ApiRetailSnapshotRoute,

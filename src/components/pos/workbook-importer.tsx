@@ -10,6 +10,7 @@ import { refreshLocalReplica } from "@/lib/offline-sync";
 import { retailApi, userFacingError } from "@/lib/retail-api";
 import { useAccess } from "@/lib/access";
 import { useProducts, type Product } from "@/lib/pos";
+import { RETAILFLOW_WORKBOOK_HEADER_ROWS, RETAILFLOW_WORKBOOK_SHEETS } from "@/lib/retail-workbook";
 
 type ImportLocation = { id: string; name: string; code: string; type: string };
 type SourceRow = {
@@ -47,13 +48,6 @@ type Preview = {
   adjustmentTotal: number;
   draftCandidates: string[];
 };
-
-const SHEETS = {
-  sales: "2_Sales_Billing",
-  customers: "4_Customer_Master",
-  purchases: "5_Purchase_Entry",
-  products: "6_Master_Stock",
-} as const;
 
 function text(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -209,10 +203,26 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
       const buffer = await file.arrayBuffer();
       const XLSX = await import("xlsx");
       const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-      const productsSource = recordsFromSheet(XLSX, workbook.Sheets[SHEETS.products], 0);
-      const customersSource = recordsFromSheet(XLSX, workbook.Sheets[SHEETS.customers], 3);
-      const salesSource = recordsFromSheet(XLSX, workbook.Sheets[SHEETS.sales], 0);
-      const purchasesSource = recordsFromSheet(XLSX, workbook.Sheets[SHEETS.purchases], 0);
+      const productsSource = recordsFromSheet(
+        XLSX,
+        workbook.Sheets[RETAILFLOW_WORKBOOK_SHEETS.products],
+        RETAILFLOW_WORKBOOK_HEADER_ROWS.products,
+      );
+      const customersSource = recordsFromSheet(
+        XLSX,
+        workbook.Sheets[RETAILFLOW_WORKBOOK_SHEETS.customers],
+        RETAILFLOW_WORKBOOK_HEADER_ROWS.customers,
+      );
+      const salesSource = recordsFromSheet(
+        XLSX,
+        workbook.Sheets[RETAILFLOW_WORKBOOK_SHEETS.sales],
+        RETAILFLOW_WORKBOOK_HEADER_ROWS.sales,
+      );
+      const purchasesSource = recordsFromSheet(
+        XLSX,
+        workbook.Sheets[RETAILFLOW_WORKBOOK_SHEETS.purchases],
+        RETAILFLOW_WORKBOOK_HEADER_ROWS.purchases,
+      );
       if (
         !productsSource.length ||
         !customersSource.length ||
@@ -273,11 +283,11 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
           continue;
         }
         productMasterRows.set(key, source.row);
-        productRowSources.set(key, { ...source, sheetName: SHEETS.products });
+        productRowSources.set(key, { ...source, sheetName: RETAILFLOW_WORKBOOK_SHEETS.products });
       }
       for (const [sheetName, sources] of [
-        [SHEETS.purchases, purchasesSource],
-        [SHEETS.sales, salesSource],
+        [RETAILFLOW_WORKBOOK_SHEETS.purchases, purchasesSource],
+        [RETAILFLOW_WORKBOOK_SHEETS.sales, salesSource],
       ] as const)
         for (const source of sources) {
           const sku = text(field(source.row, "Barcode_SKU"));
@@ -383,7 +393,7 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
           visits: number(field(source.row, "Total Visits")),
         });
         payload.source_rows.push({
-          sheet_name: SHEETS.customers,
+          sheet_name: RETAILFLOW_WORKBOOK_SHEETS.customers,
           source_key: `CUSTOMER:${externalId}`,
           row_number: source.rowNumber,
           entity_type: "customer",
@@ -489,7 +499,7 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
         });
         group.lineRows.forEach((source) =>
           payload.source_rows.push({
-            sheet_name: SHEETS.purchases,
+            sheet_name: RETAILFLOW_WORKBOOK_SHEETS.purchases,
             source_key: `ROW:${source.rowNumber}`,
             row_number: source.rowNumber,
             entity_type: "purchase_line",
@@ -672,7 +682,7 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
         });
         group.lineRows.forEach((source) =>
           payload.source_rows.push({
-            sheet_name: SHEETS.sales,
+            sheet_name: RETAILFLOW_WORKBOOK_SHEETS.sales,
             source_key: `ROW:${source.rowNumber}`,
             row_number: source.rowNumber,
             entity_type: "sale_line",
@@ -944,10 +954,10 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
                 placeholder="Filter source sheet"
                 options={[
                   { value: "all", label: "All source sheets" },
-                  { value: SHEETS.products, label: "Master Stock" },
-                  { value: SHEETS.customers, label: "Customer Master" },
-                  { value: SHEETS.sales, label: "Sales Billing" },
-                  { value: SHEETS.purchases, label: "Purchase Entry" },
+                  { value: RETAILFLOW_WORKBOOK_SHEETS.products, label: "Master Stock" },
+                  { value: RETAILFLOW_WORKBOOK_SHEETS.customers, label: "Customer Master" },
+                  { value: RETAILFLOW_WORKBOOK_SHEETS.sales, label: "Sales Billing" },
+                  { value: RETAILFLOW_WORKBOOK_SHEETS.purchases, label: "Purchase Entry" },
                 ]}
               />
             </div>

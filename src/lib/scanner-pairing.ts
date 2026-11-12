@@ -108,7 +108,9 @@ export function parseScannerPairPayload(value: string, expectedRole?: ScannerPai
     throw new Error("This pairing code has expired. Start a new pairing session.");
   }
   if (expectedRole && payload.role !== expectedRole) {
-    throw new Error(expectedRole === "offer" ? "Scan the POS pairing QR code." : "Scan the phone reply QR code.");
+    throw new Error(
+      expectedRole === "offer" ? "Scan the POS pairing QR code." : "Scan the phone reply QR code.",
+    );
   }
   return payload as ScannerPairPayload;
 }
@@ -118,7 +120,11 @@ function waitForIceGathering(peer: RTCPeerConnection) {
   return new Promise<void>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       peer.removeEventListener("icegatheringstatechange", onStateChange);
-      reject(new Error("The device network could not prepare a local pairing connection. Try again on the same Wi-Fi."));
+      reject(
+        new Error(
+          "The device network could not prepare a local pairing connection. Try again on the same Wi-Fi.",
+        ),
+      );
     }, 12000);
     const onStateChange = () => {
       if (peer.iceGatheringState !== "complete") return;
@@ -131,7 +137,9 @@ function waitForIceGathering(peer: RTCPeerConnection) {
 }
 
 function newSessionId() {
-  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 export async function createScannerOffer(onChannel: (channel: RTCDataChannel) => void) {
@@ -173,10 +181,16 @@ export async function acceptScannerOffer(
   return { peer, payload };
 }
 
-export async function acceptScannerAnswer(peer: RTCPeerConnection, value: string, expectedSession: string) {
+export async function acceptScannerAnswer(
+  peer: RTCPeerConnection,
+  value: string,
+  expectedSession: string,
+) {
   const answer = parseScannerPairPayload(value, "answer");
-  if (answer.session !== expectedSession) throw new Error("That reply belongs to a different pairing attempt.");
-  if (peer.signalingState !== "have-local-offer") throw new Error("Start a new pairing before scanning the reply.");
+  if (answer.session !== expectedSession)
+    throw new Error("That reply belongs to a different pairing attempt.");
+  if (peer.signalingState !== "have-local-offer")
+    throw new Error("Start a new pairing before scanning the reply.");
   await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
 }
 
@@ -187,15 +201,54 @@ export function sendBarcode(channel: RTCDataChannel, code: string) {
   return true;
 }
 
+export async function sendImageReview(channel: RTCDataChannel, image: Blob) {
+  if (channel.readyState !== "open") throw new Error("The POS connection is not ready yet.");
+  if (image.type !== "image/jpeg" || image.size > 32_000)
+    throw new Error("Only a low-resolution review photo under 32 KB can be sent.");
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("Could not prepare the review photo."));
+    reader.onerror = () => reject(new Error("Could not read the review photo."));
+    reader.readAsDataURL(image);
+  });
+  const message = JSON.stringify({ type: "image-review", data_url: dataUrl, at: Date.now() });
+  if (message.length > 48_000)
+    throw new Error("The review photo is too large. Move closer to the barcode and try again.");
+  channel.send(message);
+}
+
 export function isBarcodeMessage(value: unknown): value is { type: "barcode"; code: string } {
   if (!value || typeof value !== "object") return false;
   const message = value as { type?: unknown; code?: unknown };
-  return message.type === "barcode" && typeof message.code === "string" && message.code.trim().length > 0;
+  return (
+    message.type === "barcode" && typeof message.code === "string" && message.code.trim().length > 0
+  );
+}
+
+export function isImageReviewMessage(
+  value: unknown,
+): value is { type: "image-review"; data_url: string } {
+  if (!value || typeof value !== "object") return false;
+  const message = value as { type?: unknown; data_url?: unknown };
+  return (
+    message.type === "image-review" &&
+    typeof message.data_url === "string" &&
+    message.data_url.startsWith("data:image/jpeg;base64,") &&
+    message.data_url.length <= 48_000
+  );
 }
 
 export function scannerCapabilities() {
-  if (typeof navigator === "undefined") return { camera: false, hid: false, serial: false, bluetooth: false };
-  const extended = navigator as Navigator & { hid?: unknown; serial?: unknown; bluetooth?: unknown };
+  if (typeof navigator === "undefined")
+    return { camera: false, hid: false, serial: false, bluetooth: false };
+  const extended = navigator as Navigator & {
+    hid?: unknown;
+    serial?: unknown;
+    bluetooth?: unknown;
+  };
   return {
     camera: !!navigator.mediaDevices?.getUserMedia,
     hid: !!extended.hid,

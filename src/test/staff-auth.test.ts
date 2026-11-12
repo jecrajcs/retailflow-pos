@@ -59,6 +59,7 @@ describe("Admin location policy", () => {
       type: "RETAIL",
       address: null,
       phone: null,
+      upi_vpa: null,
       is_active: true,
     });
   });
@@ -67,6 +68,20 @@ describe("Admin location policy", () => {
     expect(normalizeLocationInput({ name: "", code: "1", type: "RETAIL" })).toBeNull();
     expect(normalizeLocationInput({ name: "Store", code: "BAD CODE", type: "RETAIL" })).toBeNull();
     expect(normalizeLocationInput({ name: "Store", code: "MS01", type: "OTHER" })).toBeNull();
+    expect(
+      normalizeLocationInput({ name: "Store", code: "MS01", type: "RETAIL", upi_vpa: "invalid" }),
+    ).toBeNull();
+  });
+
+  it("normalizes the optional merchant UPI identifier for checkout QR codes", () => {
+    expect(
+      normalizeLocationInput({
+        name: "Store",
+        code: "MS01",
+        type: "RETAIL",
+        upi_vpa: "  Store.Pay@ExampleBank  ",
+      })?.upi_vpa,
+    ).toBe("store.pay@examplebank");
   });
 
   it("blocks deactivation until shifts, assignments, and sync alerts are clear", () => {

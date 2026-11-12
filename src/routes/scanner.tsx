@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { BrowserMultiFormatReader } from "@zxing/browser";
 import QRCodeSVG from "react-qr-code";
 import { Camera, Check, Copy, Link2, Radio, ScanBarcode, Smartphone, Wifi } from "lucide-react";
 import { toast } from "sonner";
+import { useAccess } from "@/lib/access";
 import { AppNav } from "@/components/pos/app-nav";
 import { CameraScannerPanel } from "@/components/pos/camera-scanner";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +16,8 @@ import {
   createWebSerialScannerAdapter,
   createScannerOffer,
   isBarcodeMessage,
+  isImageReviewMessage,
+  sendImageReview,
   scannerCapabilities,
   sendBarcode,
   type ScannerPairPayload,
@@ -23,6 +27,7 @@ import {
 export const Route = createFileRoute("/scanner")({ component: BarcodeScannerPage });
 
 function BarcodeScannerPage() {
+  const { profile } = useAccess();
   const [phoneMode, setPhoneMode] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [offer, setOffer] = useState<ScannerPairPayload | null>(null);
@@ -30,6 +35,8 @@ function BarcodeScannerPage() {
   const [connection, setConnection] = useState<"idle" | "waiting" | "connected" | "failed">("idle");
   const [error, setError] = useState("");
   const [lastCode, setLastCode] = useState("");
+  const [reviewImage, setReviewImage] = useState<string | null>(null);
+  const [imageRequested, setImageRequested] = useState(false);
   const [serialConnected, setSerialConnected] = useState(false);
   const [caps, setCaps] = useState({ camera: false, hid: false, serial: false, bluetooth: false });
   const peerRef = useRef<RTCPeerConnection | null>(null);
@@ -40,7 +47,8 @@ function BarcodeScannerPage() {
   useEffect(() => {
     setPhoneMode(new URLSearchParams(window.location.search).get("mode") === "phone");
     setCaps(scannerCapabilities());
-    if (typeof BroadcastChannel !== "undefined") broadcastRef.current = new BroadcastChannel("retailflow-pos-scanner");
+    if (typeof BroadcastChannel !== "undefined")
+      broadcastRef.current = new BroadcastChannel("retailflow-pos-scanner");
     return () => {
       channelRef.current?.close();
       peerRef.current?.close();
@@ -57,10 +65,42 @@ function BarcodeScannerPage() {
     if (isDesktop) {
       channel.onmessage = (event) => {
         let message: unknown;
-        try { message = JSON.parse(String(event.data)); } catch { return; }
-        if (!isBarcodeMessage(message)) return;
-        setLastCode(message.code);
-        broadcastRef.current?.postMessage({ type: "barcode", code: message.code });
+        try {
+          message = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        if (isBarcodeMessage(message)) {
+          setLastCode(message.code);
+          broadcastRef.current?.postMessage({ type: "barcode", code: message.code });
+        } else if (isImageReviewMessage(message)) {
+          setReviewImage(message.data_url);
+          channel.send(JSON.stringify({ type: "image-review-ack" }));
+        }
+      };
+    } else {
+      channel.onmessage = (event) => {
+        let message: unknown;
+        try {
+          message = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        if (
+          message &&
+          typeof message === "object" &&
+          (message as { type?: unknown }).type === "request-image"
+        ) {
+          setImageRequested(true);
+          setCameraActive(true);
+          toast.info("The POS requested a low-resolution barcode review photo");
+        } else if (
+          message &&
+          typeof message === "object" &&
+          (message as { type?: unknown }).type === "image-review-ack"
+        ) {
+          setImageRequested(false);
+        }
       };
     }
   }
@@ -99,7 +139,8 @@ function BarcodeScannerPage() {
     setCameraActive(false);
     setError("");
     try {
-      if (!peerRef.current || !offer) throw new Error("Start a new pairing before scanning a phone reply.");
+      if (!peerRef.current || !offer)
+        throw new Error("Start a new pairing before scanning a phone reply.");
       await acceptScannerAnswer(peerRef.current, value, offer.session);
       setAnswer(null);
       setConnection("waiting");
@@ -114,7 +155,8 @@ function BarcodeScannerPage() {
       if (!answer) void receivePhoneOffer(value);
       else {
         const channel = channelRef.current;
-        if (!channel || !sendBarcode(channel, value)) toast.error("The POS connection is not ready yet.");
+        if (!channel || !sendBarcode(channel, value))
+          toast.error("The POS connection is not ready yet.");
         else {
           setLastCode(value);
           if ("vibrate" in navigator) navigator.vibrate?.(45);
@@ -123,6 +165,33 @@ function BarcodeScannerPage() {
       return;
     }
     void receivePhoneAnswer(value);
+  }
+
+  function requestPhoneImage() {
+    const channel = channelRef.current;
+    if (!channel || channel.readyState !== "open") {
+      toast.error("The phone scanner is not connected.");
+      return;
+    }
+    channel.send(JSON.stringify({ type: "request-image" }));
+    toast.info("Asked the phone to send a low-resolution review photo");
+  }
+
+  async function decodeReviewImage() {
+    if (!reviewImage) return;
+    try {
+      const result = await new BrowserMultiFormatReader().decodeFromImageUrl(reviewImage);
+      const code = result.getText().trim();
+      if (!code) throw new Error("No barcode was found in the review photo.");
+      setLastCode(code);
+      broadcastRef.current?.postMessage({ type: "barcode", code });
+      toast.success("Barcode decoded from the review photo");
+    } catch (cause) {
+      toast.error("Could not read a barcode from this photo", {
+        description:
+          cause instanceof Error ? cause.message : "Retake the photo or enter the SKU manually.",
+      });
+    }
   }
 
   async function toggleSerialScanner() {
@@ -142,7 +211,10 @@ function BarcodeScannerPage() {
         },
         (cause) => {
           setSerialConnected(false);
-          toast.error("Serial scanner connection ended", { description: cause instanceof Error ? cause.message : "Reconnect the scanner and try again." });
+          toast.error("Serial scanner connection ended", {
+            description:
+              cause instanceof Error ? cause.message : "Reconnect the scanner and try again.",
+          });
         },
       );
       setSerialConnected(true);
@@ -150,12 +222,22 @@ function BarcodeScannerPage() {
     } catch (cause) {
       serialAdapterRef.current = null;
       setSerialConnected(false);
-      toast.error("Could not connect serial scanner", { description: cause instanceof Error ? cause.message : "Choose a supported serial scanner." });
+      toast.error("Could not connect serial scanner", {
+        description: cause instanceof Error ? cause.message : "Choose a supported serial scanner.",
+      });
     }
   }
 
-  const phoneUrl = typeof window === "undefined" ? "" : `${window.location.origin}/scanner?mode=phone`;
-  const connectionLabel = connection === "connected" ? "Connected" : connection === "waiting" ? "Waiting for the other device" : connection === "failed" ? "Connection issue" : "Not paired";
+  const phoneUrl =
+    typeof window === "undefined" ? "" : `${window.location.origin}/scanner?mode=phone`;
+  const connectionLabel =
+    connection === "connected"
+      ? "Connected"
+      : connection === "waiting"
+        ? "Waiting for the other device"
+        : connection === "failed"
+          ? "Connection issue"
+          : "Not paired";
 
   return (
     <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
@@ -163,77 +245,251 @@ function BarcodeScannerPage() {
       <main className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto p-3 sm:p-6">
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground"><ScanBarcode className="h-4 w-4" /> RetailFlow scanner</p>
-            <h1 className="mt-1 text-2xl font-bold">{phoneMode ? "Phone scanner" : "Barcode scanning"}</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Scan product barcodes in RetailFlow. Camera frames and decoded values stay on your devices; pairing uses a short-lived QR exchange and a local peer connection.</p>
+            <p className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+              <ScanBarcode className="h-4 w-4" /> RetailFlow scanner
+            </p>
+            <h1 className="mt-1 text-2xl font-bold">
+              {phoneMode ? "Phone scanner" : "Barcode scanning"}
+            </h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Scan product barcodes in RetailFlow. Pairing uses a short-lived QR exchange and a
+              local peer connection. Only decoded values and low-resolution review photos requested
+              by staff or sent after a failed photo decode cross between devices.
+            </p>
           </div>
-          {phoneMode ? <Badge variant={connection === "connected" ? "default" : "secondary"}>{connectionLabel}</Badge> : <Button asChild variant="outline"><Link to="/barcodes">Manager barcode review</Link></Button>}
+          {phoneMode && (
+            <Badge variant={connection === "connected" ? "default" : "secondary"}>
+              {connectionLabel}
+            </Badge>
+          )}
+          {!phoneMode &&
+            profile &&
+            ["ADMIN", "MANAGER", "WAREHOUSE"].includes(profile.role) && (
+              <Button asChild variant="outline">
+                <Link to="/barcodes">Manager barcode review</Link>
+              </Button>
+            )}
         </header>
 
-        {error && <div role="alert" className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
+        {error && (
+          <div
+            role="alert"
+            className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+          >
+            {error}
+          </div>
+        )}
 
         {phoneMode ? (
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2"><Smartphone className="h-5 w-5" /> Pair this phone</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Smartphone className="h-5 w-5" /> Pair this phone
+                </CardTitle>
+              </CardHeader>
               <CardContent className="space-y-3">
                 {answer ? (
                   <>
-                    <p className="text-sm text-muted-foreground">Scan this reply QR from the POS screen. Keep this page open while scanning products.</p>
-                    <div className="mx-auto w-fit rounded-xl bg-white p-3"><QRCodeSVG value={JSON.stringify(answer)} size={248} /></div>
+                    <p className="text-sm text-muted-foreground">
+                      Scan this reply QR from the POS screen. Keep this page open while scanning
+                      products.
+                    </p>
+                    <div className="mx-auto w-fit rounded-xl bg-white p-3">
+                      <QRCodeSVG value={JSON.stringify(answer)} size={248} />
+                    </div>
                     <div className="text-center text-sm">{connectionLabel}</div>
                   </>
                 ) : (
                   <>
-                    <p className="text-sm text-muted-foreground">Open the pairing screen on the POS, then scan its QR code here.</p>
-                    {!cameraActive && <Button className="w-full" onClick={() => setCameraActive(true)}><Camera className="mr-2 h-4 w-4" /> Scan POS pairing QR</Button>}
+                    <p className="text-sm text-muted-foreground">
+                      Open the pairing screen on the POS, then scan its QR code here.
+                    </p>
+                    {!cameraActive && (
+                      <Button className="w-full" onClick={() => setCameraActive(true)}>
+                        <Camera className="mr-2 h-4 w-4" /> Scan POS pairing QR
+                      </Button>
+                    )}
                   </>
                 )}
               </CardContent>
             </Card>
-            {cameraActive && <CameraScannerPanel active onScan={handleCameraValue} />}
-            {answer && connection === "connected" && (
-              <Card className="lg:col-span-2"><CardContent className="flex items-center gap-3 p-4"><Check className="h-5 w-5 text-success" /><div><div className="font-medium">Phone connected to POS</div><div className="text-sm text-muted-foreground">Point the camera at a product barcode. A vibration confirms the phone sent a scan.</div></div><Button className="ml-auto" onClick={() => setCameraActive((value) => !value)}>{cameraActive ? "Pause camera" : "Start camera"}</Button></CardContent></Card>
+            {cameraActive && (
+              <CameraScannerPanel
+                active
+                onScan={handleCameraValue}
+                requestReviewImage={imageRequested}
+                onImageReview={(image) => {
+                  const channel = channelRef.current;
+                  if (!channel) throw new Error("The POS connection is not ready yet.");
+                  return sendImageReview(channel, image);
+                }}
+              />
             )}
-            {lastCode && <div className="rounded-lg border bg-card p-3 font-mono text-sm">Last scan: {lastCode}</div>}
+            {answer && connection === "connected" && (
+              <Card className="lg:col-span-2">
+                <CardContent className="flex items-center gap-3 p-4">
+                  <Check className="h-5 w-5 text-success" />
+                  <div>
+                    <div className="font-medium">Phone connected to POS</div>
+                    <div className="text-sm text-muted-foreground">
+                      Point the camera at a product barcode. A vibration confirms the phone sent a
+                      scan.
+                    </div>
+                  </div>
+                  <Button className="ml-auto" onClick={() => setCameraActive((value) => !value)}>
+                    {cameraActive ? "Pause camera" : "Start camera"}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+            {lastCode && (
+              <div className="rounded-lg border bg-card p-3 font-mono text-sm">
+                Last scan: {lastCode}
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2"><Link2 className="h-5 w-5" /> Pair a phone over local Wi-Fi</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Link2 className="h-5 w-5" /> Pair a phone over local Wi-Fi
+                </CardTitle>
+              </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground">Open the phone companion in RetailFlow, scan the POS QR with its camera, then scan the reply QR from the phone here. Both devices must be on the same Wi-Fi or hotspot. Pairing expires after five minutes.</p>
+                <p className="text-sm text-muted-foreground">
+                  Open the phone companion in RetailFlow, scan the POS QR with its camera, then scan
+                  the reply QR from the phone here. Both devices must be on the same Wi-Fi or
+                  hotspot. Pairing expires after five minutes.
+                </p>
                 <div className="flex flex-wrap gap-2">
-                  <Button onClick={() => void startDesktopPairing()}><Radio className="mr-2 h-4 w-4" /> Start pairing</Button>
-                  <Button variant="outline" onClick={() => window.open(phoneUrl, "retailflow-phone-scanner", "noopener,noreferrer")}>Open phone companion</Button>
-                  <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard?.writeText(phoneUrl).then(() => toast.success("Phone link copied")).catch(() => toast.error("Could not copy the phone link"))}><Copy className="mr-2 h-4 w-4" /> Copy phone link</Button>
+                  <Button onClick={() => void startDesktopPairing()}>
+                    <Radio className="mr-2 h-4 w-4" /> Start pairing
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      window.open(phoneUrl, "retailflow-phone-scanner", "noopener,noreferrer")
+                    }
+                  >
+                    Open phone companion
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      void navigator.clipboard
+                        ?.writeText(phoneUrl)
+                        .then(() => toast.success("Phone link copied"))
+                        .catch(() => toast.error("Could not copy the phone link"))
+                    }
+                  >
+                    <Copy className="mr-2 h-4 w-4" /> Copy phone link
+                  </Button>
                 </div>
-                <p className="text-sm">Status: <span className="font-medium">{connectionLabel}</span></p>
+                <p className="text-sm">
+                  Status: <span className="font-medium">{connectionLabel}</span>
+                </p>
+                {connection === "connected" && (
+                  <Button variant="outline" size="sm" onClick={requestPhoneImage}>
+                    Request phone photo for review
+                  </Button>
+                )}
                 {offer && (
                   <div className="grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
-                    <div className="mx-auto w-fit rounded-xl bg-white p-3"><QRCodeSVG value={JSON.stringify(offer)} size={248} /></div>
+                    <div className="mx-auto w-fit rounded-xl bg-white p-3">
+                      <QRCodeSVG value={JSON.stringify(offer)} size={248} />
+                    </div>
                     <div className="space-y-3">
                       <p className="text-sm">1. Scan this QR from the phone companion.</p>
-                      <p className="text-sm">2. When the phone shows its reply QR, scan the reply below.</p>
-                      <Button variant="outline" onClick={() => setCameraActive((value) => !value)}><Camera className="mr-2 h-4 w-4" />{cameraActive ? "Stop reply scanner" : "Scan phone reply"}</Button>
-                      <p className="break-all font-mono text-xs text-muted-foreground">Session {offer.session.slice(0, 12)} · local peer connection</p>
+                      <p className="text-sm">
+                        2. When the phone shows its reply QR, scan the reply below.
+                      </p>
+                      <Button variant="outline" onClick={() => setCameraActive((value) => !value)}>
+                        <Camera className="mr-2 h-4 w-4" />
+                        {cameraActive ? "Stop reply scanner" : "Scan phone reply"}
+                      </Button>
+                      <p className="break-all font-mono text-xs text-muted-foreground">
+                        Session {offer.session.slice(0, 12)} · local peer connection
+                      </p>
                     </div>
                   </div>
                 )}
                 {cameraActive && <CameraScannerPanel active onScan={handleCameraValue} />}
-                {lastCode && <div className="rounded-lg border bg-card p-3 font-mono text-sm">Phone scan: {lastCode}</div>}
+                {lastCode && (
+                  <div className="rounded-lg border bg-card p-3 font-mono text-sm">
+                    Phone scan: {lastCode}
+                  </div>
+                )}
+                {reviewImage && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Phone photo for barcode review</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <img
+                        src={reviewImage}
+                        alt="Low-resolution barcode review photo received from the paired phone"
+                        className="mx-auto max-h-72 rounded-lg border object-contain"
+                      />
+                      <div className="flex gap-2">
+                        <Button onClick={() => void decodeReviewImage()}>
+                          Try reading barcode
+                        </Button>
+                        <Button variant="outline" onClick={() => setReviewImage(null)}>
+                          Close photo
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2"><Wifi className="h-5 w-5" /> Available scan methods</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wifi className="h-5 w-5" /> Available scan methods
+                </CardTitle>
+              </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <Capability label="This device camera" available={caps.camera} detail="Web camera with the bundled offline decoder." />
-                <Capability label="Phone camera" available={caps.camera} detail="RetailFlow phone companion; no additional app install." />
-                <Capability label="Keyboard wedge scanner" available detail="USB and Bluetooth scanners that type the code and press Enter work in Billing search." />
-                <Capability label="WebHID / WebSerial / WebBluetooth" available={caps.hid || caps.serial || caps.bluetooth} detail="Feature detected where supported. Model-specific protocols can be added through the ScannerAdapter interface." />
-                {caps.serial && <Button className="w-full" variant="outline" onClick={() => void toggleSerialScanner()}>{serialConnected ? "Disconnect serial scanner" : "Connect Web Serial scanner · 9600 baud"}</Button>}
-                <div className="rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">Camera permission requires HTTPS or localhost. No barcode code or image is uploaded by this scanner.</div>
+                <Capability
+                  label="This device camera"
+                  available={caps.camera}
+                  detail="Web camera with the bundled offline decoder."
+                />
+                <Capability
+                  label="Phone camera"
+                  available={caps.camera}
+                  detail="RetailFlow phone companion; no additional app install."
+                />
+                <Capability
+                  label="Keyboard wedge scanner"
+                  available
+                  detail="USB and Bluetooth scanners that type the code and press Enter work in Billing search."
+                />
+                <Capability
+                  label="WebHID / WebSerial / WebBluetooth"
+                  available={caps.hid || caps.serial || caps.bluetooth}
+                  detail="Feature detected where supported. Model-specific protocols can be added through the ScannerAdapter interface."
+                />
+                {caps.serial && (
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={() => void toggleSerialScanner()}
+                  >
+                    {serialConnected
+                      ? "Disconnect serial scanner"
+                      : "Connect Web Serial scanner · 9600 baud"}
+                  </Button>
+                )}
+                <div className="rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
+                  Camera permission requires HTTPS or localhost. Scan data is not sent to a server;
+                  low-resolution review photos move only over the paired local connection after a
+                  staff request or a failed photo decode.
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -243,6 +499,24 @@ function BarcodeScannerPage() {
   );
 }
 
-function Capability({ label, available, detail }: { label: string; available: boolean; detail: string }) {
-  return <div className="flex items-start gap-3 rounded-lg border p-3"><span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${available ? "bg-success" : "bg-muted-foreground/40"}`} /><div><div className="font-medium">{label}</div><div className="text-xs text-muted-foreground">{detail}</div></div></div>;
+function Capability({
+  label,
+  available,
+  detail,
+}: {
+  label: string;
+  available: boolean;
+  detail: string;
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border p-3">
+      <span
+        className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${available ? "bg-success" : "bg-muted-foreground/40"}`}
+      />
+      <div>
+        <div className="font-medium">{label}</div>
+        <div className="text-xs text-muted-foreground">{detail}</div>
+      </div>
+    </div>
+  );
 }

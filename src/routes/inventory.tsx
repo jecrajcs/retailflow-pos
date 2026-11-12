@@ -1,18 +1,30 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { AlertTriangle, ArrowDownAZ, Boxes, Search, Truck } from "lucide-react";
+import { AlertTriangle, ArrowDownAZ, Boxes, ClipboardCheck, Search, Truck } from "lucide-react";
+import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
 import { DataTable } from "@/components/pos/data-table";
 import { IndentDialog } from "@/components/pos/indent-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { cn } from "@/lib/utils";
 import {
   inr,
+  countLocationStock,
   matchesProductSearch,
   useInventory,
+  useLocationProducts,
   useLocations,
   useProducts,
   type Product,
@@ -43,7 +55,7 @@ export const Route = createFileRoute("/inventory")({
 
 const LS_KEY = "pos-location-id";
 
-type ReorderStatus = "OUT" | "REORDER" | "IN";
+type ReorderStatus = "OUT" | "REORDER" | "IN" | "COUNT" | "UNASSIGNED";
 
 function reorderStatus(qty: number, minStock: number): ReorderStatus {
   if (qty <= 0) return "OUT";
@@ -55,6 +67,8 @@ const STATUS_META: Record<ReorderStatus, { label: string; className: string }> =
   IN: { label: "In Stock", className: "bg-success/15 text-success" },
   REORDER: { label: "REORDER NOW", className: "bg-warning/15 text-warning" },
   OUT: { label: "OUT OF STOCK", className: "bg-destructive/15 text-destructive" },
+  COUNT: { label: "COUNT REQUIRED", className: "bg-info/10 text-info" },
+  UNASSIGNED: { label: "NOT AT THIS LOCATION", className: "bg-muted text-muted-foreground" },
 };
 
 function InventoryPage() {
@@ -65,6 +79,7 @@ function InventoryPage() {
   );
   const { data: products = [] } = useProducts();
   const { data: inventory = [] } = useInventory();
+  const { data: locationProducts = [] } = useLocationProducts();
 
   const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
   const location =
@@ -75,17 +90,27 @@ function InventoryPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | ReorderStatus>("ALL");
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
+  const [countProduct, setCountProduct] = useState<Product | null>(null);
 
   const stockAt = (productId: string, locId: string | undefined) =>
     inventory.find((i) => i.product_id === productId && i.location_id === locId)
       ?.quantity_on_hand ?? 0;
+
+  const productStatus = (product: Product, locId: string | undefined): ReorderStatus => {
+    const assignment = locationProducts.find(
+      (row) => row.product_id === product.id && row.location_id === locId,
+    );
+    if (!assignment) return "UNASSIGNED";
+    if (assignment.stock_count_status === "AWAITING_COUNT") return "COUNT";
+    return reorderStatus(stockAt(product.id, locId), product.min_stock);
+  };
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return products
       .map((p) => {
         const qty = stockAt(p.id, location?.id);
-        const status = reorderStatus(qty, p.min_stock);
+        const status = productStatus(p, location?.id);
         return { product: p, qty, status };
       })
       .filter((r) => (statusFilter === "ALL" ? true : r.status === statusFilter))
@@ -94,20 +119,20 @@ function InventoryPage() {
         return matchesProductSearch(r.product, q);
       })
       .sort((a, b) => {
-        const order = { OUT: 0, REORDER: 1, IN: 2 };
+        const order = { COUNT: 0, UNASSIGNED: 1, OUT: 2, REORDER: 3, IN: 4 };
         return order[a.status] - order[b.status] || a.product.name.localeCompare(b.product.name);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, inventory, location?.id, search, statusFilter]);
+  }, [products, inventory, locationProducts, location?.id, search, statusFilter]);
 
   const counts = useMemo(() => {
-    const c = { OUT: 0, REORDER: 0, IN: 0, total: products.length };
+    const c = { OUT: 0, REORDER: 0, IN: 0, COUNT: 0, UNASSIGNED: 0, total: products.length };
     for (const p of products) {
-      c[reorderStatus(stockAt(p.id, location?.id), p.min_stock)]++;
+      c[productStatus(p, location?.id)]++;
     }
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, inventory, location?.id]);
+  }, [products, inventory, locationProducts, location?.id]);
 
   function pickLocation(id: string) {
     setLocationId(id);
@@ -145,6 +170,8 @@ function InventoryPage() {
           onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}
           options={[
             { value: "ALL", label: `All items (${products.length})` },
+            { value: "COUNT", label: `Count required (${counts.COUNT})` },
+            { value: "UNASSIGNED", label: `Not assigned (${counts.UNASSIGNED})` },
             { value: "IN", label: `In Stock (${counts.IN})` },
             { value: "REORDER", label: `Reorder Now (${counts.REORDER})` },
             { value: "OUT", label: `Out of Stock (${counts.OUT})` },
@@ -172,6 +199,12 @@ function InventoryPage() {
             value={String(counts.OUT)}
             icon={AlertTriangle}
             className="text-destructive"
+          />
+          <StatChip
+            label="Count Required"
+            value={String(counts.COUNT)}
+            icon={ClipboardCheck}
+            className="text-info"
           />
         </div>
 
@@ -206,7 +239,20 @@ function InventoryPage() {
             ...allowedLocations.map((locationRow) => ({
               id: `stock-${locationRow.id}`,
               header: locationRow.code,
-              accessor: (row: (typeof rows)[number]) => stockAt(row.product.id, locationRow.id),
+              accessor: (row: (typeof rows)[number]) => {
+                const status = productStatus(row.product, locationRow.id);
+                if (status === "UNASSIGNED") return "Not assigned";
+                if (status === "COUNT") return "Count pending";
+                return stockAt(row.product.id, locationRow.id);
+              },
+              cell: (row: (typeof rows)[number]) => {
+                const status = productStatus(row.product, locationRow.id);
+                if (status === "UNASSIGNED")
+                  return <span className="text-xs text-muted-foreground">Not assigned</span>;
+                if (status === "COUNT")
+                  return <span className="text-xs font-medium text-info">Count pending</span>;
+                return `${stockAt(row.product.id, locationRow.id)} ${row.product.uom_stock}`;
+              },
             })),
             { id: "minimum", header: "Min", accessor: (row) => row.product.min_stock },
             {
@@ -227,28 +273,38 @@ function InventoryPage() {
             {
               id: "action",
               header: "Action",
-              accessor: (row) => (row.status === "IN" ? "OK" : "Transfer"),
+              accessor: (row) => (row.status === "IN" ? "Count" : "Count / Transfer"),
               sortable: false,
               cell: (row) => {
-                if (row.status === "IN")
-                  return <span className="text-xs text-muted-foreground">OK</span>;
                 const otherQty = allowedLocations
                   .filter((entry) => entry.id !== location?.id)
                   .reduce((sum, entry) => sum + stockAt(row.product.id, entry.id), 0);
                 return (
-                  <Button
-                    size="sm"
-                    variant={row.status === "OUT" ? "default" : "outline"}
-                    className="h-7 gap-1 px-2 text-xs"
-                    onClick={() => setIndentProduct(row.product)}
-                    title={
-                      otherQty > 0
-                        ? `Other locations hold ${otherQty} ${row.product.uom_stock}`
-                        : "No stock at other locations — reorder from vendor"
-                    }
-                  >
-                    <Truck className="h-3 w-3" /> Transfer
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 px-2 text-xs"
+                      onClick={() => setCountProduct(row.product)}
+                    >
+                      <ClipboardCheck className="h-3 w-3" /> Count
+                    </Button>
+                    {(row.status === "OUT" || row.status === "REORDER") && (
+                      <Button
+                        size="sm"
+                        variant={row.status === "OUT" ? "default" : "outline"}
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={() => setIndentProduct(row.product)}
+                        title={
+                          otherQty > 0
+                            ? `Other locations hold ${otherQty} ${row.product.uom_stock}`
+                            : "No stock at other locations — reorder from vendor"
+                        }
+                      >
+                        <Truck className="h-3 w-3" /> Transfer
+                      </Button>
+                    )}
+                  </div>
                 );
               },
             },
@@ -263,7 +319,98 @@ function InventoryPage() {
         locationId={location?.id ?? ""}
         locations={locations}
       />
+      <CountStockDialog
+        product={countProduct}
+        locationId={location?.id ?? ""}
+        currentQuantity={countProduct ? stockAt(countProduct.id, location?.id) : 0}
+        onClose={() => setCountProduct(null)}
+      />
     </div>
+  );
+}
+
+function CountStockDialog({
+  product,
+  locationId,
+  currentQuantity,
+  onClose,
+}: {
+  product: Product | null;
+  locationId: string;
+  currentQuantity: number;
+  onClose: () => void;
+}) {
+  const [quantity, setQuantity] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (product) setQuantity(String(currentQuantity));
+  }, [product, currentQuantity]);
+
+  async function save() {
+    if (!product || !locationId || busy) return;
+    setBusy(true);
+    try {
+      await countLocationStock({
+        productId: product.id,
+        locationId,
+        countedQuantity: Number(quantity),
+      });
+      toast.success(`${product.name} physical count saved`, {
+        description: "Stock tracking is now active at this location.",
+      });
+      onClose();
+    } catch (error) {
+      toast.error("Could not save stock count", {
+        description: error instanceof Error ? error.message : "Review the count and try again.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={!!product} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Count stock at this location</DialogTitle>
+          <DialogDescription>
+            {product
+              ? `${product.name}${product.variant ? ` · ${product.variant}` : ""} · current tracked balance ${currentQuantity} ${product.uom_stock}. Enter the physical quantity on hand.`
+              : "Enter a physical count."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1">
+          <Label htmlFor="physical-stock-count">
+            Physical count ({product?.uom_stock ?? "units"})
+          </Label>
+          <Input
+            id="physical-stock-count"
+            type="number"
+            min="0"
+            step={
+              product?.is_loose
+                ? String(1 / 10 ** Math.max(0, Math.min(3, product.quantity_precision ?? 0)))
+                : "1"
+            }
+            value={quantity}
+            onChange={(event) => setQuantity(event.target.value)}
+            placeholder="0"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void save()}
+            disabled={busy || quantity === "" || Number(quantity) < 0}
+          >
+            {busy ? "Saving…" : "Save physical count"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

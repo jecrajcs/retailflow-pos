@@ -1,6 +1,7 @@
 -- Additive POS runtime support. Published migrations are intentionally unchanged.
 
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS username text;
+ALTER TABLE public.locations ADD COLUMN IF NOT EXISTS upi_vpa text;
 ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE public.users ADD CONSTRAINT users_role_check
   CHECK (role IN ('CASHIER', 'MANAGER', 'ADMIN', 'WAREHOUSE'));
@@ -283,36 +284,35 @@ DO $migration$
 DECLARE
   v_definition text;
   v_updated text;
+  v_gate_matches integer;
 BEGIN
   SELECT pg_get_functiondef(
     'public.sync_offline_operation(uuid,text,uuid,text,jsonb)'::regprocedure
   ) INTO v_definition;
-  v_updated := replace(
-    v_definition,
-    $old$
-  IF p_operation_type LIKE 'purchase.%' OR p_operation_type LIKE 'inventory.%'
-    OR p_operation_type IN ('product.create', 'product.update', 'shortcut.update') THEN
-    IF v_role NOT IN ('MANAGER', 'ADMIN') THEN
-      RAISE EXCEPTION 'Manager access is required for this operation';
+  IF position(
+    'v_role = ''WAREHOUSE'' AND p_operation_type LIKE ''inventory.%''' IN v_definition
+  ) = 0 THEN
+    SELECT count(*) INTO v_gate_matches
+    FROM regexp_matches(v_definition, $gate$
+      [[:space:]]*IF[[:space:]]+v_role[[:space:]]+NOT[[:space:]]+IN[[:space:]]*\([[:space:]]*'MANAGER'[[:space:]]*,[[:space:]]*'ADMIN'[[:space:]]*\)[[:space:]]+THEN[[:space:]]+RAISE[[:space:]]+EXCEPTION[[:space:]]+'Manager access is required for this operation';
+    $gate$, 'g');
+    IF v_gate_matches <> 1 THEN
+      RAISE EXCEPTION 'Expected one manager inventory permission check in sync_offline_operation, found %', v_gate_matches;
     END IF;
-  END IF;
-$old$,
-    $new$
-  IF p_operation_type LIKE 'purchase.%'
-    OR p_operation_type IN ('product.create', 'product.update', 'shortcut.update') THEN
-    IF v_role NOT IN ('MANAGER', 'ADMIN') THEN
+    v_updated := regexp_replace(
+      v_definition,
+      $gate$
+        [[:space:]]*IF[[:space:]]+v_role[[:space:]]+NOT[[:space:]]+IN[[:space:]]*\([[:space:]]*'MANAGER'[[:space:]]*,[[:space:]]*'ADMIN'[[:space:]]*\)[[:space:]]+THEN[[:space:]]+RAISE[[:space:]]+EXCEPTION[[:space:]]+'Manager access is required for this operation';
+      $gate$,
+      $new$
+    IF v_role NOT IN ('MANAGER', 'ADMIN')
+      AND NOT (v_role = 'WAREHOUSE' AND p_operation_type LIKE 'inventory.%') THEN
       RAISE EXCEPTION 'Manager access is required for this operation';
-    END IF;
+      $new$,
+      'g'
+    );
+    EXECUTE v_updated;
   END IF;
-  IF p_operation_type LIKE 'inventory.%' AND v_role NOT IN ('MANAGER', 'ADMIN', 'WAREHOUSE') THEN
-    RAISE EXCEPTION 'Manager or Warehouse access is required for stock operations';
-  END IF;
-$new$
-  );
-  IF v_updated = v_definition THEN
-    RAISE EXCEPTION 'Could not find the expected inventory permission gate in sync_offline_operation';
-  END IF;
-  EXECUTE v_updated;
 END
 $migration$;
 
@@ -335,10 +335,34 @@ DECLARE
   v_role text;
   v_event_at timestamptz;
   v_location_id uuid;
+  v_payment_total numeric(12,2);
+  v_payment_collected numeric(12,2);
+  v_credit_allocated numeric(12,2);
+  v_payment_count integer;
+  v_payment_mode_count integer;
+  v_existing public.offline_sync_operations%ROWTYPE;
 BEGIN
   SELECT role INTO v_role FROM public.users WHERE user_id = p_actor_user_id AND is_active;
   IF v_role IS NULL OR v_role NOT IN ('CASHIER', 'MANAGER', 'ADMIN', 'WAREHOUSE') THEN
     RAISE EXCEPTION 'An active staff account is required';
+  END IF;
+  SELECT * INTO v_existing
+  FROM public.offline_sync_operations
+  WHERE operation_id = p_operation_id;
+  IF FOUND THEN
+    IF v_existing.user_id IS DISTINCT FROM p_actor_user_id
+      OR v_existing.device_id IS DISTINCT FROM p_device_id
+      OR v_existing.outlet_id IS DISTINCT FROM p_outlet_id
+      OR v_existing.operation_type IS DISTINCT FROM p_operation_type
+      OR v_existing.payload IS DISTINCT FROM COALESCE(p_payload, '{}'::jsonb) THEN
+      RAISE EXCEPTION 'This sync operation ID was already used for different POS data';
+    END IF;
+    RETURN jsonb_build_object(
+      'accepted', true,
+      'duplicate', true,
+      'review_needed', v_existing.sync_status = 'REVIEW',
+      'message', v_existing.sync_message
+    );
   END IF;
   IF p_operation_type IN ('invoice.draft.save', 'invoice.draft.void', 'invoice.finalize', 'payment.add')
     AND v_role <> 'CASHIER' THEN
@@ -372,6 +396,11 @@ BEGIN
     IF p_outlet_id IS DISTINCT FROM v_location_id THEN
       RAISE EXCEPTION 'The bill location does not match the signed-in POS location';
     END IF;
+    IF p_operation_type = 'payment.add' AND (
+      upper(COALESCE(p_payload->'payment'->>'mode', '')) NOT IN ('CASH', 'UPI', 'CARD')
+      OR COALESCE((p_payload->'payment'->>'amount')::numeric, 0) <= 0
+      OR (p_payload->'payment'->>'amount')::numeric > COALESCE((v_record->>'balance_amount')::numeric, 0)
+    ) THEN RAISE EXCEPTION 'Enter a valid collection that does not exceed the bill balance'; END IF;
     IF NOT EXISTS (
       SELECT 1 FROM public.staff_location_access
       WHERE user_id = p_actor_user_id AND location_id = v_location_id
@@ -386,13 +415,17 @@ BEGIN
           WHERE assignment.product_id = product.id AND assignment.location_id = v_location_id
         )
     ) THEN RAISE EXCEPTION 'A SKU is inactive, rejected, or not assigned to this store'; END IF;
-    IF p_operation_type = 'invoice.finalize' AND v_role = 'CASHIER' THEN
-      v_event_at := COALESCE(NULLIF(v_record->>'created_at', '')::timestamptz, now());
+    IF v_role = 'CASHIER' THEN
+      v_event_at := CASE
+        WHEN p_operation_type = 'payment.add'
+          THEN COALESCE(NULLIF(p_payload->'payment'->>'created_at', '')::timestamptz, now())
+        ELSE COALESCE(NULLIF(v_record->>'created_at', '')::timestamptz, now())
+      END;
       IF NOT EXISTS (
         SELECT 1 FROM public.cash_drawer_sessions
         WHERE location_id = v_location_id AND opened_by_id = p_actor_user_id
           AND opened_at <= v_event_at AND (closed_at IS NULL OR closed_at >= v_event_at)
-      ) THEN RAISE EXCEPTION 'Open your cash shift before completing cashier sales'; END IF;
+      ) THEN RAISE EXCEPTION 'Open your cash shift before recording sales or collecting a bill balance'; END IF;
     END IF;
   END IF;
   IF p_operation_type = 'cash.transaction.create' THEN
@@ -411,16 +444,6 @@ BEGIN
       SELECT 1 FROM public.staff_location_access
       WHERE user_id = p_actor_user_id AND location_id = v_location_id
     ) THEN RAISE EXCEPTION 'Quick-add the SKU at an assigned store'; END IF;
-  END IF;
-  IF p_operation_type = 'invoice.finalize' AND v_role = 'CASHIER' THEN
-    v_record := p_payload->'invoice';
-    v_location_id := (v_record->>'location_id')::uuid;
-    v_event_at := COALESCE(NULLIF(v_record->>'created_at', '')::timestamptz, now());
-    IF NOT EXISTS (
-      SELECT 1 FROM public.cash_drawer_sessions
-      WHERE location_id = v_location_id AND opened_by_id = p_actor_user_id
-        AND opened_at <= v_event_at AND (closed_at IS NULL OR closed_at >= v_event_at)
-    ) THEN RAISE EXCEPTION 'Open your cash shift before completing cashier sales'; END IF;
   END IF;
   IF p_operation_type = 'product.quick_add' THEN
     v_record := p_payload->'product';
@@ -444,6 +467,56 @@ BEGIN
         (product.is_loose AND abs((item->>'quantity')::numeric * power(10, product.quantity_precision) -
           round((item->>'quantity')::numeric * power(10, product.quantity_precision))) > 0.0001)
     ) THEN RAISE EXCEPTION 'One or more item quantities do not match their configured sale unit precision'; END IF;
+    SELECT
+      COALESCE(sum((payment->>'amount')::numeric), 0),
+      COALESCE(sum((payment->>'amount')::numeric) FILTER (WHERE upper(payment->>'mode') <> 'CREDIT'), 0),
+      COALESCE(sum((payment->>'amount')::numeric) FILTER (WHERE upper(payment->>'mode') = 'CREDIT'), 0),
+      count(*), count(DISTINCT upper(payment->>'mode'))
+    INTO v_payment_total, v_payment_collected, v_credit_allocated, v_payment_count, v_payment_mode_count
+    FROM jsonb_array_elements(COALESCE(p_payload->'payments', '[]'::jsonb)) AS payment;
+    IF v_payment_count = 0 OR v_payment_count <> v_payment_mode_count OR EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(p_payload->'payments', '[]'::jsonb)) AS payment
+      WHERE upper(payment->>'mode') NOT IN ('CASH', 'UPI', 'CARD', 'CREDIT')
+        OR COALESCE((payment->>'amount')::numeric, 0) <= 0
+    ) THEN RAISE EXCEPTION 'Use one positive amount for each selected payment mode'; END IF;
+    IF abs(v_payment_total - COALESCE((v_record->>'total_amount')::numeric, 0)) > 0.01
+       OR abs(v_payment_collected - COALESCE((v_record->>'paid_amount')::numeric, 0)) > 0.01
+       OR abs(v_credit_allocated - COALESCE((v_record->>'balance_amount')::numeric, 0)) > 0.01 THEN
+      RAISE EXCEPTION 'Allocate the full bill to collected payments and customer credit';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(p_payload->'payments', '[]'::jsonb)) AS payment
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(sum(denomination.key::numeric * denomination.value::numeric), 0) AS total
+        FROM jsonb_each_text(
+          CASE WHEN jsonb_typeof(payment->'change_denominations') = 'object'
+            THEN payment->'change_denominations' ELSE '{}'::jsonb END
+        ) AS denomination
+      ) AS change_count
+      WHERE upper(payment->>'mode') = 'CASH' AND (
+        NULLIF(payment->>'tendered', '') IS NULL OR NULLIF(payment->>'change_given', '') IS NULL
+        OR abs((payment->>'tendered')::numeric - (payment->>'change_given')::numeric - (payment->>'amount')::numeric) > 0.01
+        OR (payment->'change_denominations' IS NOT NULL AND
+          jsonb_typeof(payment->'change_denominations') NOT IN ('object', 'null'))
+        OR ((payment->>'change_given')::numeric > 0 AND
+          jsonb_typeof(payment->'change_denominations') <> 'object')
+        OR change_count.total <> COALESCE((payment->>'change_given')::numeric, 0)
+        OR EXISTS (
+          SELECT 1 FROM jsonb_each_text(
+            CASE WHEN jsonb_typeof(payment->'change_denominations') = 'object'
+              THEN payment->'change_denominations' ELSE '{}'::jsonb END
+          ) denomination
+          WHERE denomination.key NOT IN ('500', '200', '100', '50', '20', '10', '5', '2', '1')
+            OR denomination.value !~ '^[0-9]+$'
+        )
+      )
+    ) THEN RAISE EXCEPTION 'Cash tender and returned denominations do not match the bill'; END IF;
+    IF v_credit_allocated > 0 AND NOT EXISTS (
+      SELECT 1 FROM public.customers customer
+      WHERE customer.id = NULLIF(v_record->>'customer_id', '')::uuid
+        AND customer.outstanding_balance + v_credit_allocated <= customer.credit_limit
+    ) THEN RAISE EXCEPTION 'Customer credit limit would be exceeded'; END IF;
   END IF;
   PERFORM set_config('request.jwt.claim.sub', p_actor_user_id::text, true);
   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', p_actor_user_id::text, 'role', 'authenticated')::text, true);
@@ -494,7 +567,9 @@ BEGIN
       FOR v_record IN SELECT value FROM jsonb_array_elements(COALESCE(p_payload->'category_reviews', '[]'::jsonb)) LOOP
         INSERT INTO public.category_reviews (id, location_id, kind, name)
         VALUES (v_record->>'id', (v_record->>'location_id')::uuid, v_record->>'kind', v_record->>'name')
-        ON CONFLICT DO NOTHING;
+        ON CONFLICT (id) DO UPDATE SET status = 'PENDING', review_reason = NULL,
+          reviewed_by = NULL, reviewed_at = NULL
+        WHERE public.category_reviews.status = 'REJECTED';
       END LOOP;
     ELSIF p_operation_type = 'invoice.finalize' THEN
       v_record := p_payload->'invoice';
@@ -675,6 +750,45 @@ END
 $$;
 REVOKE ALL ON FUNCTION public.app_update_own_username(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.app_update_own_username(uuid, text) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.app_review_category_suggestion(
+  p_actor_user_id uuid,
+  p_category_id text,
+  p_status text,
+  p_reason text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_role text;
+  v_location_id uuid;
+BEGIN
+  SELECT role INTO v_role FROM public.users WHERE user_id = p_actor_user_id AND is_active;
+  IF v_role IS DISTINCT FROM 'ADMIN' AND v_role IS DISTINCT FROM 'MANAGER' THEN
+    RAISE EXCEPTION 'Only a Manager or Admin may review category suggestions';
+  END IF;
+  IF p_status NOT IN ('APPROVED', 'REJECTED') THEN RAISE EXCEPTION 'Choose approve or return'; END IF;
+  IF p_status = 'REJECTED' AND length(btrim(COALESCE(p_reason, ''))) < 5 THEN
+    RAISE EXCEPTION 'Enter a clear rejection reason';
+  END IF;
+  SELECT location_id INTO v_location_id FROM public.category_reviews
+  WHERE id = p_category_id AND status = 'PENDING' FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'This category is no longer waiting for review'; END IF;
+  IF v_role = 'MANAGER' AND NOT EXISTS (
+    SELECT 1 FROM public.staff_location_access
+    WHERE user_id = p_actor_user_id AND location_id = v_location_id
+  ) THEN RAISE EXCEPTION 'This category belongs to a location outside your assignment'; END IF;
+  UPDATE public.category_reviews SET status = p_status,
+    review_reason = CASE WHEN p_status = 'REJECTED' THEN btrim(p_reason) ELSE NULL END,
+    reviewed_by = p_actor_user_id, reviewed_at = now()
+  WHERE id = p_category_id;
+END
+$$;
+REVOKE ALL ON FUNCTION public.app_review_category_suggestion(uuid, text, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.app_review_category_suggestion(uuid, text, text, text) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.app_save_staff_profile(
   p_actor_user_id uuid,

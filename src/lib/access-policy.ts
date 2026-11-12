@@ -19,6 +19,7 @@ export const accessPolicy = {
     "/api/staff-username",
     "/api/admin/archive-product",
     "/api/barcode-candidate",
+      "/api/category-review",
     ],
     signIn: ["/api/pos/login"],
   },
