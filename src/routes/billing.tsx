@@ -3,9 +3,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  AlertTriangle,
   CalendarDays,
-  CheckCircle2,
+  Camera,
   MapPin,
   Plus,
   ScanBarcode,
@@ -14,6 +13,7 @@ import {
   Truck,
   UserRound,
   Zap,
+  Clock3,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -21,6 +21,7 @@ import { AppNav } from "@/components/pos/app-nav";
 import { PaymentModal } from "@/components/pos/payment-modal";
 import { CustomerDialog } from "@/components/pos/customer-dialog";
 import { QuickAddModal } from "@/components/pos/quick-add-modal";
+import { CameraScannerDialog } from "@/components/pos/camera-scanner";
 import { IndentDialog } from "@/components/pos/indent-dialog";
 import { ReceiptDialog, type ReceiptData } from "@/components/pos/receipt";
 import { Button } from "@/components/ui/button";
@@ -30,26 +31,33 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
 import { userFacingError } from "@/lib/retail-api";
+import { expiringProductSuggestions } from "@/lib/expiry-alerts";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  addCustomer,
   categoryIcon,
   createLocalDraft,
   discountFromInput,
-  familySummary,
   getProductPrice,
   inr,
   loadLocalDraftPayload,
   matchesProductSearch,
   maxLineDiscount,
-  matchesSearchFields,
   saveLocalDraft,
   voidLocalDraft,
   useCustomers,
   useInventory,
+  useLocationProducts,
   useLocations,
   useProducts,
+  usePurchases,
   useSales,
   useShortcutTiles,
   type CartLine,
@@ -67,13 +75,13 @@ export const Route = createFileRoute("/billing")({
       {
         name: "description",
         content:
-          "Fast customer-first POS billing with barcode scanning, rack locations, floor-price protection, split payments, cash tendered and change return.",
+          "POS billing with barcode scanning, customer lookup, quantity pricing, split payments and cash reconciliation.",
       },
       { property: "og:title", content: "RetailHub POS — Billing" },
       {
         property: "og:description",
         content:
-          "Fast customer-first POS billing with barcode scanning, rack locations, floor-price protection, split payments, cash tendered and change return.",
+          "POS billing with barcode scanning, customer lookup, quantity pricing, split payments and cash reconciliation.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -84,19 +92,31 @@ export const Route = createFileRoute("/billing")({
 
 const LS_KEY = "pos-location-id";
 
-type CustomerMode = "unset" | "chosen" | "walkin";
-type HeldBill = {
-  id: string;
-  invoice_number: string;
-  customer_id: string | null;
-  location_id: string;
-  business_date: string;
-  created_at: string;
-};
-
 function todayBusinessDate() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function playScanBeep() {
+  if (typeof window === "undefined") return;
+  const AudioContextClass =
+    window.AudioContext ??
+    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 880;
+    gain.gain.value = 0.04;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.07);
+    oscillator.onended = () => void context.close();
+  } catch {
+    // Audio feedback is optional when browser audio is unavailable.
+  }
 }
 
 function PosPage() {
@@ -105,11 +125,14 @@ function PosPage() {
   const { data: locations = [] } = useLocations();
   const { data: products = [] } = useProducts();
   const { data: inventory = [] } = useInventory();
+  const { data: locationProducts = [] } = useLocationProducts();
   const { data: customers = [] } = useCustomers();
-  const { data: sales = [] } = useSales();
+  const { data: purchases = [] } = usePurchases();
+  const salesQuery = useSales();
+  const sales = useMemo(() => salesQuery.data ?? [], [salesQuery.data]);
   const { data: shortcutRows = [] } = useShortcutTiles();
-  const allowedLocations = locations.filter((candidate) =>
-    canAccessLocation(profile, candidate.id),
+  const allowedLocations = locations.filter(
+    (candidate) => candidate.is_active && canAccessLocation(profile, candidate.id),
   );
 
   const [locationId, setLocationId] = useState("");
@@ -117,14 +140,26 @@ function PosPage() {
   const [currentInvoice, setCurrentInvoice] = useState<LocalInvoice | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
 
+  useEffect(() => {
+    if (locationId || !allowedLocations.length) return;
+    const savedLocationId = localStorage.getItem(LS_KEY);
+    const selected =
+      allowedLocations.find((candidate) => candidate.id === savedLocationId) ??
+      (allowedLocations.length === 1 ? allowedLocations[0] : undefined);
+    if (selected) {
+      setLocationId(selected.id);
+      saveActiveLocation(selected.id);
+    }
+  }, [allowedLocations, locationId]);
+
   function changeLocation(id: string) {
     if (!canAccessLocation(profile, id)) {
       toast.error("Your account is not assigned to this location.");
       return;
     }
-    if ((lines.length > 0 || customerMode !== "unset") && id !== locationId) {
+    if ((lines.length > 0 || discount > 0) && id !== locationId) {
       toast.warning("Current bill is active", {
-        description: "Hold or finish this bill before changing the store.",
+        description: "Complete this bill before changing the store.",
       });
       return;
     }
@@ -133,20 +168,15 @@ function PosPage() {
     if (currentInvoice && currentInvoice.location_id !== id) void voidLocalDraft(currentInvoice.id);
     if (id !== locationId) {
       setCurrentInvoice(null);
-      void createLocalDraft(id, businessDate, profile?.user_id, profile?.display_name)
-        .then(setCurrentInvoice)
-        .catch((error) =>
-          toast.error("Could not start a local bill", {
-            description: userFacingError(error, "Please refresh the page and try again."),
-          }),
-        );
     }
   }
 
   const [lines, setLines] = useState<CartLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
-  const [customerMode, setCustomerMode] = useState<CustomerMode>("unset");
+  const [customerChoice, setCustomerChoice] = useState<"unset" | "walk-in" | "customer">("unset");
+  const [walkIn, setWalkIn] = useState(false);
   const [barcode, setBarcode] = useState("");
+  const [barcodeChoices, setBarcodeChoices] = useState<Product[]>([]);
   const [activeProductIndex, setActiveProductIndex] = useState(0);
   const [discount, setDiscount] = useState(0);
   const [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
@@ -155,29 +185,25 @@ function PosPage() {
   const [custOpen, setCustOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [quickPrefill, setQuickPrefill] = useState("");
+  const [correctionProduct, setCorrectionProduct] = useState<Product | null>(null);
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const barcodeRef = useRef<HTMLInputElement>(null);
-  const custSearchRef = useRef<HTMLInputElement>(null);
+  const cartLinesRef = useRef<CartLine[]>([]);
+  const remoteScanHandler = useRef<(code: string, scanId?: string) => void>(() => undefined);
+  const pendingScannedCode = useRef<{ code: string; scanId?: string } | null>(null);
+  const pendingBarcodeChoiceScanId = useRef<string | null>(null);
+  const scannerChannelRef = useRef<BroadcastChannel | null>(null);
 
-  const heldBills = useMemo<HeldBill[]>(
-    () =>
-      sales
-        .filter((invoice) => invoice.status === "DRAFT" && invoice.id !== currentInvoice?.id)
-        .map((invoice) => ({
-          id: invoice.id,
-          invoice_number: invoice.invoice_number,
-          customer_id: invoice.customer_id,
-          location_id: invoice.location_id,
-          business_date: invoice.business_date,
-          created_at: invoice.created_at,
-        }))
-        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-    [sales, currentInvoice?.id],
-  );
+  const updateLines = useCallback((next: CartLine[] | ((previous: CartLine[]) => CartLine[])) => {
+    const updated = typeof next === "function" ? next(cartLinesRef.current) : next;
+    cartLinesRef.current = updated;
+    setLines(updated);
+  }, []);
 
   useEffect(() => {
-    if (draftRestored || !sales.length) return;
+    if (draftRestored || salesQuery.isLoading) return;
     let active = true;
     const storedLocation = localStorage.getItem(LS_KEY);
     const existing = sales
@@ -190,24 +216,61 @@ function PosPage() {
       .sort((a, b) =>
         (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at),
       )[0];
-    if (existing) {
-      void loadLocalDraftPayload(existing.id).then((payload) => {
-        if (!active || !payload) return;
-        setCurrentInvoice(existing);
-        setLocationId(existing.location_id);
-        setCustomer(payload.customer);
-        setCustomerMode(payload.customer_mode);
-        setLines(payload.items);
-        setDiscount(payload.discount_input);
-        setDiscountMode(payload.discount_mode);
-        setBusinessDate(existing.business_date);
-      });
-    }
-    setDraftRestored(true);
+    void (async () => {
+      try {
+        if (existing) {
+          const payload = await loadLocalDraftPayload(existing.id);
+          if (!active) return;
+          if (payload) {
+            setCurrentInvoice(existing);
+            setLocationId(existing.location_id);
+            setCustomer(payload.customer);
+            const isWalkIn =
+              payload.customer?.name?.trim().toLocaleLowerCase() === "walk-in" &&
+              !payload.customer.mobile;
+            setWalkIn(isWalkIn);
+            setCustomerChoice(payload.customer ? (isWalkIn ? "walk-in" : "customer") : "unset");
+            updateLines(payload.items);
+            setDiscount(payload.discount_input);
+            setDiscountMode(payload.discount_mode);
+            setBusinessDate(existing.business_date);
+          }
+        }
+      } catch (error) {
+        toast.error("Could not restore the previous bill", {
+          description: userFacingError(error, "The bill could not be loaded from this device."),
+        });
+      } finally {
+        if (active) setDraftRestored(true);
+      }
+    })();
     return () => {
       active = false;
     };
-  }, [sales, draftRestored, profile]);
+  }, [sales, draftRestored, profile, salesQuery.isLoading, updateLines]);
+
+  useEffect(() => {
+    if (!draftRestored || !locationId || !customer || currentInvoice) return;
+    let active = true;
+    void createLocalDraft(locationId, businessDate, profile?.user_id, profile?.display_name)
+      .then((invoice) => {
+        if (active) setCurrentInvoice(invoice);
+        else void voidLocalDraft(invoice.id);
+      })
+      .catch((error) =>
+        toast.error("Could not start a local bill", {
+          description: userFacingError(error, "Please refresh the page and try again."),
+        }),
+      );
+    return () => {
+      active = false;
+    };
+  }, [draftRestored, locationId, customer, currentInvoice, businessDate, profile]);
+
+  useEffect(() => {
+    if (!draftRestored || !locationId || customerChoice !== "unset") return;
+    setCustOpen(true);
+  }, [draftRestored, locationId, customerChoice]);
 
   useEffect(() => {
     if (!currentInvoice) return;
@@ -220,23 +283,14 @@ function PosPage() {
       void saveLocalDraft({
         invoice,
         customer,
-        customer_mode: customerMode,
+        customer_mode: customer ? "chosen" : "unset",
         items: lines,
         discount_mode: discountMode,
         discount_input: discount,
       });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [
-    currentInvoice,
-    locationId,
-    businessDate,
-    customer,
-    customerMode,
-    lines,
-    discountMode,
-    discount,
-  ]);
+  }, [currentInvoice, locationId, businessDate, customer, lines, discountMode, discount]);
 
   const stockAt = useCallback(
     (productId: string, locId: string | undefined) =>
@@ -244,6 +298,35 @@ function PosPage() {
         ?.quantity_on_hand ?? 0,
     [inventory],
   );
+
+  const awaitingCount = useCallback(
+    (productId: string, locId: string | undefined) =>
+      !!locId &&
+      locationProducts.some(
+        (row) =>
+          row.product_id === productId &&
+          row.location_id === locId &&
+          row.stock_count_status === "AWAITING_COUNT",
+      ),
+    [locationProducts],
+  );
+
+  function stockLabel(productId: string, locId: string | undefined) {
+    return awaitingCount(productId, locId)
+      ? "Awaiting count"
+      : `${stockAt(productId, locId)} in stock`;
+  }
+
+  const expiringSuggestions = useMemo(() => {
+    const availableProductIds = new Set(
+      products
+        .filter(
+          (product) => stockAt(product.id, locationId) > 0 || awaitingCount(product.id, locationId),
+        )
+        .map((product) => product.id),
+    );
+    return expiringProductSuggestions(purchases, products, availableProductIds).slice(0, 6);
+  }, [awaitingCount, locationId, products, purchases, stockAt]);
 
   const subtotal = useMemo(
     () => lines.reduce((s, l) => s + l.quantity * l.unit_price - l.discount, 0),
@@ -265,84 +348,61 @@ function PosPage() {
       ? ((discount / subtotal) * 100).toFixed(2)
       : discount || "";
 
-  /** New bill starts here: preserve a live draft, then allocate a fresh local number. */
-  async function startNewBill() {
-    if (currentInvoice) {
-      if (customerMode !== "unset" || lines.length > 0 || discount > 0) {
-        await saveLocalDraft({
-          invoice: { ...currentInvoice, location_id: locationId, business_date: businessDate },
-          customer,
-          customer_mode: customerMode,
-          items: lines,
-          discount_mode: discountMode,
-          discount_input: discount,
-        });
-      } else {
-        await voidLocalDraft(currentInvoice.id);
-      }
-    }
-    setLines([]);
-    setCustomer(null);
-    setCustomerMode("unset");
-    setDiscount(0);
-    setBusinessDate(todayBusinessDate());
-    setBarcode("");
-    setPayOpen(false);
-    setCurrentInvoice(null);
-    if (locationId) {
-      try {
-        setCurrentInvoice(
-          await createLocalDraft(
-            locationId,
-            todayBusinessDate(),
-            profile?.user_id,
-            profile?.display_name,
-          ),
-        );
-      } catch (error) {
-        toast.error("Could not start a local bill", {
-          description: userFacingError(error, "Please refresh the page and try again."),
-        });
-      }
-    }
-    setTimeout(() => custSearchRef.current?.focus(), 30);
-  }
-
-  function resolveCustomer(c: Customer | null) {
+  function resolveCustomer(c: Customer | null, isWalkIn = false) {
     setCustomer(c);
-    setCustomerMode(c ? "chosen" : "walkin");
+    setWalkIn(isWalkIn && !!c);
+    setCustomerChoice(c ? (isWalkIn ? "walk-in" : "customer") : "unset");
     void queryClient.invalidateQueries({ queryKey: ["customers"] });
     setTimeout(() => barcodeRef.current?.focus(), 30);
   }
 
-  function addToCart(product: Product) {
+  useEffect(() => {
+    if (!customer || !locationId || !pendingScannedCode.current) return;
+    const pending = pendingScannedCode.current;
+    pendingScannedCode.current = null;
+    window.setTimeout(() => remoteScanHandler.current(pending.code, pending.scanId), 0);
+  }, [customer, locationId]);
+
+  function addToCart(product: Product, allowNewUncounted = false) {
+    if (!customer) {
+      setCustOpen(true);
+      return false;
+    }
     if (!locationId) {
       toast.error("Select the store first");
-      return;
+      return false;
     }
-    if (customerMode === "unset") {
-      toast.error("Customer pehle chunein", {
-        description: "Search, add or pick Walk-in above — then scan items.",
+    if (product.review_status === "REJECTED") {
+      setCorrectionProduct(product);
+      setQuickPrefill("");
+      setQuickOpen(true);
+      toast.error("This SKU needs a correction before sale.", {
+        description: product.review_reason || "Review the item details and resubmit them.",
       });
-      return;
+      return false;
     }
-    if (stockAt(product.id, locationId) <= 0) {
+    const uncounted = allowNewUncounted || awaitingCount(product.id, locationId);
+    if (!uncounted && stockAt(product.id, locationId) <= 0) {
       toast.error("Out of stock at this store", {
         description: `Choose another store or request a transfer for ${product.name}.`,
       });
-      return;
+      return false;
     }
-    setLines((prev) => {
-      const existing = prev.find((l) => l.product.id === product.id);
-      if (existing) {
-        const nextQuantity = existing.quantity + 1;
-        if (nextQuantity > stockAt(product.id, locationId)) {
+    const existing = cartLinesRef.current.find((line) => line.product.id === product.id);
+    if (existing && !uncounted && existing.quantity + 1 > stockAt(product.id, locationId)) {
+      toast.warning(`Only ${stockAt(product.id, locationId)} in stock at this store`);
+      return false;
+    }
+    updateLines((prev) => {
+      const current = prev.find((line) => line.product.id === product.id);
+      if (current) {
+        const quantity = current.quantity + 1;
+        if (!uncounted && quantity > stockAt(product.id, locationId)) {
           toast.warning(`Only ${stockAt(product.id, locationId)} in stock at this store`);
           return prev;
         }
         return prev.map((l) => {
           if (l.product.id !== product.id) return l;
-          const quantity = nextQuantity;
           const { unitPrice } = getProductPrice(product, quantity);
           return {
             ...l,
@@ -367,14 +427,22 @@ function PosPage() {
         },
       ];
     });
+    playScanBeep();
+    return true;
   }
 
   function setQuantity(productId: string, quantity: number) {
-    if (quantity > stockAt(productId, locationId)) {
+    const product = products.find((item) => item.id === productId);
+    const precision = product?.is_loose
+      ? Math.max(0, Math.min(3, product.quantity_precision ?? 3))
+      : 0;
+    const scale = 10 ** precision;
+    quantity = Math.round(quantity * scale) / scale;
+    if (!awaitingCount(productId, locationId) && quantity > stockAt(productId, locationId)) {
       toast.warning(`Only ${stockAt(productId, locationId)} in stock at this store`);
       quantity = stockAt(productId, locationId);
     }
-    setLines((prev) =>
+    updateLines((prev) =>
       quantity <= 0
         ? prev.filter((l) => l.product.id !== productId)
         : prev.map((l) => {
@@ -394,7 +462,7 @@ function PosPage() {
   }
 
   function setLineDiscount(productId: string, value: number) {
-    setLines((prev) =>
+    updateLines((prev) =>
       prev.map((l) => {
         if (l.product.id !== productId) return l;
         const max = maxLineDiscount(l.unit_price, l.quantity, l.product.min_sale_price);
@@ -411,84 +479,109 @@ function PosPage() {
     );
   }
 
-  function handleBarcodeSubmit() {
-    if (customerMode === "unset") {
-      toast.error("Customer pehle chunein");
+  function reportScannerResult(scanId: string | undefined, status: string, message: string) {
+    if (!scanId) return;
+    scannerChannelRef.current?.postMessage({
+      type: "barcode-result",
+      scan_id: scanId,
+      status,
+      message,
+    });
+  }
+
+  function handleBarcodeValue(value: string, scanId?: string) {
+    const cleanValue = value.trim();
+    const q = cleanValue.toLocaleLowerCase();
+    if (!q) return;
+    if (!customer || !locationId) {
+      pendingScannedCode.current = { code: cleanValue, ...(scanId ? { scanId } : {}) };
+      setCustOpen(true);
+      if (!locationId)
+        toast.info("Barcode saved for this bill", {
+          description: "Choose the store and customer to add the scanned item.",
+        });
+      else
+        toast.info("Barcode saved for this bill", {
+          description: "Choose a customer; the scan will be added after selection.",
+        });
       return;
     }
-    const q = barcode.trim().toLowerCase();
-    if (!q) return;
-    const hit =
-      products.find((p) => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q) ??
-      products.find((p) => p.name.toLowerCase() === q);
+    const codeMatches = products.filter(
+      (p) => p.barcode?.trim().toLocaleLowerCase() === q || p.sku?.trim().toLocaleLowerCase() === q,
+    );
+    if (codeMatches.length > 1) {
+      setBarcodeChoices(codeMatches);
+      pendingBarcodeChoiceScanId.current = scanId ?? null;
+      setBarcode("");
+      reportScannerResult(
+        scanId,
+        "choose-sku",
+        "Barcode matches multiple SKUs; choose one on the POS.",
+      );
+      return;
+    }
+    const hit = codeMatches[0] ?? products.find((p) => p.name.toLowerCase() === q);
     if (hit) {
-      addToCart(hit);
+      const added = addToCart(hit);
       setBarcode("");
       barcodeRef.current?.focus();
+      reportScannerResult(
+        scanId,
+        added ? "added" : "not-added",
+        added
+          ? `${hit.name} added to the current bill.`
+          : `Could not add ${hit.name}; check the POS message.`,
+      );
     } else {
-      setQuickPrefill(barcode.trim());
+      setQuickPrefill(cleanValue);
       setQuickOpen(true);
+      setBarcode("");
+      reportScannerResult(
+        scanId,
+        "new-product",
+        "Barcode sent to the POS. Add the missing SKU before billing.",
+      );
+      toast.info("Barcode not in the catalog", {
+        description: "The scanned code is ready to attach to a new SKU.",
+      });
     }
+  }
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("retailflow-pos-scanner");
+    scannerChannelRef.current = channel;
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      if (!event.data || typeof event.data !== "object") return;
+      const message = event.data as { type?: unknown; code?: unknown; scan_id?: unknown };
+      if (message.type === "barcode" && typeof message.code === "string") {
+        remoteScanHandler.current(
+          message.code,
+          typeof message.scan_id === "string" ? message.scan_id : undefined,
+        );
+      }
+    };
+    return () => {
+      scannerChannelRef.current = null;
+      channel.close();
+    };
+  }, []);
+
+  remoteScanHandler.current = handleBarcodeValue;
+
+  function handleBarcodeSubmit() {
+    handleBarcodeValue(barcode);
   }
 
   function openQuickAdd() {
-    if (customerMode === "unset") {
-      toast.error("Customer pehle chunein");
+    if (!customer) {
+      setCustOpen(true);
       return;
     }
     setQuickPrefill(barcode.trim());
+    setCorrectionProduct(null);
     if (barcode.trim()) setBarcode("");
     setQuickOpen(true);
-  }
-
-  async function holdCurrentBill() {
-    if (customerMode === "unset") {
-      toast.error("Choose a customer or Walk-in before holding this bill");
-      return;
-    }
-    if (currentInvoice)
-      await saveLocalDraft({
-        invoice: { ...currentInvoice, location_id: locationId, business_date: businessDate },
-        customer,
-        customer_mode: customerMode,
-        items: lines,
-        discount_mode: discountMode,
-        discount_input: discount,
-      });
-    await startNewBill();
-  }
-
-  async function switchToHeldBill(id: string) {
-    const held = sales.find((bill) => bill.id === id && bill.status === "DRAFT");
-    if (!held || !canAccessLocation(profile, held.location_id)) return;
-    if (held.id === currentInvoice?.id) return;
-    if (currentInvoice) {
-      if (customerMode !== "unset" || lines.length || discount > 0)
-        await saveLocalDraft({
-          invoice: { ...currentInvoice, location_id: locationId, business_date: businessDate },
-          customer,
-          customer_mode: customerMode,
-          items: lines,
-          discount_mode: discountMode,
-          discount_input: discount,
-        });
-      else await voidLocalDraft(currentInvoice.id);
-    }
-    const payload = await loadLocalDraftPayload(id);
-    if (!payload) {
-      toast.error("This held bill has no recoverable draft data.");
-      return;
-    }
-    setCurrentInvoice(held);
-    setLines(payload.items);
-    setCustomer(payload.customer);
-    setCustomerMode(payload.customer_mode);
-    setDiscount(payload.discount_input);
-    setDiscountMode(payload.discount_mode);
-    setLocationId(held.location_id);
-    saveActiveLocation(held.location_id);
-    saveActiveLocation(held.location_id);
-    setBusinessDate(held.business_date);
   }
 
   const searchResults = useMemo(() => {
@@ -508,6 +601,14 @@ function PosPage() {
       setActiveProductIndex((index) => Math.max(0, index - 1));
     } else if (event.key === "Enter") {
       event.preventDefault();
+      const cleanValue = barcode.trim().toLowerCase();
+      const codeMatches = products.filter(
+        (p) => p.barcode?.toLowerCase() === cleanValue || p.sku?.toLowerCase() === cleanValue,
+      );
+      if (codeMatches.length) {
+        handleBarcodeValue(barcode);
+        return;
+      }
       const result = searchResults[activeProductIndex];
       if (result) {
         addToCart(result);
@@ -524,8 +625,7 @@ function PosPage() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "F1") {
         e.preventDefault();
-        if (customerMode === "unset") custSearchRef.current?.focus();
-        else barcodeRef.current?.focus();
+        barcodeRef.current?.focus();
       } else if (e.key === "F2") {
         e.preventDefault();
         openQuickAdd();
@@ -536,15 +636,12 @@ function PosPage() {
         e.preventDefault();
         if (lines.length > 0) setPayOpen(true);
         else toast.error("Bill is empty");
-      } else if (e.key === "F5") {
-        e.preventDefault();
-        startNewBill();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines.length, barcode, customerMode]);
+  }, [lines.length, barcode]);
 
   function handlePaid(result: InvoiceResult, payments: ReceiptPayment[]) {
     setReceipt({
@@ -564,37 +661,81 @@ function PosPage() {
       payments,
       createdAt: new Date().toISOString(),
     });
-    setLines([]);
+    updateLines([]);
     setCustomer(null);
-    setCustomerMode("unset");
+    setCustomerChoice("unset");
+    setWalkIn(false);
     setDiscount(0);
     setBusinessDate(todayBusinessDate());
     setPayOpen(false);
     setCurrentInvoice(null);
-    if (locationId) {
-      void createLocalDraft(
-        locationId,
-        todayBusinessDate(),
-        profile?.user_id,
-        profile?.display_name,
-      )
-        .then(setCurrentInvoice)
-        .catch((error) =>
-          toast.error("Bill is saved; could not start the next local bill", {
-            description: userFacingError(
-              error,
-              "The bill was saved, but another bill could not be started.",
-            ),
-          }),
-        );
-    }
     void queryClient.invalidateQueries({ queryKey: ["inventory"] });
     void queryClient.invalidateQueries({ queryKey: ["customers"] });
     void queryClient.invalidateQueries({ queryKey: ["payments-since"] });
     void queryClient.invalidateQueries({ queryKey: ["cash-transactions"] });
     void queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
     toast.success(`Bill ${result.invoice_number} saved`);
-    setTimeout(() => custSearchRef.current?.focus(), 30);
+    setTimeout(() => barcodeRef.current?.focus(), 30);
+  }
+
+  async function saveCurrentBill() {
+    if (!currentInvoice) return;
+    await saveLocalDraft({
+      invoice: {
+        ...currentInvoice,
+        location_id: locationId || currentInvoice.location_id,
+        business_date: businessDate,
+      },
+      customer,
+      customer_mode: customer ? "chosen" : "unset",
+      items: lines,
+      discount_mode: discountMode,
+      discount_input: discount,
+    });
+  }
+
+  async function holdCurrentBill() {
+    if (!currentInvoice || (!lines.length && discount <= 0)) return;
+    try {
+      await saveCurrentBill();
+      setCurrentInvoice(null);
+      updateLines([]);
+      setCustomer(null);
+      setCustomerChoice("unset");
+      setWalkIn(false);
+      setDiscount(0);
+      setBarcode("");
+    } catch (error) {
+      toast.error("Could not hold this bill", {
+        description: userFacingError(error, "The current bill could not be saved."),
+      });
+    }
+  }
+
+  async function openHeldBill(invoice: LocalInvoice) {
+    if (invoice.id === currentInvoice?.id) return;
+    try {
+      await saveCurrentBill();
+      const payload = await loadLocalDraftPayload(invoice.id);
+      if (!payload) throw new Error("The held bill could not be loaded from this device.");
+      const isWalkIn =
+        payload.customer?.name?.trim().toLocaleLowerCase() === "walk-in" &&
+        !payload.customer.mobile;
+      setCurrentInvoice(invoice);
+      setLocationId(invoice.location_id);
+      saveActiveLocation(invoice.location_id);
+      setCustomer(payload.customer);
+      setCustomerChoice(payload.customer ? (isWalkIn ? "walk-in" : "customer") : "unset");
+      setWalkIn(isWalkIn);
+      updateLines(payload.items);
+      setDiscount(payload.discount_input);
+      setDiscountMode(payload.discount_mode);
+      setBusinessDate(invoice.business_date);
+    } catch (error) {
+      toast.error("Could not open held bill", {
+        description: userFacingError(error, "The held bill could not be loaded."),
+      });
+    }
   }
 
   const lowStockIds = useMemo(
@@ -626,14 +767,10 @@ function PosPage() {
       })
       .slice(0, 16);
   }, [products, shortcutRows, locationId]);
-  const customerUnset = customerMode === "unset";
-  const familyDue = customer?.mobile ? familySummary(customers, customer.mobile) : null;
-
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/billing" />
 
-      {/* Store selector + New Bill */}
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
         <SearchableSelect
           className="w-60"
@@ -647,58 +784,17 @@ function PosPage() {
             keywords: [l.type, l.address ?? ""],
           }))}
         />
-        <Button className="gap-1.5" onClick={startNewBill}>
-          <Plus className="h-4 w-4" /> New Bill
-          <span className="rounded border border-primary-foreground/40 px-1 font-mono text-[10px]">
-            F5
-          </span>
-        </Button>
-        <Button
-          variant="outline"
-          onClick={holdCurrentBill}
-          disabled={!locationId || customerMode === "unset"}
-        >
-          Hold bill
-        </Button>
         <button
           onClick={() => setCustOpen(true)}
           className={cn(
             "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm",
-            customerMode === "chosen"
-              ? "border-primary/40 bg-primary/5"
-              : "border-dashed text-muted-foreground",
+            customer ? "border-primary/40 bg-primary/5" : "border-dashed text-muted-foreground",
           )}
         >
           <UserRound className="h-4 w-4" />
-          {customerMode === "chosen"
-            ? customer?.name
-            : customerMode === "walkin"
-              ? "Walk-in customer"
-              : "No customer yet"}
+          {customer?.name || customer?.mobile || "Select customer"}
         </button>
-      </div>
-
-      <div className="flex min-h-11 items-center gap-2 overflow-x-auto border-b bg-background px-3 py-1.5">
-        <span className="shrink-0 text-xs font-semibold text-muted-foreground">BILLS</span>
-        <Button variant="secondary" size="sm" className="shrink-0">
-          {currentInvoice
-            ? `Current · ${currentInvoice.invoice_number}`
-            : "Select location to start"}
-        </Button>
-        {heldBills.map((bill, index) => (
-          <Button
-            key={bill.id}
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            onClick={() => switchToHeldBill(bill.id)}
-          >
-            {customers.find((customerRow) => customerRow.id === bill.customer_id)?.name ??
-              "Held bill"}{" "}
-            · {bill.invoice_number} · Hold {index + 1}
-          </Button>
-        ))}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Bill date</span>
           <Popover>
             <PopoverTrigger asChild>
@@ -725,160 +821,160 @@ function PosPage() {
         </div>
       </div>
 
-      {/* Customer-first inline section — the bill cannot start before this is resolved */}
-      <div className="border-b bg-muted/40 px-3 py-2">
-        {customerUnset ? (
-          <InlineCustomerSection
-            customers={customers}
-            searchRef={custSearchRef}
-            onSelect={resolveCustomer}
-          />
-        ) : (
-          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-1.5 rounded-xl border bg-card px-4 py-2.5 shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <UserRound className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-sm font-semibold leading-tight">
-                  {customer?.name ?? "Walk-in customer"}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {customer?.mobile ?? "No mobile"}
-                </div>
-              </div>
-            </div>
-            {customer && (
-              <>
-                {profile?.role !== "CASHIER" && (
-                  <>
-                    <BannerStat label="Visits" value={String(customer.visits)} />
-                    <BannerStat label="Age group" value={customer.age_group ?? "—"} />
-                    <BannerStat label="Gender" value={customer.gender ?? "—"} />
-                  </>
+      {sales.some(
+        (invoice) =>
+          invoice.status === "DRAFT" &&
+          (invoice.id === currentInvoice?.id ||
+            !!invoice.customer_id ||
+            invoice.total_amount > 0) &&
+          canAccessLocation(profile, invoice.location_id),
+      ) && (
+        <div className="flex items-center gap-2 overflow-x-auto border-b bg-muted/20 px-3 py-1.5">
+          <span className="shrink-0 text-xs font-medium text-muted-foreground">Bills</span>
+          {sales
+            .filter(
+              (invoice) =>
+                invoice.status === "DRAFT" &&
+                (invoice.id === currentInvoice?.id ||
+                  !!invoice.customer_id ||
+                  invoice.total_amount > 0) &&
+                canAccessLocation(profile, invoice.location_id),
+            )
+            .map((invoice) => (
+              <button
+                key={invoice.id}
+                type="button"
+                onClick={() => void openHeldBill(invoice)}
+                className={cn(
+                  "shrink-0 rounded-md border px-2.5 py-1 text-xs",
+                  invoice.id === currentInvoice?.id
+                    ? "border-primary bg-primary/10 font-semibold text-primary"
+                    : "bg-background hover:bg-accent",
                 )}
-                <BannerStat
-                  label="Credit limit"
-                  value={customer.credit_limit > 0 ? inr(customer.credit_limit) : "—"}
-                />
-                {customer.outstanding_balance > 0 ? (
-                  <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-destructive/10 px-3 py-1.5 text-sm font-bold text-destructive">
-                    <AlertTriangle className="h-4 w-4" /> UDHAR DUE:{" "}
-                    {inr(familyDue?.outstanding ?? customer.outstanding_balance)}
-                  </span>
-                ) : (
-                  <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
-                    <CheckCircle2 className="h-4 w-4" /> Udhar Clear
-                  </span>
-                )}
-                {familyDue && familyDue.members.length > 1 && (
-                  <details className="basis-full border-t pt-2 text-xs">
-                    <summary className="cursor-pointer font-medium">
-                      Family account · {inr(familyDue.outstanding)} total due ·{" "}
-                      {familyDue.members.length} members
-                    </summary>
-                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
-                      {familyDue.members.map((member) => (
-                        <span key={member.id}>
-                          {member.name}: {inr(member.outstanding_balance)}
-                        </span>
-                      ))}
-                    </div>
-                  </details>
-                )}
-              </>
-            )}
-            {customerMode === "walkin" && (
-              <span className="ml-auto rounded-lg bg-muted px-3 py-1.5 text-sm font-medium text-muted-foreground">
-                Walk-in — udhar N/A
-              </span>
-            )}
+              >
+                {invoice.invoice_number}
+                {invoice.id === currentInvoice?.id ? " · Current" : ""}
+              </button>
+            ))}
+          {currentInvoice && (lines.length > 0 || discount > 0) && (
             <Button
+              type="button"
               variant="outline"
               size="sm"
-              className="ml-auto"
-              onClick={() => {
-                setCustomer(null);
-                setCustomerMode("unset");
-                setTimeout(() => custSearchRef.current?.focus(), 30);
-              }}
+              onClick={() => void holdCurrentBill()}
             >
-              Change customer
+              Hold current bill
             </Button>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      <main className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 p-3 lg:flex-row lg:gap-4">
-        {/* Left: scan + cart */}
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="relative">
-            <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              ref={barcodeRef}
-              disabled={customerUnset || !locationId}
-              className={cn(
-                "h-11 pl-8 text-base",
-                customerUnset && "opacity-50",
-                !customerUnset && "ring-2 ring-ring/40",
+      {customer && expiringSuggestions.length > 0 && (
+        <section
+          aria-label="Products to suggest before expiry"
+          className="flex flex-wrap items-center gap-2 border-b border-warning/40 bg-warning/5 px-3 py-2"
+        >
+          <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-warning">
+            <Clock3 className="h-3.5 w-3.5" />
+            Near expiry · suggest
+          </span>
+          {expiringSuggestions.map(({ product, quantity, expiresOn }) => (
+            <button
+              key={product.id}
+              type="button"
+              onClick={() => addToCart(product)}
+              className="rounded-md border border-warning/30 bg-background px-2.5 py-1 text-left text-xs hover:bg-warning/10"
+              title={`${quantity} received in expiring lots; store stock ${stockAt(product.id, locationId) || "awaiting count"}`}
+            >
+              <span className="font-medium">{product.name}</span>
+              {product.variant && (
+                <span className="text-muted-foreground"> · {product.variant}</span>
               )}
-              placeholder={
-                !locationId
-                  ? "Select the billing store to enable scanning…"
-                  : customerUnset
-                    ? "Customer choose karne ke baad scan enable hoga…"
-                    : "Scan barcode or type item name / SKU…"
-              }
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-              onKeyDown={handleProductKeyDown}
-            />
-            {searchResults.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border bg-popover shadow-md">
-                {searchResults.map((p, index) => (
-                  <button
-                    key={p.id}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      addToCart(p);
-                      setBarcode("");
-                      barcodeRef.current?.focus();
-                    }}
-                    className={cn(
-                      "flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-accent",
-                      activeProductIndex === index && "bg-accent",
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Search className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>
-                        {p.name}
-                        {p.name_hi && (
-                          <span className="ml-1 text-muted-foreground">{p.name_hi}</span>
-                        )}
-                      </span>
-                      {p.variant && (
-                        <span className="text-xs text-muted-foreground">{p.variant}</span>
+              <span className="block text-[10px] text-muted-foreground">
+                Expires {new Date(`${expiresOn}T00:00:00`).toLocaleDateString("en-IN")}
+              </span>
+            </button>
+          ))}
+        </section>
+      )}
+
+      <main className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4">
+        {/* Left: scan + cart */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+          <div className="flex items-start gap-2">
+            <div className="relative min-w-0 flex-1">
+              <ScanBarcode className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                ref={barcodeRef}
+                disabled={!locationId || !customer}
+                className={cn("h-11 pl-8 text-base", "ring-2 ring-ring/40")}
+                placeholder={
+                  !locationId ? "Select a store to scan items" : "Scan barcode or search items…"
+                }
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                onKeyDown={handleProductKeyDown}
+              />
+              {searchResults.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border bg-popover shadow-md">
+                  {searchResults.map((p, index) => (
+                    <button
+                      key={p.id}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        addToCart(p);
+                        setBarcode("");
+                        barcodeRef.current?.focus();
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-accent",
+                        activeProductIndex === index && "bg-accent",
                       )}
-                    </span>
-                    <span className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="rounded bg-info/10 px-1 py-0.5 font-mono text-info">
-                        {p.rack_location ?? "—"}
-                      </span>
-                      <span className="font-mono">{p.barcode ?? p.sku ?? "—"}</span>
-                      <b className="text-foreground">{inr(p.sale_price)}</b>
-                      <span
-                        className={cn(
-                          stockAt(p.id, location?.id) <= p.min_stock && "text-destructive",
+                    >
+                      <span className="flex items-center gap-2">
+                        <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span>
+                          {p.name}
+                          {p.name_hi && (
+                            <span className="ml-1 text-muted-foreground">{p.name_hi}</span>
+                          )}
+                        </span>
+                        {p.variant && (
+                          <span className="text-xs text-muted-foreground">{p.variant}</span>
                         )}
-                      >
-                        {stockAt(p.id, location?.id)} {p.uom_stock}
                       </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
+                      <span className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span className="rounded bg-info/10 px-1 py-0.5 font-mono text-info">
+                          {p.rack_location ?? "—"}
+                        </span>
+                        <span className="font-mono">{p.barcode ?? p.sku ?? "—"}</span>
+                        <b className="text-foreground">{inr(p.sale_price)}</b>
+                        <span
+                          className={cn(
+                            stockAt(p.id, location?.id) <= p.min_stock && "text-destructive",
+                          )}
+                        >
+                          {stockLabel(p.id, location?.id)}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 shrink-0 gap-2"
+              disabled={!locationId || !customer}
+              onClick={() => setCameraOpen(true)}
+              aria-label="Scan using this device camera"
+            >
+              <Camera className="h-4 w-4" /> <span className="hidden sm:inline">Camera</span>
+            </Button>
+            <Button asChild variant="ghost" className="h-11 shrink-0 px-2 text-xs">
+              <Link to="/scanner">Pair phone</Link>
+            </Button>
           </div>
 
           {/* Cart grid */}
@@ -896,35 +992,6 @@ function PosPage() {
                 </tr>
               </thead>
               <tbody>
-                {lines.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
-                      {products.length === 0 ? (
-                        <div className="space-y-2">
-                          <p>No products are available to bill from this device&apos;s catalog.</p>
-                          {profile?.role === "MANAGER" ? (
-                            <Button asChild size="sm" variant="outline">
-                              <Link to="/manager">Open Manager catalog and stock tools</Link>
-                            </Button>
-                          ) : profile?.role === "ADMIN" ? (
-                            <p>
-                              Create a Manager in Admin staff access to prepare products and opening
-                              stock.
-                            </p>
-                          ) : (
-                            <p>
-                              Ask your Manager to add products and opening stock before billing.
-                            </p>
-                          )}
-                        </div>
-                      ) : customerUnset ? (
-                        "Customer choose karein — phir scan ya quick tile se bill shuru karein."
-                      ) : (
-                        "Scan an item or tap a quick tile to start the bill."
-                      )}
-                    </td>
-                  </tr>
-                )}
                 {lines.map((l) => {
                   const stock = stockAt(l.product.id, location?.id);
                   const lineMax = maxLineDiscount(
@@ -958,9 +1025,10 @@ function PosPage() {
                                       : "bg-success/15 text-success"
                                     : "bg-info/10 text-info",
                                 )}
-                                title={`${loc.name}: ${q} ${l.product.uom_stock}`}
+                                title={`${loc.name}: ${stockLabel(l.product.id, loc.id)}`}
                               >
-                                {loc.code} {q}
+                                {loc.code}{" "}
+                                {awaitingCount(l.product.id, loc.id) ? "count pending" : q}
                               </span>
                             );
                           })}
@@ -999,7 +1067,16 @@ function PosPage() {
                           </Button>
                           <Input
                             type="number"
-                            step="0.5"
+                            step={
+                              l.product.is_loose
+                                ? String(
+                                    1 /
+                                      10 **
+                                        Math.max(0, Math.min(3, l.product.quantity_precision ?? 3)),
+                                  )
+                                : "1"
+                            }
+                            min="0"
                             className="h-6 w-14 px-1 text-center text-xs tabular-nums"
                             value={l.quantity}
                             onChange={(e) => setQuantity(l.product.id, Number(e.target.value) || 0)}
@@ -1052,7 +1129,7 @@ function PosPage() {
         </div>
 
         {/* Right: quick tiles + totals */}
-        <div className="flex w-full flex-col gap-3 lg:w-80 lg:shrink-0">
+        <div className="flex min-h-0 w-full flex-col gap-3 overflow-y-auto lg:w-80 lg:shrink-0">
           <div className="rounded-xl border bg-card p-3 shadow-sm">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-semibold uppercase text-muted-foreground">
@@ -1072,11 +1149,10 @@ function PosPage() {
               {tiles.map((p) => (
                 <button
                   key={p.id}
-                  disabled={customerUnset || !locationId}
+                  disabled={!locationId}
                   onClick={() => addToCart(p)}
                   className={cn(
                     "flex items-start gap-1.5 rounded-lg border bg-background px-2 py-1.5 text-left text-xs hover:border-primary/40 hover:bg-accent",
-                    customerUnset && "opacity-50",
                   )}
                 >
                   <span aria-hidden className="text-sm leading-none">
@@ -1140,24 +1216,13 @@ function PosPage() {
                 <span className="tabular-nums">{inr(total)}</span>
               </div>
             </div>
-            <Button
-              size="lg"
-              className="mt-4 h-14 w-full bg-success text-base text-success-foreground hover:bg-success/90"
-              disabled={lines.length === 0}
-              onClick={() => setPayOpen(true)}
-            >
-              <span className="rounded border border-success-foreground/40 px-1 font-mono text-xs">
-                F4
-              </span>
-              Pay & print ({inr(total)})
-            </Button>
           </div>
 
-          {customer && customer.outstanding_balance > 0 && (
+          {customer && !walkIn && customer.outstanding_balance > 0 && (
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
               <div className="font-medium text-destructive">⚠️ Udhar due</div>
               <div className="tabular-nums">
-                {customer.name}: {inr(customer.outstanding_balance)}
+                {customer.name || customer.mobile}: {inr(customer.outstanding_balance)}
               </div>
             </div>
           )}
@@ -1165,8 +1230,7 @@ function PosPage() {
             <div className="mb-1 flex items-center gap-1 font-medium text-foreground">
               <Plus className="h-3 w-3" /> Shortcuts
             </div>
-            F1 scan · F2 quick add · F3 customer · F4 pay · F5 new bill · Enter adds scanned item.
-            Floor price (min allowed rate) protects every line and bill discount.
+            F1 scan · F2 quick add · F3 customer · F4 pay · Enter adds the selected item.
           </div>
         </div>
       </main>
@@ -1175,34 +1239,20 @@ function PosPage() {
         <div className="mx-auto flex max-w-[1600px] items-center gap-2">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[10px] text-muted-foreground sm:text-xs">
-              {currentInvoice?.invoice_number ?? "Bill number assigned when location is selected"}
+              {currentInvoice?.invoice_number ?? ""}
             </div>
             <div className="font-display text-lg font-bold tabular-nums sm:text-xl">
               {inr(total)}
             </div>
           </div>
-          <div className="hidden items-center gap-1 text-[10px] text-muted-foreground md:flex">
-            <span className="rounded border px-1 font-mono">F1</span> scan{" "}
-            <span className="rounded border px-1 font-mono">F2</span> add{" "}
-            <span className="rounded border px-1 font-mono">F3</span> customer{" "}
-            <span className="rounded border px-1 font-mono">F4</span> pay{" "}
-            <span className="rounded border px-1 font-mono">F5</span> new
-          </div>
           <Button
             size="lg"
             className="h-11 min-w-32 bg-success text-success-foreground hover:bg-success/90 sm:min-w-44"
-            disabled={lines.length === 0 || !locationId}
+            disabled={lines.length === 0 || !locationId || !customer}
             onClick={() => setPayOpen(true)}
           >
             Pay · {inr(total)}
           </Button>
-        </div>
-        <div className="mx-auto mt-1 flex max-w-[1600px] items-center justify-center gap-2 border-t pt-1 text-[9px] text-muted-foreground md:hidden">
-          <span>F1 scan</span>
-          <span>F2 add</span>
-          <span>F3 customer</span>
-          <span>F4 pay</span>
-          <span>F5 new bill</span>
         </div>
       </div>
 
@@ -1221,22 +1271,84 @@ function PosPage() {
         businessDate={businessDate}
         minTotal={minTotal}
         customer={customer}
-        onPickCustomer={() => setCustOpen(true)}
+        walkIn={walkIn}
+        upiVpa={location?.upi_vpa ?? null}
+        upiPayeeName={location?.name ?? "RetailFlow Store"}
         onPaid={handlePaid}
       />
       <CustomerDialog
         open={custOpen}
         onOpenChange={setCustOpen}
-        onSelect={(c) => resolveCustomer(c)}
+        onSelect={(c, isWalkIn) => resolveCustomer(c, !!isWalkIn)}
       />
+      <Dialog
+        open={barcodeChoices.length > 1}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBarcodeChoices([]);
+            pendingBarcodeChoiceScanId.current = null;
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Choose the matching SKU</DialogTitle>
+            <DialogDescription>
+              This code matches multiple products. Select the intended item before adding it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {barcodeChoices.map((product) => (
+              <button
+                key={product.id}
+                type="button"
+                className="flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left hover:bg-accent"
+                onClick={() => {
+                  setBarcodeChoices([]);
+                  const added = addToCart(product);
+                  reportScannerResult(
+                    pendingBarcodeChoiceScanId.current ?? undefined,
+                    added ? "added" : "not-added",
+                    added
+                      ? `${product.name} added to the current bill.`
+                      : `Could not add ${product.name}; check the POS message.`,
+                  );
+                  pendingBarcodeChoiceScanId.current = null;
+                  barcodeRef.current?.focus();
+                }}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{product.name}</span>
+                  {product.variant && (
+                    <span className="block text-xs text-muted-foreground">{product.variant}</span>
+                  )}
+                  <span className="block font-mono text-xs text-muted-foreground">
+                    SKU {product.sku ?? "—"} · Barcode {product.barcode ?? "—"}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block font-semibold">{inr(product.sale_price)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {stockLabel(product.id, location?.id)} in stock
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
       <QuickAddModal
         open={quickOpen}
-        onOpenChange={setQuickOpen}
+        onOpenChange={(open) => {
+          setQuickOpen(open);
+          if (!open) setCorrectionProduct(null);
+        }}
         locationId={location?.id ?? ""}
         prefill={quickPrefill}
+        correctionProduct={correctionProduct}
         managerMode={profile?.role !== "CASHIER"}
         onAdded={(p) => {
-          addToCart(p);
+          addToCart(p, true);
           barcodeRef.current?.focus();
         }}
       />
@@ -1248,205 +1360,11 @@ function PosPage() {
         locations={allowedLocations}
       />
       <ReceiptDialog open={!!receipt} onOpenChange={(o) => !o && setReceipt(null)} data={receipt} />
-    </div>
-  );
-}
-
-/**
- * Inline customer-first picker shown on every new bill: search by name or
- * mobile, add a customer in three fields, or pick Walk-in — no modal.
- */
-function InlineCustomerSection({
-  customers,
-  searchRef,
-  onSelect,
-}: {
-  customers: Customer[];
-  searchRef: React.RefObject<HTMLInputElement | null>;
-  onSelect: (c: Customer | null) => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [mobile, setMobile] = useState("");
-  const [ageGroup, setAgeGroup] = useState("Adult");
-  const [gender, setGender] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-
-  const results = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return [];
-    return customers.filter((c) => matchesSearchFields([c.name, c.mobile], q)).slice(0, 6);
-  }, [customers, search]);
-
-  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown" && results.length) {
-      event.preventDefault();
-      setActiveIndex((index) => (index + 1) % results.length);
-    } else if (event.key === "ArrowUp" && results.length) {
-      event.preventDefault();
-      setActiveIndex((index) => (index - 1 + results.length) % results.length);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      if (results[activeIndex]) onSelect(results[activeIndex]);
-      else {
-        setAdding(true);
-        setName(search.trim());
-        setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
-      }
-    }
-  }
-
-  async function handleAdd() {
-    if (!name.trim() || busy) return;
-    setBusy(true);
-    try {
-      const created = await addCustomer({
-        name: name.trim(),
-        mobile: mobile.trim() || null,
-        creditLimit: 0,
-        ageGroup,
-        gender: gender || null,
-      });
-      onSelect(created);
-    } catch (e) {
-      toast.error("Could not save customer", {
-        description: userFacingError(e, "Check the customer details and try again."),
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="mx-auto max-w-[1600px] rounded-xl border bg-card p-3 shadow-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-72 flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            ref={searchRef}
-            autoFocus
-            className="pl-8"
-            placeholder="Customer ka naam ya mobile search karein…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-          />
-        </div>
-        <Button
-          variant="outline"
-          className="gap-1.5"
-          onClick={() => {
-            setAdding((a) => !a);
-            if (!adding) setTimeout(() => document.getElementById("ic-name")?.focus(), 30);
-          }}
-        >
-          <Plus className="h-4 w-4" /> New customer
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => onSelect(null)}
-          className="gap-1.5"
-          title="Bill without a registered customer — udhar unavailable"
-        >
-          <UserRound className="h-4 w-4" /> Walk-in customer
-        </Button>
-      </div>
-
-      {adding && (
-        <div className="mt-2 grid gap-2 rounded-lg border bg-muted/40 p-3 md:grid-cols-[1fr_1fr_auto]">
-          <div className="space-y-1">
-            <Label htmlFor="ic-name">Name *</Label>
-            <Input
-              id="ic-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Customer name"
-              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="ic-mobile">Mobile (optional)</Label>
-            <Input
-              id="ic-mobile"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-              placeholder="10-digit number"
-              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            />
-          </div>
-          <div className="flex items-end gap-2">
-            <SearchableSelect
-              className="w-32"
-              value={ageGroup}
-              onValueChange={setAgeGroup}
-              options={["Child", "Teen", "Adult", "Senior"].map((value) => ({
-                value,
-                label: value,
-              }))}
-            />
-            <SearchableSelect
-              className="w-28"
-              value={gender}
-              onValueChange={setGender}
-              placeholder="Gender"
-              options={["Male", "Female", "Other"].map((value) => ({ value, label: value }))}
-            />
-            <Button onClick={handleAdd} disabled={!name.trim() || busy}>
-              Save & start bill
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {results.length > 0 && (
-        <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((c, index) => (
-            <button
-              key={c.id}
-              onClick={() => onSelect(c)}
-              className={cn(
-                "flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-accent",
-                activeIndex === index && "border-primary bg-accent",
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <UserRound className="h-4 w-4 text-muted-foreground" />
-                <span className="font-medium">{c.name}</span>
-                {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
-                {c.visits > 0 && (
-                  <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
-                    {c.visits} visits
-                  </span>
-                )}
-              </span>
-              {c.mobile && familySummary(customers, c.mobile).outstanding > 0 ? (
-                <span className="text-xs font-semibold text-destructive">
-                  ⚠️ Family due {inr(familySummary(customers, c.mobile).outstanding)}
-                </span>
-              ) : (
-                <span className="text-[10px] font-medium text-success">Clear</span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-      {!adding && results.length === 0 && (
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          Bill customer ke bina start nahi hota — upar se search karein, naya customer add karein,
-          ya Walk-in chunein.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function BannerStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold">{value}</div>
+      <CameraScannerDialog
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onScan={handleBarcodeValue}
+      />
     </div>
   );
 }

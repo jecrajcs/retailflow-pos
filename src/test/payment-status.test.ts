@@ -4,7 +4,9 @@ import {
   computePaymentStatus,
   discountFromInput,
   familySummary,
+  getProductPrice,
   matchesProductSearch,
+  parsePriceTiers,
   type Customer,
   type Product,
 } from "@/lib/pos";
@@ -46,5 +48,39 @@ describe("POS search and bill rules", () => {
     expect(matchesProductSearch(product, "bucket")).toBe(true);
     expect(matchesProductSearch(product, "balti")).toBe(true);
     expect(matchesProductSearch(product, "baltiy")).toBe(true);
+  });
+
+  it("matches product brands", () => {
+    const product = { name: "Supari", brand: "Sweety" } as Product;
+    expect(matchesProductSearch(product, "sweety")).toBe(true);
+  });
+});
+
+describe("quantity based wholesale pricing", () => {
+  const product = {
+    sale_price: 80,
+    price_tiers: parsePriceTiers("Small:6:72; Medium:12:68; Large:24:62"),
+  } as Product;
+
+  it("uses retail below the first configured tier and the highest reached tier above it", () => {
+    expect(getProductPrice(product, 5).unitPrice).toBe(80);
+    expect(getProductPrice(product, 6).unitPrice).toBe(72);
+    expect(getProductPrice(product, 18).unitPrice).toBe(68);
+    expect(getProductPrice(product, 24).unitPrice).toBe(62);
+  });
+
+  it("normalizes legacy quantities to the three named wholesale levels", () => {
+    expect(parsePriceTiers("6:72,12:68,24:62").map((tier) => tier.label)).toEqual([
+      "Wholesale Small",
+      "Wholesale Medium",
+      "Wholesale Large",
+    ]);
+  });
+
+  it("rejects out of order thresholds and increasing unit prices", () => {
+    expect(() => parsePriceTiers("Medium:6:68; Small:12:64")).toThrow(
+      "thresholds must increase in that order",
+    );
+    expect(() => parsePriceTiers("Small:6:68; Medium:12:72")).toThrow("cannot cost more per unit");
   });
 });

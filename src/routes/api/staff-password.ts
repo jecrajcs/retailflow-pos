@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { getStaffSession, replaceStaffPassword } from "@/lib/retail-auth.server";
+import {
+  getStaffSession,
+  replaceStaffPassword,
+  verifyStaffPasswordLogin,
+} from "@/lib/retail-auth.server";
 import { errorResponse, isSameOriginMutation, jsonResponse } from "@/lib/retail-server-api.server";
 
 type ProfileQuery = PromiseLike<{ error: { message: string } | null }> & {
@@ -27,6 +31,16 @@ export const Route = createFileRoute("/api/staff-password")({
             return jsonResponse({ error: "Choose a password with 10 to 128 characters." }, 400);
 
           await replaceStaffPassword(session.profile.user_id, password);
+          if (
+            !(await verifyStaffPasswordLogin(
+              session.profile.user_id,
+              [session.profile.email, session.profile.phone],
+              password,
+            ))
+          )
+            throw new Error(
+              "Supabase updated the password but could not verify a sign-in. Your forced-change status remains active; re-enter the new password or ask an Admin to issue another temporary password.",
+            );
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
           const service = supabaseAdmin as unknown as StaffProfileService;
           const { error } = await service

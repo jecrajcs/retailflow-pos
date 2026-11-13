@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileUp, Plus, ScanSearch, ShieldCheck, Warehouse } from "lucide-react";
+import { FileSpreadsheet, FileUp, Plus, ScanSearch, ShieldCheck, Warehouse } from "lucide-react";
 import { toast } from "sonner";
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
+import { QuickAddModal } from "@/components/pos/quick-add-modal";
+import { itemRowsFromOcr } from "@/lib/purchase-extraction";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +28,7 @@ import {
 } from "@/lib/pos";
 import { canAccessLocation, canManage, useAccess } from "@/lib/access";
 import { userFacingError } from "@/lib/retail-api";
+import { generatedSupplierInvoiceNumber } from "@/lib/purchase-utils";
 
 export const Route = createFileRoute("/purchases")({ component: PurchasesPage });
 
@@ -33,6 +37,30 @@ function newId() {
     ? crypto.randomUUID()
     : `purchase-${Date.now()}`;
 }
+
+type PurchaseItemDraft = LocalPurchaseReceipt["items"][number] & {
+  variant?: string;
+  manufactured_on?: string;
+  expires_on?: string;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function purchaseLineForProduct(
+  line: PurchaseItemDraft,
+  product: Product,
+): PurchaseItemDraft {
+  return {
+    ...line,
+    product_id: product.id,
+    name: product.name,
+    retail_price: product.sale_price,
+    uom: product.uom_sale,
+    unit_cost: line.unit_cost > 0 ? line.unit_cost : product.purchase_cost,
+    ...(product.sku ? { sku: product.sku } : {}),
+    ...(product.variant ? { variant: product.variant } : {}),
+  };
+}
+
 function today() {
   const value = new Date();
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
@@ -51,38 +79,137 @@ function dateFromOcr(text: string) {
     : null;
 }
 
-function itemRowsFromOcr(text: string, products: Product[]) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 4)
-    .flatMap((line) => {
-      const numbers = [...line.matchAll(/(?:₹|rs\.?\s*)?([0-9][0-9,]*(?:\.\d{1,3})?)/gi)];
-      if (numbers.length < 2) return [];
-      const quantityToken = numbers[numbers.length - 2];
-      const costToken = numbers[numbers.length - 1];
-      const quantity = Number(quantityToken?.[1]?.replace(/,/g, ""));
-      const unitCost = Number(costToken?.[1]?.replace(/,/g, ""));
-      const cutAt = quantityToken?.index ?? -1;
-      const name =
-        cutAt > 0
-          ? line
-              .slice(0, cutAt)
-              .replace(/[|:;#]+/g, " ")
-              .trim()
-          : "";
-      if (
-        !name ||
-        !Number.isFinite(quantity) ||
-        quantity <= 0 ||
-        !Number.isFinite(unitCost) ||
-        unitCost <= 0
-      )
-        return [];
-      const match = products.find((product) => matchesProductSearch(product, name));
-      return [{ product_id: match?.id ?? "", name, quantity, unit_cost: unitCost }];
+function normalizedHeader(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function excelDate(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime()))
+    return value.toISOString().slice(0, 10);
+  if (typeof value === "number" && value > 20000 && value < 80000) {
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    return new Date(excelEpoch + Math.round(value) * 86400000).toISOString().slice(0, 10);
+  }
+  const parsedFromText = dateFromOcr(String(value ?? ""));
+  if (parsedFromText) return parsedFromText;
+  const parsed = new Date(String(value ?? ""));
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+async function parseExcelPurchase(file: File, products: Product[]) {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
+  if (!sheet) throw new Error("The workbook has no sheets to read.");
+  const grid = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    raw: true,
+    defval: null,
+  }) as unknown[][];
+  const headerIndex = grid.findIndex((cells) => {
+    const headers = cells.map(normalizedHeader);
+    return (
+      headers.some((header) =>
+        ["productname", "itemname", "product", "item", "sku", "barcode", "itemcode"].includes(
+          header,
+        ),
+      ) &&
+      headers.some((header) => ["qty", "quantity", "qtybought", "receivedqty"].includes(header))
+    );
+  });
+  if (headerIndex < 0)
+    throw new Error("Could not find item, quantity, and price columns in this workbook.");
+  const headers = (grid[headerIndex] ?? []).map((value) => String(value ?? "").trim());
+  const rawRows = grid
+    .slice(headerIndex + 1)
+    .map((cells) =>
+      Object.fromEntries(
+        headers.flatMap((header, index) => (header ? [[header, cells[index] ?? null]] : [])),
+      ),
+    );
+  const value = (row: Record<string, unknown>, aliases: string[]) => {
+    const entry = Object.entries(row).find(([header]) =>
+      aliases.includes(normalizedHeader(header)),
+    );
+    return entry?.[1] ?? null;
+  };
+  const number = (input: unknown) => {
+    const result = Number(String(input ?? "").replace(/[₹,\s]/g, ""));
+    return Number.isFinite(result) ? result : 0;
+  };
+  const rows = rawRows
+    .flatMap((row) => {
+      const sku = String(value(row, ["sku", "barcode", "itemcode", "productcode"]) ?? "").trim();
+      const name = String(
+        value(row, ["productname", "itemname", "product", "item", "description", "particulars"]) ??
+          "",
+      ).trim();
+      const quantity = number(value(row, ["qty", "quantity", "qtybought", "receivedqty", "units"]));
+      const amount = number(
+        value(row, ["linetotal", "totalpurchaseamt", "amount", "totalamount", "netamount"]),
+      );
+      const unitCost =
+        number(
+          value(row, ["unitcost", "landingcost", "purchasecost", "buyprice", "costprice", "rate"]),
+        ) || (quantity > 0 ? amount / quantity : 0);
+      if ((!sku && !name) || quantity <= 0 || unitCost < 0) return [];
+      const product =
+        (sku
+          ? products.find(
+              (candidate) =>
+                candidate.sku?.toLowerCase() === sku.toLowerCase() ||
+                candidate.barcode?.toLowerCase() === sku.toLowerCase(),
+            )
+          : undefined) ??
+        products.find((candidate) => name && matchesProductSearch(candidate, name));
+      const retailPrice =
+        number(
+          value(row, [
+            "retailprice",
+            "sellprice",
+            "sellingprice",
+            "standardsellprice",
+            "standardrate",
+          ]),
+        ) ||
+        product?.sale_price ||
+        0;
+      const manufacturedOn = excelDate(
+        value(row, ["mfd", "manufacturingdate", "manufactureddate", "dateofmanufacture"]),
+      );
+      const expiresOn = excelDate(
+        value(row, ["expiry", "expirydate", "expirationdate", "expdate"]),
+      );
+      const sourceTotal = amount > 0 ? amount : quantity * unitCost;
+      const resolvedSku = sku || product?.sku || undefined;
+      return [
+        {
+          id: newId(),
+          product_id: product?.id ?? "",
+          name: name || product?.name || sku,
+          quantity,
+          unit_cost: unitCost,
+          source_total: sourceTotal,
+          retail_price: retailPrice,
+          uom: String(value(row, ["unit", "uom", "saleunit"]) ?? product?.uom_sale ?? "Pcs").trim(),
+          ...(resolvedSku ? { sku: resolvedSku } : {}),
+          supplier: String(
+            value(row, ["supplier", "suppliername", "vendor", "vendorname"]) ?? "",
+          ).trim(),
+          invoice: String(
+            value(row, ["invoiceno", "invoicenumber", "billno", "billnumber"]) ?? "",
+          ).trim(),
+          date: excelDate(value(row, ["date", "invoicedate", "billdate"])),
+          ...(manufacturedOn ? { manufactured_on: manufacturedOn } : {}),
+          ...(expiresOn ? { expires_on: expiresOn } : {}),
+        },
+      ];
     })
-    .slice(0, 100);
+    .slice(0, 300);
+  return { sheetName, rows };
 }
 
 function PurchasesPage() {
@@ -95,6 +222,10 @@ function PurchasesPage() {
     (location) =>
       location.type.toUpperCase() === "WAREHOUSE" && canAccessLocation(profile, location.id),
   );
+  const accessibleWarehouseIds = new Set(warehouses.map((location) => location.id));
+  const visibleReceipts = receipts.filter((receipt) =>
+    accessibleWarehouseIds.has(receipt.warehouse_location_id),
+  );
   const [receiptId, setReceiptId] = useState(newId);
   const [supplier, setSupplier] = useState("");
   const [supplierInvoice, setSupplierInvoice] = useState("");
@@ -103,13 +234,15 @@ function PurchasesPage() {
   const [attachment, setAttachment] = useState<Blob | null>(null);
   const [attachmentName, setAttachmentName] = useState("");
   const [ocrText, setOcrText] = useState("");
-  const [items, setItems] = useState<LocalPurchaseReceipt["items"]>([]);
+  const [items, setItems] = useState<PurchaseItemDraft[]>([]);
+  const [quickAddIndex, setQuickAddIndex] = useState<number | null>(null);
   const [status, setStatus] = useState<LocalPurchaseReceipt["status"]>("DRAFT");
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState("");
 
   const total = useMemo(
-    () => items.reduce((sum, item) => sum + item.quantity * item.unit_cost, 0),
+    () =>
+      items.reduce((sum, item) => sum + (item.source_total ?? item.quantity * item.unit_cost), 0),
     [items],
   );
 
@@ -122,7 +255,7 @@ function PurchasesPage() {
     setAttachment(receipt.attachment ?? null);
     setAttachmentName(receipt.attachment_name ?? "");
     setOcrText(receipt.ocr_text ?? "");
-    setItems(receipt.items ?? []);
+    setItems((receipt.items ?? []) as PurchaseItemDraft[]);
     setStatus(receipt.status);
   }
 
@@ -178,15 +311,20 @@ function PurchasesPage() {
       );
       if (invoiceNumberMatch?.[1] && !supplierInvoice.trim())
         setSupplierInvoice(invoiceNumberMatch[1]);
-      const supplierCandidate = output
-        .split(/\r?\n/)
-        .map((line) => line.replace(/\s+/g, " ").trim())
-        .find(
-          (line) =>
-            line.length >= 3 &&
-            line.length <= 80 &&
-            !/(invoice|bill|gstin|gst no|phone|mobile|date|tax invoice)/i.test(line),
-        );
+      const explicitSupplier = output.match(/(?:supplier|vendor|from)\s*[:#-]\s*([^\r\n]+)/i)?.[1];
+      const supplierCandidate =
+        explicitSupplier?.trim() ||
+        output
+          .split(/\r?\n/)
+          .map((line) => line.replace(/\s+/g, " ").trim())
+          .find(
+            (line) =>
+              line.length >= 3 &&
+              line.length <= 80 &&
+              !/(invoice|bill|gstin|gst no|phone|mobile|date|tax invoice|\bqty\b|quantity|rate|cost|amount|mrp|sku|barcode)/i.test(
+                line,
+              ),
+          );
       if (supplierCandidate && !supplier.trim()) setSupplier(supplierCandidate);
       const detectedDate = dateFromOcr(output);
       if (detectedDate) setInvoiceDate(detectedDate);
@@ -210,6 +348,40 @@ function PurchasesPage() {
     }
   }
 
+  async function processWorkbook(file: File) {
+    setAttachment(file);
+    setAttachmentName(file.name);
+    setWorking(true);
+    setProgress("Reading invoice workbook locally…");
+    try {
+      const parsed = await parseExcelPurchase(file, products);
+      if (!parsed.rows.length)
+        throw new Error("No purchase item rows with a valid quantity were found.");
+      const metadata =
+        parsed.rows.find((row) => row.supplier || row.invoice || row.date) ?? parsed.rows[0]!;
+      if (metadata.supplier && !supplier.trim()) setSupplier(metadata.supplier);
+      if (metadata.invoice && !supplierInvoice.trim()) setSupplierInvoice(metadata.invoice);
+      if (metadata.date) setInvoiceDate(metadata.date);
+      setItems(
+        parsed.rows.map(({ supplier: _supplier, invoice: _invoice, date: _date, ...item }) => item),
+      );
+      setOcrText(
+        `Excel sheet: ${parsed.sheetName}\nRows extracted: ${parsed.rows.length}\nReview item matches, quantities, source totals, and prices before saving.`,
+      );
+      setProgress("Excel details prefilled. Review each item before saving.");
+      toast.success("Purchase workbook read on this device", {
+        description: `${parsed.rows.length} item rows extracted. New SKUs can be created from their purchase lines.`,
+      });
+    } catch (error) {
+      setProgress("Workbook could not be read. You can still enter the invoice manually.");
+      toast.error("Could not read purchase workbook", {
+        description: userFacingError(error, "Check the workbook headers and try again."),
+      });
+    } finally {
+      setWorking(false);
+    }
+  }
+
   function startNew() {
     setReceiptId(newId());
     setSupplier("");
@@ -225,16 +397,23 @@ function PurchasesPage() {
   }
 
   async function saveDraft(): Promise<boolean> {
-    if (!supplier.trim() || !supplierInvoice.trim() || !warehouseId) {
-      toast.error("Supplier, supplier invoice number, and warehouse are required.");
+    if (!supplier.trim() || !warehouseId) {
+      toast.error("Supplier and warehouse are required.");
       return false;
     }
+    const category =
+      products.find((product) => product.id === items.find((item) => item.product_id)?.product_id)
+        ?.category ?? "General";
+    const invoiceNumber =
+      supplierInvoice.trim() ||
+      generatedSupplierInvoiceNumber(supplier, category, invoiceDate, receiptId);
+    setSupplierInvoice(invoiceNumber);
     setWorking(true);
     try {
       const receipt: LocalPurchaseReceipt = {
         id: receiptId,
         supplier_name: supplier.trim(),
-        supplier_invoice_number: supplierInvoice.trim(),
+        supplier_invoice_number: invoiceNumber,
         invoice_date: invoiceDate,
         warehouse_location_id: warehouseId,
         attachment,
@@ -244,7 +423,15 @@ function PurchasesPage() {
         created_at:
           receipts.find((row) => row.id === receiptId)?.created_at ?? new Date().toISOString(),
         sync_status: "LOCAL",
-        items,
+        items: items.map((item) => ({
+          ...item,
+          id: item.id ?? newId(),
+          source_total: item.source_total ?? item.quantity * item.unit_cost,
+        })),
+        source_total: items.reduce(
+          (sum, item) => sum + (item.source_total ?? item.quantity * item.unit_cost),
+          0,
+        ),
       };
       await savePurchaseReceipt(receipt);
       void queryClient.invalidateQueries({ queryKey: ["purchases"] });
@@ -307,9 +494,49 @@ function PurchasesPage() {
     }
   }
 
+  const quickAddItem = quickAddIndex === null ? undefined : items[quickAddIndex];
+
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/purchases" />
+      <QuickAddModal
+        open={quickAddIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setQuickAddIndex(null);
+        }}
+        locationId={warehouseId}
+        prefill={quickAddItem?.name ?? ""}
+        {...(quickAddItem?.sku ? { prefillSku: quickAddItem.sku } : {})}
+        {...(quickAddItem?.variant ? { prefillVariant: quickAddItem.variant } : {})}
+        {...(quickAddItem?.retail_price !== undefined
+          ? { prefillRetailPrice: quickAddItem.retail_price }
+          : {})}
+        {...(quickAddItem ? { prefillPurchaseCost: quickAddItem.unit_cost } : {})}
+        {...(quickAddItem?.uom ? { prefillUom: quickAddItem.uom } : {})}
+        managerMode
+        context="purchase"
+        onAdded={(product) => {
+          if (quickAddIndex !== null)
+            setItems((current) =>
+              current.map((row, index) =>
+                index === quickAddIndex
+                  ? {
+                      ...row,
+                      product_id: product.id,
+                      name: product.name,
+                      unit_cost: row.unit_cost || product.purchase_cost,
+                      retail_price: product.sale_price,
+                      uom: product.uom_sale,
+                      ...(product.sku ? { sku: product.sku } : {}),
+                      ...(product.variant ? { variant: product.variant } : {}),
+                    }
+                  : row,
+              ),
+            );
+          setQuickAddIndex(null);
+          void queryClient.invalidateQueries({ queryKey: ["products"] });
+        }}
+      />
       {!canManage(profile) ? (
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
           <h1 className="font-semibold">Manager access required</h1>
@@ -318,7 +545,7 @@ function PurchasesPage() {
           </p>
         </main>
       ) : (
-        <main className="mx-auto grid w-full max-w-[1500px] flex-1 gap-4 p-3 lg:grid-cols-[minmax(0,1fr)_340px] sm:p-5">
+        <main className="mx-auto grid min-h-0 w-full max-w-[1500px] flex-1 gap-4 overflow-y-auto p-3 lg:grid-cols-[minmax(0,1fr)_340px] sm:p-5">
           <section className="space-y-4">
             <div>
               <p className="text-sm text-muted-foreground">Central warehouse receiving</p>
@@ -343,11 +570,11 @@ function PurchasesPage() {
                       placeholder="Supplier name"
                     />
                   </Field>
-                  <Field label="Supplier invoice #">
+                  <Field label="Supplier invoice # (optional)">
                     <Input
                       value={supplierInvoice}
                       onChange={(event) => setSupplierInvoice(event.target.value)}
-                      placeholder="Required for duplicate check"
+                      placeholder="Leave blank to generate a reference"
                     />
                   </Field>
                   <Field label="Invoice date">
@@ -388,6 +615,20 @@ function PurchasesPage() {
                   <span className="min-w-0 truncate text-sm text-muted-foreground">
                     {attachmentName || "Or enter invoice details manually"}
                   </span>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                    <FileSpreadsheet className="h-4 w-4" /> Add Excel invoice
+                    <input
+                      hidden
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      disabled={working}
+                      onChange={(event) => {
+                        const file = event.currentTarget.files?.[0];
+                        if (file) void processWorkbook(file);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
                   {working && (
                     <Badge variant="secondary">
                       <ScanSearch className="mr-1 h-3 w-3" />
@@ -408,21 +649,7 @@ function PurchasesPage() {
                   </Field>
                 )}
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-semibold">Items to receive</h2>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setItems((current) => [
-                          ...current,
-                          { product_id: "", quantity: 1, unit_cost: 0 },
-                        ])
-                      }
-                    >
-                      <Plus className="mr-1 h-4 w-4" /> Add item
-                    </Button>
-                  </div>
+                  <h2 className="font-semibold">Items to receive</h2>
                   {!items.length && (
                     <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
                       OCR is a draft. Add or match catalog items and check quantities/costs before
@@ -432,81 +659,140 @@ function PurchasesPage() {
                   {items.map((item, index) => (
                     <div
                       key={`${receiptId}:${index}`}
-                      className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[minmax(0,1fr)_100px_130px_auto]"
+                      className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[minmax(0,1fr)_110px_130px_minmax(200px,240px)_auto]"
                     >
-                      <div className="min-w-0">
-                        {item.name && (
-                          <p className="mb-1 truncate text-[10px] text-muted-foreground">
-                            OCR: {item.name}
+                      <div className="min-w-0 space-y-1">
+                        <Field label="Product / variant">
+                          {item.name && (
+                            <p className="mb-1 truncate text-[10px] text-muted-foreground">
+                              {item.sku ? `${item.sku} · ` : ""}
+                              {item.name}
+                              {item.variant ? ` · ${item.variant}` : ""}
+                              {item.retail_price ? ` · Sell ${inr(item.retail_price)}` : ""}
+                            </p>
+                          )}
+                          <SearchableSelect
+                            value={item.product_id || "unmatched"}
+                            onValueChange={(productId) => {
+                              if (productId === "__add_new_sku__") {
+                                setQuickAddIndex(index);
+                                return;
+                              }
+                              setItems((current) =>
+                                current.map((row, rowIndex) => {
+                                  if (rowIndex !== index) return row;
+                                  const matchedProduct = products.find(
+                                    (product) => product.id === productId,
+                                  );
+                                  return {
+                                    ...row,
+                                    ...(matchedProduct
+                                      ? purchaseLineForProduct(row, matchedProduct)
+                                      : {
+                                          product_id: productId === "unmatched" ? "" : productId,
+                                        }),
+                                  };
+                                }),
+                              );
+                            }}
+                            placeholder="Match product / variant"
+                            searchPlaceholder="Search SKU, variant, English/Hindi name…"
+                            options={[
+                              { value: "unmatched", label: "Choose a product…" },
+                              { value: "__add_new_sku__", label: "Add new SKU / variant…" },
+                              ...products.map((product) => ({
+                                value: product.id,
+                                label: `${product.name}${product.variant ? ` · ${product.variant}` : ""}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,
+                                keywords: [
+                                  product.name_hi ?? "",
+                                  product.variant ?? "",
+                                  product.category ?? "",
+                                  ...(product.search_aliases ?? []),
+                                  product.sku ?? "",
+                                  product.barcode ?? "",
+                                ],
+                              })),
+                            ]}
+                          />
+                        </Field>
+                        {!item.product_id && (
+                          <p className="text-xs text-muted-foreground">
+                            Choose in the search list if it is missing.
                           </p>
                         )}
-                        <SearchableSelect
-                          value={item.product_id || "unmatched"}
-                          onValueChange={(productId) =>
+                      </div>
+                      <Field label="Quantity">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          aria-label="Quantity"
+                          value={item.quantity || ""}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) =>
                             setItems((current) =>
-                              current.map((row, rowIndex) => {
-                                if (rowIndex !== index) return row;
-                                const matchedProduct = products.find(
-                                  (product) => product.id === productId,
-                                );
-                                const name = matchedProduct?.name;
-                                return {
-                                  ...row,
-                                  product_id: productId === "unmatched" ? "" : productId,
-                                  ...(name ? { name } : {}),
-                                };
-                              }),
+                              current.map((row, rowIndex) =>
+                                rowIndex === index
+                                  ? { ...row, quantity: Number(event.target.value) || 0 }
+                                  : row,
+                              ),
                             )
                           }
-                          placeholder="Match catalog product"
-                          searchPlaceholder="Search SKU, English/Hindi name…"
-                          options={[
-                            { value: "unmatched", label: "Choose a product…" },
-                            ...products.map((product) => ({
-                              value: product.id,
-                              label: `${product.name}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,
-                              keywords: [
-                                product.name_hi ?? "",
-                                ...(product.search_aliases ?? []),
-                                product.sku ?? "",
-                                product.barcode ?? "",
-                              ],
-                            })),
-                          ]}
                         />
+                      </Field>
+                      <Field label="Unit cost">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          aria-label="Unit cost"
+                          value={item.unit_cost || ""}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) =>
+                            setItems((current) =>
+                              current.map((row, rowIndex) =>
+                                rowIndex === index
+                                  ? { ...row, unit_cost: Number(event.target.value) || 0 }
+                                  : row,
+                              ),
+                            )
+                          }
+                        />
+                      </Field>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Field label="MFD">
+                          <Input
+                            type="date"
+                            aria-label="Manufacturing date"
+                            value={item.manufactured_on ?? ""}
+                            onChange={(event) =>
+                              setItems((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? { ...row, manufactured_on: event.target.value }
+                                    : row,
+                                ),
+                              )
+                            }
+                          />
+                        </Field>
+                        <Field label="Expiry">
+                          <Input
+                            type="date"
+                            aria-label="Expiry date"
+                            value={item.expires_on ?? ""}
+                            onChange={(event) =>
+                              setItems((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? { ...row, expires_on: event.target.value }
+                                    : row,
+                                ),
+                              )
+                            }
+                          />
+                        </Field>
                       </div>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        aria-label="Quantity"
-                        value={item.quantity}
-                        onChange={(event) =>
-                          setItems((current) =>
-                            current.map((row, rowIndex) =>
-                              rowIndex === index
-                                ? { ...row, quantity: Number(event.target.value) || 0 }
-                                : row,
-                            ),
-                          )
-                        }
-                      />
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        aria-label="Unit cost"
-                        value={item.unit_cost}
-                        onChange={(event) =>
-                          setItems((current) =>
-                            current.map((row, rowIndex) =>
-                              rowIndex === index
-                                ? { ...row, unit_cost: Number(event.target.value) || 0 }
-                                : row,
-                            ),
-                          )
-                        }
-                      />
                       <Button
                         variant="ghost"
                         size="sm"
@@ -518,6 +804,22 @@ function PurchasesPage() {
                       </Button>
                     </div>
                   ))}
+                  <div className="flex justify-start pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={working}
+                      onClick={() =>
+                        setItems((current) => [
+                          ...current,
+                          { id: newId(), product_id: "", quantity: 1, unit_cost: 0 },
+                        ])
+                      }
+                    >
+                      <Plus className="mr-1 h-4 w-4" /> Add item row
+                    </Button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                   <span className="font-semibold">Invoice items total: {inr(total)}</span>
@@ -552,17 +854,43 @@ function PurchasesPage() {
                 New
               </Button>
             </div>
-            {receipts
-              .slice()
-              .sort((a, b) => b.created_at.localeCompare(a.created_at))
-              .map((receipt) => (
-                <button
-                  key={receipt.id}
-                  onClick={() => openReceipt(receipt)}
-                  className={`w-full rounded-xl border p-3 text-left hover:bg-accent/40 ${receipt.id === receiptId ? "border-primary" : ""}`}
-                >
-                  <span className="flex items-center justify-between gap-2">
-                    <b className="truncate">{receipt.supplier_name || "Supplier"}</b>
+            <DataTable<LocalPurchaseReceipt>
+              rows={visibleReceipts}
+              getRowId={(receipt) => receipt.id}
+              resetKey={warehouses.map((warehouse) => warehouse.id).join(":")}
+              searchPlaceholder="Search supplier, invoice or status…"
+              emptyMessage={
+                receipts.length
+                  ? "No purchase receipts are assigned to these warehouses."
+                  : "No purchase receipts found on this device."
+              }
+              tableHeightClass="max-h-[55dvh]"
+              columns={[
+                {
+                  id: "supplier",
+                  header: "Supplier",
+                  accessor: (receipt) => receipt.supplier_name || "Supplier",
+                },
+                {
+                  id: "invoice",
+                  header: "Invoice",
+                  accessor: (receipt) => receipt.supplier_invoice_number,
+                },
+                {
+                  id: "date",
+                  header: "Date",
+                  accessor: (receipt) => receipt.invoice_date,
+                },
+                {
+                  id: "items",
+                  header: "Lines",
+                  accessor: (receipt) => receipt.items.length,
+                },
+                {
+                  id: "status",
+                  header: "Status",
+                  accessor: (receipt) => receipt.status,
+                  cell: (receipt) => (
                     <Badge
                       variant={
                         receipt.status === "RECEIVED"
@@ -574,20 +902,25 @@ function PurchasesPage() {
                     >
                       {receipt.status}
                     </Badge>
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {receipt.supplier_invoice_number} · {receipt.invoice_date}
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {receipt.items.length} item rows · {receipt.attachment_name ?? "manual entry"}
-                  </span>
-                </button>
-              ))}
-            {!receipts.length && (
-              <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                Drafts remain on this device until sync is available.
-              </p>
-            )}
+                  ),
+                },
+                {
+                  id: "open",
+                  header: "",
+                  accessor: () => "Open",
+                  sortable: false,
+                  cell: (receipt) => (
+                    <Button
+                      size="sm"
+                      variant={receipt.id === receiptId ? "default" : "outline"}
+                      onClick={() => openReceipt(receipt)}
+                    >
+                      Open
+                    </Button>
+                  ),
+                },
+              ]}
+            />
             {warehouses.length === 0 && (
               <div className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm">
                 <p>No active location is marked as a warehouse yet.</p>

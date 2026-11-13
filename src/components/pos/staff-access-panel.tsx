@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Copy, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
+import { DataTable } from "@/components/pos/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,7 +17,8 @@ type ManagedStaff = {
   display_name: string;
   email: string | null;
   phone: string | null;
-  role: "CASHIER" | "MANAGER" | "ADMIN";
+  username: string;
+  role: "CASHIER" | "MANAGER" | "ADMIN" | "WAREHOUSE";
   is_active: boolean;
   location_ids: string[];
   has_login: boolean;
@@ -45,6 +47,7 @@ export function StaffAccessPanel({
   const [newCredential, setNewCredential] = useState<{
     login: string;
     temporary_password: string;
+    credential_verified: boolean;
   } | null>(null);
 
   const loadStaff = useCallback(async () => {
@@ -102,12 +105,15 @@ export function StaffAccessPanel({
       toast.error("Enter an email address or mobile number for sign-in.");
       return;
     }
+    if (resetPassword) setNewCredential(null);
     setSaving(true);
     try {
       const result = await retailApi<{
         user_id: string;
         login: string | null;
+        username?: string | null;
         temporary_password?: string;
+        credential_verified?: boolean;
       }>("/api/staff", {
         method: "POST",
         json: {
@@ -123,17 +129,24 @@ export function StaffAccessPanel({
       });
       if (result.temporary_password) {
         setNewCredential({
-          login: result.login ?? (email.trim() || phone.trim()),
+          login: result.username || result.login || (email.trim() || phone.trim()),
           temporary_password: result.temporary_password,
+          credential_verified: result.credential_verified === true,
         });
       }
-      toast.success(
-        resetPassword
-          ? "Temporary password created; the staff member must change it at sign-in."
-          : normalizedId
-            ? "Staff role and location access saved."
-            : `${role[0] + role.slice(1).toLowerCase()} login created.`,
-      );
+      if (result.temporary_password && result.credential_verified === false) {
+        toast.warning("Temporary password was set, but Supabase sign-in could not be verified.", {
+          description: "Keep this credential available and confirm the staff member can sign in.",
+        });
+      } else {
+        toast.success(
+          resetPassword
+            ? "Temporary password verified; the staff member must change it at sign-in."
+            : normalizedId
+              ? "Staff role and location access saved."
+              : `${role[0] + role.slice(1).toLowerCase()} login created.`,
+        );
+      }
       setUserId(result.user_id);
       await loadStaff();
     } catch (error) {
@@ -146,7 +159,7 @@ export function StaffAccessPanel({
   }
 
   const allowedRoles =
-    mode === "admin" ? (["MANAGER", "CASHIER", "ADMIN"] as const) : (["CASHIER"] as const);
+    mode === "admin" ? (["MANAGER", "CASHIER", "ADMIN", "WAREHOUSE"] as const) : (["CASHIER"] as const);
   const canEdit = mode === "admin" ? profile?.role === "ADMIN" : profile?.role === "MANAGER";
   if (!canEdit) return null;
 
@@ -172,8 +185,9 @@ export function StaffAccessPanel({
               size="sm"
               variant="outline"
               onClick={() =>
-                void navigator.clipboard.writeText(
-                  `Login: ${newCredential.login}\nTemporary password: ${newCredential.temporary_password}`,
+                void navigator.clipboard.writeText(newCredential.temporary_password).then(
+                  () => toast.success("Temporary password copied."),
+                  () => toast.error("Could not copy the temporary password."),
                 )
               }
             >
@@ -187,10 +201,17 @@ export function StaffAccessPanel({
             Temporary password:{" "}
             <span className="font-mono font-semibold">{newCredential.temporary_password}</span>
           </p>
-          <p className="text-xs text-muted-foreground">
-            This password is shown only in this screen. The user must change it before opening
-            RetailFlow.
-          </p>
+          {newCredential.credential_verified ? (
+            <p className="text-xs text-muted-foreground">
+              Supabase Auth accepted this credential. The user must change it before opening
+              RetailFlow.
+            </p>
+          ) : (
+            <p role="alert" className="text-xs text-warning">
+              Supabase sign-in could not be verified. Keep this credential available and confirm the
+              staff member can sign in before closing this screen.
+            </p>
+          )}
         </div>
       )}
       {!locations.length && (
@@ -335,35 +356,64 @@ export function StaffAccessPanel({
               {loading ? "Loading…" : "Refresh"}
             </Button>
           </div>
-          {staff.map((member) => (
-            <button
-              key={member.user_id}
-              onClick={() => editMember(member)}
-              className="w-full rounded-lg border p-3 text-left hover:bg-accent/40"
-            >
-              <span className="flex items-center justify-between gap-2">
-                <b>{member.display_name}</b>
-                <Badge variant={member.is_active ? "outline" : "destructive"}>
-                  {member.is_active ? member.role : "INACTIVE"}
-                </Badge>
-              </span>
-              <span className="mt-1 block break-all text-xs text-muted-foreground">
-                {member.email ?? member.phone ?? member.user_id}
-              </span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                {member.role === "ADMIN"
-                  ? "All locations"
-                  : member.location_ids
-                      .map((id) => locations.find((location) => location.id === id)?.name ?? id)
-                      .join(", ") || "No assigned locations"}
-              </span>
-            </button>
-          ))}
-          {!staff.length && (
-            <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-              {online ? "No staff assignments found." : "Staff list is not available offline."}
-            </p>
-          )}
+          <DataTable<ManagedStaff>
+            rows={staff}
+            getRowId={(member) => member.user_id}
+            searchPlaceholder="Search staff, login, role or location…"
+            emptyMessage={
+              online ? "No staff assignments found." : "Staff list is not available offline."
+            }
+            columns={[
+              {
+                id: "name",
+                header: "Staff member",
+                accessor: (member) => member.display_name,
+                cell: (member) => (
+                  <Button variant="link" className="h-auto p-0" onClick={() => editMember(member)}>
+                    {member.display_name}
+                  </Button>
+                ),
+              },
+              {
+                id: "login",
+                header: "Login",
+                accessor: (member) => member.email ?? member.phone ?? member.user_id,
+              },
+              { id: "username", header: "Username", accessor: (member) => member.username },
+              { id: "role", header: "Role", accessor: (member) => member.role },
+              {
+                id: "status",
+                header: "Status",
+                accessor: (member) => (member.is_active ? "Active" : "Inactive"),
+                cell: (member) => (
+                  <Badge variant={member.is_active ? "outline" : "destructive"}>
+                    {member.is_active ? "Active" : "Inactive"}
+                  </Badge>
+                ),
+              },
+              {
+                id: "locations",
+                header: "Assigned locations",
+                accessor: (member) =>
+                  member.role === "ADMIN"
+                    ? "All locations"
+                    : member.location_ids
+                        .map((id) => locations.find((location) => location.id === id)?.name ?? id)
+                        .join(", ") || "No assigned locations",
+              },
+              {
+                id: "edit",
+                header: "",
+                accessor: () => "Edit",
+                sortable: false,
+                cell: (member) => (
+                  <Button variant="outline" size="sm" onClick={() => editMember(member)}>
+                    Edit
+                  </Button>
+                ),
+              },
+            ]}
+          />
         </div>
       </div>
     </section>

@@ -75,6 +75,33 @@ export const Route = createFileRoute("/api/admin/locations")({
           const access = await requireAdmin(request);
           if (access.error) return access.error;
           const rawBody: unknown = await request.json();
+          if (
+            rawBody &&
+            typeof rawBody === "object" &&
+            !Array.isArray(rawBody) &&
+            "set_default_warehouse" in rawBody &&
+            rawBody.set_default_warehouse === true
+          ) {
+            const id = "id" in rawBody && typeof rawBody.id === "string" ? rawBody.id : "";
+            if (!id) return jsonResponse({ error: "Select an active Warehouse location." }, 400);
+            const { error: defaultError } = await supabaseAdmin.rpc("app_set_default_warehouse", {
+              p_actor_user_id: access.session.profile.user_id,
+              p_location_id: id,
+            });
+            if (defaultError) {
+              if (defaultError.message.includes("Choose an active Warehouse"))
+                return jsonResponse({ error: defaultError.message }, 400);
+              throw new Error(`Could not set the default Warehouse: ${defaultError.message}`);
+            }
+            const { data, error } = await supabaseAdmin
+              .from("locations")
+              .select("*")
+              .eq("id", id)
+              .maybeSingle();
+            if (error) throw new Error(`Could not reload the Warehouse: ${error.message}`);
+            if (!data) return jsonResponse({ error: "Warehouse location not found." }, 404);
+            return jsonResponse({ location: data });
+          }
           const body = normalizeLocationInput(rawBody);
           if (
             !body ||
@@ -92,6 +119,20 @@ export const Route = createFileRoute("/api/admin/locations")({
               400,
             );
           const id = rawBody.id;
+          if (!body.is_active || body.type !== "WAREHOUSE") {
+            const { data: current, error: currentError } = await supabaseAdmin
+              .from("locations")
+              .select("is_default_warehouse")
+              .eq("id", id)
+              .maybeSingle();
+            if (currentError)
+              throw new Error(`Could not verify the default Warehouse: ${currentError.message}`);
+            if (current?.is_default_warehouse)
+              return jsonResponse(
+                { error: "Set another default Warehouse before deactivating or changing this location." },
+                409,
+              );
+          }
           if (!body.is_active) {
             const [
               { data: openSessions, error: sessionError },

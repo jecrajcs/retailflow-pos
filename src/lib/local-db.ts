@@ -1,5 +1,5 @@
 export const LOCAL_DB_NAME = "retailflow-pos";
-export const LOCAL_DB_VERSION = 3;
+export const LOCAL_DB_VERSION = 4;
 
 export const LOCAL_STORES = [
   "catalog",
@@ -21,6 +21,10 @@ export const LOCAL_STORES = [
   "profiles",
   "shortcuts",
   "sync_alerts",
+  "location_products",
+  "uncounted_sales",
+  "barcode_candidates",
+  "category_reviews",
 ] as const;
 
 export type LocalStoreName = (typeof LOCAL_STORES)[number];
@@ -71,6 +75,10 @@ const KEY_PATHS: Record<LocalStoreName, string> = {
   profiles: "id",
   shortcuts: "id",
   sync_alerts: "id",
+  location_products: "id",
+  uncounted_sales: "id",
+  barcode_candidates: "id",
+  category_reviews: "id",
 };
 
 const memory = new Map<LocalStoreName, Map<IDBValidKey, KeyedRecord>>();

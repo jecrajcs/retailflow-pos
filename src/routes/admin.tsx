@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Boxes, ChartNoAxesCombined, MapPin, Plus, Store, Users } from "lucide-react";
 import { AppNav } from "@/components/pos/app-nav";
+import { DataTable } from "@/components/pos/data-table";
+import { WorkbookImporter } from "@/components/pos/workbook-importer";
 import { StaffAccessPanel } from "@/components/pos/staff-access-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 import { useAccess } from "@/lib/access";
 import { refreshLocalReplica } from "@/lib/offline-sync";
 import { inr, useInventory, useLocations, useProducts, useSales, type Location } from "@/lib/pos";
@@ -24,6 +27,7 @@ type LocationForm = {
   type: LocationType;
   address: string;
   phone: string;
+  upi_vpa: string;
   is_active: boolean;
 };
 
@@ -33,6 +37,7 @@ const emptyLocation: LocationForm = {
   type: "RETAIL",
   address: "",
   phone: "",
+  upi_vpa: "",
   is_active: true,
 };
 
@@ -53,10 +58,12 @@ function AdminPage() {
   const { data: inventory = [] } = useInventory();
   const { data: products = [] } = useProducts();
   const [locations, setLocations] = useState<Location[]>([]);
+  const [activeTab, setActiveTab] = useState("overview");
   const [form, setForm] = useState<LocationForm>(emptyLocation);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [savingLocation, setSavingLocation] = useState(false);
+  const [savingDefaultWarehouseId, setSavingDefaultWarehouseId] = useState<string | null>(null);
   const [locationError, setLocationError] = useState("");
 
   const loadLocations = useCallback(async () => {
@@ -96,6 +103,7 @@ function AdminPage() {
         : "RETAIL",
       address: location.address ?? "",
       phone: location.phone ?? "",
+      upi_vpa: location.upi_vpa ?? "",
       is_active: location.is_active,
     });
     setLocationError("");
@@ -105,6 +113,7 @@ function AdminPage() {
     setEditingId(null);
     setForm(emptyLocation);
     setLocationError("");
+    setActiveTab("locations");
   }
 
   async function saveLocation(event: FormEvent<HTMLFormElement>) {
@@ -147,9 +156,42 @@ function AdminPage() {
     }
   }
 
+  async function setDefaultWarehouse(location: Location) {
+    if (
+      location.type !== "WAREHOUSE" ||
+      !location.is_active ||
+      location.is_default_warehouse ||
+      savingDefaultWarehouseId
+    )
+      return;
+    setSavingDefaultWarehouseId(location.id);
+    try {
+      const result = await retailApi<{ location: Location }>("/api/admin/locations", {
+        method: "PATCH",
+        json: { id: location.id, set_default_warehouse: true },
+      });
+      setLocations((current) =>
+        current.map((item) => ({
+          ...item,
+          is_default_warehouse: item.id === result.location.id,
+        })),
+      );
+      await refreshLocalReplica();
+      toast.success("Default Warehouse updated", {
+        description: `${result.location.name} will be used when an import has no Warehouse location.` ,
+      });
+    } catch (error) {
+      toast.error("Could not set the default Warehouse", {
+        description: userFacingError(error, "Choose an active Warehouse and try again."),
+      });
+    } finally {
+      setSavingDefaultWarehouseId(null);
+    }
+  }
+
   if (profile?.role !== "ADMIN") {
     return (
-      <div className="flex min-h-dvh flex-col bg-background">
+      <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
         <AppNav active="/admin" />
         <main className="m-auto max-w-lg rounded-xl border bg-card p-6 text-center">
           <h1 className="text-lg font-semibold">Admin access required</h1>
@@ -167,9 +209,9 @@ function AdminPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/admin" />
-      <main className="mx-auto w-full max-w-[1500px] flex-1 space-y-5 p-3 sm:p-5">
+      <main className="mx-auto min-h-0 w-full max-w-[1500px] flex-1 space-y-5 overflow-y-auto p-3 sm:p-5">
         <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4 sm:p-6">
           <div>
             <p className="text-sm text-muted-foreground">RetailFlow POS · Network administration</p>
@@ -240,11 +282,12 @@ function AdminPage() {
           />
         </section>
 
-        <Tabs defaultValue="overview">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="locations">Locations</TabsTrigger>
             <TabsTrigger value="staff">Staff access</TabsTrigger>
+            <TabsTrigger value="import">Data import</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="space-y-4 pt-3">
             <section className="grid gap-3 md:grid-cols-3">
@@ -271,35 +314,19 @@ function AdminPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {locations.length ? (
-                  <div className="space-y-2">
-                    {locations.map((location) => (
-                      <button
-                        key={location.id}
-                        onClick={() => editLocation(location)}
-                        className="flex w-full items-center gap-3 rounded-lg border p-3 text-left hover:bg-accent/40"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{location.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {location.code} · {location.type}
-                          </span>
-                        </span>
-                        <Badge variant={location.is_active ? "outline" : "secondary"}>
-                          {location.is_active ? "Active" : "Inactive"}
-                        </Badge>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    {loadingLocations
+                <LocationDataTable
+                  locations={locations}
+                  onEdit={editLocation}
+                  onSetDefaultWarehouse={setDefaultWarehouse}
+                  savingDefaultWarehouseId={savingDefaultWarehouseId}
+                  emptyMessage={
+                    loadingLocations
                       ? "Loading locations…"
                       : locationError
                         ? "Locations could not be loaded. Retry from the alert above."
-                        : "No locations found. Add your first store or warehouse from the Locations tab."}
-                  </p>
-                )}
+                        : "No locations found. Add your first store or warehouse from the Locations tab."
+                  }
+                />
               </CardContent>
             </Card>
           </TabsContent>
@@ -375,6 +402,17 @@ function AdminPage() {
                     placeholder="+91 98765 43210"
                   />
                 </Field>
+                <Field label="Merchant UPI ID for payment QR (optional)">
+                  <Input
+                    value={form.upi_vpa}
+                    onChange={(event) => setForm({ ...form, upi_vpa: event.target.value })}
+                    placeholder="store@bank"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    A QR appears at checkout only after a valid merchant UPI ID is saved here.
+                  </p>
+                </Field>
                 {editingId && (
                   <label className="flex items-center gap-2 rounded-lg border p-3 text-sm">
                     <Checkbox
@@ -411,31 +449,18 @@ function AdminPage() {
                     {loadingLocations ? "Refreshing…" : "Refresh"}
                   </Button>
                 </CardHeader>
-                <CardContent className="space-y-2">
-                  {locations.map((location) => (
-                    <button
-                      key={location.id}
-                      onClick={() => editLocation(location)}
-                      className="flex w-full items-center gap-3 rounded-lg border p-3 text-left hover:bg-accent/40"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{location.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {location.code} · {location.type}
-                          {location.address ? ` · ${location.address}` : ""}
-                        </span>
-                      </span>
-                      <Badge variant={location.is_active ? "outline" : "secondary"}>
-                        {location.is_active ? "Active" : "Inactive"}
-                      </Badge>
-                    </button>
-                  ))}
-                  {!locations.length && !loadingLocations && (
-                    <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                      Create the first location with the form. Locations are deactivated, never
-                      deleted.
-                    </p>
-                  )}
+                <CardContent>
+                  <LocationDataTable
+                    locations={locations}
+                    onEdit={editLocation}
+                    onSetDefaultWarehouse={setDefaultWarehouse}
+                    savingDefaultWarehouseId={savingDefaultWarehouseId}
+                    emptyMessage={
+                      loadingLocations
+                        ? "Loading locations…"
+                        : "Create the first location with the form. Locations are deactivated, never deleted."
+                    }
+                  />
                 </CardContent>
               </Card>
             </div>
@@ -449,6 +474,9 @@ function AdminPage() {
                 .map(({ id, name, code }) => ({ id, name, code }))}
             />
           </TabsContent>
+          <TabsContent value="import" className="pt-3">
+            <WorkbookImporter locations={locations.filter((location) => location.is_active)} />
+          </TabsContent>
         </Tabs>
         <p className="text-xs text-muted-foreground">
           {localLocations.length} active location records are available to POS workflows on this
@@ -456,6 +484,79 @@ function AdminPage() {
         </p>
       </main>
     </div>
+  );
+}
+
+function LocationDataTable({
+  locations,
+  onEdit,
+  onSetDefaultWarehouse,
+  savingDefaultWarehouseId,
+  emptyMessage,
+}: {
+  locations: Location[];
+  onEdit: (location: Location) => void;
+  onSetDefaultWarehouse: (location: Location) => void;
+  savingDefaultWarehouseId: string | null;
+  emptyMessage: string;
+}) {
+  return (
+    <DataTable<Location>
+      rows={locations}
+      getRowId={(location) => location.id}
+      searchPlaceholder="Search location, code, address or type…"
+      emptyMessage={emptyMessage}
+      columns={[
+        { id: "name", header: "Location", accessor: (location) => location.name },
+        { id: "code", header: "Code", accessor: (location) => location.code },
+        { id: "type", header: "Type", accessor: (location) => location.type },
+        {
+          id: "address",
+          header: "Address",
+          accessor: (location) => location.address ?? "",
+        },
+        {
+          id: "status",
+          header: "Status",
+          accessor: (location) => (location.is_active ? "Active" : "Inactive"),
+          cell: (location) => (
+            <Badge variant={location.is_active ? "outline" : "secondary"}>
+              {location.is_active ? "Active" : "Inactive"}
+            </Badge>
+          ),
+        },
+        {
+          id: "defaultWarehouse",
+          header: "Default Warehouse",
+          accessor: (location) => (location.is_default_warehouse ? "Default" : ""),
+          sortable: false,
+          cell: (location) =>
+            location.type !== "WAREHOUSE" ? null : location.is_default_warehouse ? (
+              <Badge variant="outline">Default</Badge>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!location.is_active || savingDefaultWarehouseId !== null}
+                onClick={() => onSetDefaultWarehouse(location)}
+              >
+                {savingDefaultWarehouseId === location.id ? "Saving…" : "Set default"}
+              </Button>
+            ),
+        },
+        {
+          id: "action",
+          header: "",
+          accessor: () => "Edit",
+          sortable: false,
+          cell: (location) => (
+            <Button size="sm" variant="outline" onClick={() => onEdit(location)}>
+              Edit
+            </Button>
+          ),
+        },
+      ]}
+    />
   );
 }
 

@@ -11,19 +11,27 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as BarcodesRouteImport } from './routes/barcodes'
 import { Route as BillingRouteImport } from './routes/billing'
 import { Route as CashDrawerRouteImport } from './routes/cash-drawer'
 import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as ManagerRouteImport } from './routes/manager'
 import { Route as PurchasesRouteImport } from './routes/purchases'
 import { Route as SalesRouteImport } from './routes/sales'
+import { Route as ScannerRouteImport } from './routes/scanner'
+import { Route as ApiBarcodeCandidateRouteImport } from './routes/api/barcode-candidate'
+import { Route as ApiCashSessionOverrideRouteImport } from './routes/api/cash-session-override'
+import { Route as ApiCategoryReviewRouteImport } from './routes/api/category-review'
 import { Route as ApiPublicOverviewRouteImport } from './routes/api/public-overview'
 import { Route as ApiResolveSyncAlertRouteImport } from './routes/api/resolve-sync-alert'
 import { Route as ApiRetailSnapshotRouteImport } from './routes/api/retail-snapshot'
 import { Route as ApiRetailSyncRouteImport } from './routes/api/retail-sync'
+import { Route as ApiRetailWorkbookImportRouteImport } from './routes/api/retail-workbook-import'
 import { Route as ApiStaffRouteImport } from './routes/api/staff'
 import { Route as ApiStaffPasswordRouteImport } from './routes/api/staff-password'
 import { Route as ApiStaffSessionRouteImport } from './routes/api/staff-session'
+import { Route as ApiStaffUsernameRouteImport } from './routes/api/staff-username'
+import { Route as ApiAdminArchiveProductRouteImport } from './routes/api/admin/archive-product'
 import { Route as ApiAdminLocationsRouteImport } from './routes/api/admin/locations'
 import { Route as ApiPosLoginRouteImport } from './routes/api/pos/login'
 
@@ -35,6 +43,11 @@ const IndexRoute = IndexRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BarcodesRoute = BarcodesRouteImport.update({
+  id: '/barcodes',
+  path: '/barcodes',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BillingRoute = BillingRouteImport.update({
@@ -67,6 +80,26 @@ const SalesRoute = SalesRouteImport.update({
   path: '/sales',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ScannerRoute = ScannerRouteImport.update({
+  id: '/scanner',
+  path: '/scanner',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBarcodeCandidateRoute = ApiBarcodeCandidateRouteImport.update({
+  id: '/api/barcode-candidate',
+  path: '/api/barcode-candidate',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCashSessionOverrideRoute = ApiCashSessionOverrideRouteImport.update({
+  id: '/api/cash-session-override',
+  path: '/api/cash-session-override',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCategoryReviewRoute = ApiCategoryReviewRouteImport.update({
+  id: '/api/category-review',
+  path: '/api/category-review',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicOverviewRoute = ApiPublicOverviewRouteImport.update({
   id: '/api/public-overview',
   path: '/api/public-overview',
@@ -87,6 +120,11 @@ const ApiRetailSyncRoute = ApiRetailSyncRouteImport.update({
   path: '/api/retail-sync',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiRetailWorkbookImportRoute = ApiRetailWorkbookImportRouteImport.update({
+  id: '/api/retail-workbook-import',
+  path: '/api/retail-workbook-import',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiStaffRoute = ApiStaffRouteImport.update({
   id: '/api/staff',
   path: '/api/staff',
@@ -100,6 +138,16 @@ const ApiStaffPasswordRoute = ApiStaffPasswordRouteImport.update({
 const ApiStaffSessionRoute = ApiStaffSessionRouteImport.update({
   id: '/api/staff-session',
   path: '/api/staff-session',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffUsernameRoute = ApiStaffUsernameRouteImport.update({
+  id: '/api/staff-username',
+  path: '/api/staff-username',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminArchiveProductRoute = ApiAdminArchiveProductRouteImport.update({
+  id: '/api/admin/archive-product',
+  path: '/api/admin/archive-product',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAdminLocationsRoute = ApiAdminLocationsRouteImport.update({
@@ -116,38 +164,54 @@ const ApiPosLoginRoute = ApiPosLoginRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/barcodes': typeof BarcodesRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/scanner': typeof ScannerRoute
+  '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
+  '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
+  '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
   '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/staff-username': typeof ApiStaffUsernameRoute
+  '/api/admin/archive-product': typeof ApiAdminArchiveProductRoute
   '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/barcodes': typeof BarcodesRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/scanner': typeof ScannerRoute
+  '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
+  '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
+  '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
   '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/staff-username': typeof ApiStaffUsernameRoute
+  '/api/admin/archive-product': typeof ApiAdminArchiveProductRoute
   '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
@@ -155,19 +219,27 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/barcodes': typeof BarcodesRoute
   '/billing': typeof BillingRoute
   '/cash-drawer': typeof CashDrawerRoute
   '/inventory': typeof InventoryRoute
   '/manager': typeof ManagerRoute
   '/purchases': typeof PurchasesRoute
   '/sales': typeof SalesRoute
+  '/scanner': typeof ScannerRoute
+  '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
+  '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
+  '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
   '/api/resolve-sync-alert': typeof ApiResolveSyncAlertRoute
   '/api/retail-snapshot': typeof ApiRetailSnapshotRoute
   '/api/retail-sync': typeof ApiRetailSyncRoute
+  '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
+  '/api/staff-username': typeof ApiStaffUsernameRoute
+  '/api/admin/archive-product': typeof ApiAdminArchiveProductRoute
   '/api/admin/locations': typeof ApiAdminLocationsRoute
   '/api/pos/login': typeof ApiPosLoginRoute
 }
@@ -176,57 +248,81 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/barcodes'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/scanner'
+    | '/api/barcode-candidate'
+    | '/api/cash-session-override'
+    | '/api/category-review'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
     | '/api/retail-sync'
+    | '/api/retail-workbook-import'
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/staff-username'
+    | '/api/admin/archive-product'
     | '/api/admin/locations'
     | '/api/pos/login'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
+    | '/barcodes'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/scanner'
+    | '/api/barcode-candidate'
+    | '/api/cash-session-override'
+    | '/api/category-review'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
     | '/api/retail-sync'
+    | '/api/retail-workbook-import'
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/staff-username'
+    | '/api/admin/archive-product'
     | '/api/admin/locations'
     | '/api/pos/login'
   id:
     | '__root__'
     | '/'
     | '/admin'
+    | '/barcodes'
     | '/billing'
     | '/cash-drawer'
     | '/inventory'
     | '/manager'
     | '/purchases'
     | '/sales'
+    | '/scanner'
+    | '/api/barcode-candidate'
+    | '/api/cash-session-override'
+    | '/api/category-review'
     | '/api/public-overview'
     | '/api/resolve-sync-alert'
     | '/api/retail-snapshot'
     | '/api/retail-sync'
+    | '/api/retail-workbook-import'
     | '/api/staff'
     | '/api/staff-password'
     | '/api/staff-session'
+    | '/api/staff-username'
+    | '/api/admin/archive-product'
     | '/api/admin/locations'
     | '/api/pos/login'
   fileRoutesById: FileRoutesById
@@ -234,19 +330,27 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  BarcodesRoute: typeof BarcodesRoute
   BillingRoute: typeof BillingRoute
   CashDrawerRoute: typeof CashDrawerRoute
   InventoryRoute: typeof InventoryRoute
   ManagerRoute: typeof ManagerRoute
   PurchasesRoute: typeof PurchasesRoute
   SalesRoute: typeof SalesRoute
+  ScannerRoute: typeof ScannerRoute
+  ApiBarcodeCandidateRoute: typeof ApiBarcodeCandidateRoute
+  ApiCashSessionOverrideRoute: typeof ApiCashSessionOverrideRoute
+  ApiCategoryReviewRoute: typeof ApiCategoryReviewRoute
   ApiPublicOverviewRoute: typeof ApiPublicOverviewRoute
   ApiResolveSyncAlertRoute: typeof ApiResolveSyncAlertRoute
   ApiRetailSnapshotRoute: typeof ApiRetailSnapshotRoute
   ApiRetailSyncRoute: typeof ApiRetailSyncRoute
+  ApiRetailWorkbookImportRoute: typeof ApiRetailWorkbookImportRoute
   ApiStaffRoute: typeof ApiStaffRoute
   ApiStaffPasswordRoute: typeof ApiStaffPasswordRoute
   ApiStaffSessionRoute: typeof ApiStaffSessionRoute
+  ApiStaffUsernameRoute: typeof ApiStaffUsernameRoute
+  ApiAdminArchiveProductRoute: typeof ApiAdminArchiveProductRoute
   ApiAdminLocationsRoute: typeof ApiAdminLocationsRoute
   ApiPosLoginRoute: typeof ApiPosLoginRoute
 }
@@ -265,6 +369,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/barcodes': {
+      id: '/barcodes'
+      path: '/barcodes'
+      fullPath: '/barcodes'
+      preLoaderRoute: typeof BarcodesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/billing': {
@@ -309,6 +420,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SalesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/scanner': {
+      id: '/scanner'
+      path: '/scanner'
+      fullPath: '/scanner'
+      preLoaderRoute: typeof ScannerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/barcode-candidate': {
+      id: '/api/barcode-candidate'
+      path: '/api/barcode-candidate'
+      fullPath: '/api/barcode-candidate'
+      preLoaderRoute: typeof ApiBarcodeCandidateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cash-session-override': {
+      id: '/api/cash-session-override'
+      path: '/api/cash-session-override'
+      fullPath: '/api/cash-session-override'
+      preLoaderRoute: typeof ApiCashSessionOverrideRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/category-review': {
+      id: '/api/category-review'
+      path: '/api/category-review'
+      fullPath: '/api/category-review'
+      preLoaderRoute: typeof ApiCategoryReviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public-overview': {
       id: '/api/public-overview'
       path: '/api/public-overview'
@@ -337,6 +476,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRetailSyncRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/retail-workbook-import': {
+      id: '/api/retail-workbook-import'
+      path: '/api/retail-workbook-import'
+      fullPath: '/api/retail-workbook-import'
+      preLoaderRoute: typeof ApiRetailWorkbookImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/staff': {
       id: '/api/staff'
       path: '/api/staff'
@@ -356,6 +502,20 @@ declare module '@tanstack/react-router' {
       path: '/api/staff-session'
       fullPath: '/api/staff-session'
       preLoaderRoute: typeof ApiStaffSessionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff-username': {
+      id: '/api/staff-username'
+      path: '/api/staff-username'
+      fullPath: '/api/staff-username'
+      preLoaderRoute: typeof ApiStaffUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/archive-product': {
+      id: '/api/admin/archive-product'
+      path: '/api/admin/archive-product'
+      fullPath: '/api/admin/archive-product'
+      preLoaderRoute: typeof ApiAdminArchiveProductRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/locations': {
@@ -378,19 +538,27 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  BarcodesRoute: BarcodesRoute,
   BillingRoute: BillingRoute,
   CashDrawerRoute: CashDrawerRoute,
   InventoryRoute: InventoryRoute,
   ManagerRoute: ManagerRoute,
   PurchasesRoute: PurchasesRoute,
   SalesRoute: SalesRoute,
+  ScannerRoute: ScannerRoute,
+  ApiBarcodeCandidateRoute: ApiBarcodeCandidateRoute,
+  ApiCashSessionOverrideRoute: ApiCashSessionOverrideRoute,
+  ApiCategoryReviewRoute: ApiCategoryReviewRoute,
   ApiPublicOverviewRoute: ApiPublicOverviewRoute,
   ApiResolveSyncAlertRoute: ApiResolveSyncAlertRoute,
   ApiRetailSnapshotRoute: ApiRetailSnapshotRoute,
   ApiRetailSyncRoute: ApiRetailSyncRoute,
+  ApiRetailWorkbookImportRoute: ApiRetailWorkbookImportRoute,
   ApiStaffRoute: ApiStaffRoute,
   ApiStaffPasswordRoute: ApiStaffPasswordRoute,
   ApiStaffSessionRoute: ApiStaffSessionRoute,
+  ApiStaffUsernameRoute: ApiStaffUsernameRoute,
+  ApiAdminArchiveProductRoute: ApiAdminArchiveProductRoute,
   ApiAdminLocationsRoute: ApiAdminLocationsRoute,
   ApiPosLoginRoute: ApiPosLoginRoute,
 }

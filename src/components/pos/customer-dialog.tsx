@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Plus, Search, UserRound } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +31,7 @@ export function CustomerDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (customer: Customer | null) => void;
+  onSelect: (customer: Customer | null, walkIn?: boolean) => void;
 }) {
   const { data: customers = [] } = useCustomers();
   const [search, setSearch] = useState("");
@@ -38,27 +39,59 @@ export function CustomerDialog({
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [creditLimit, setCreditLimit] = useState("");
-  const [ageGroup, setAgeGroup] = useState("Adult");
+  const [ageGroup, setAgeGroup] = useState("unspecified");
   const [gender, setGender] = useState("");
   const [busy, setBusy] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
+  const selectableCustomers = customers.filter(
+    (customer) => customer.name?.trim().toLocaleLowerCase() !== "walk-in" || !!customer.mobile,
+  );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return customers.slice(0, 8);
-    return customers.filter((c) => matchesSearchFields([c.name, c.mobile], q));
-  }, [customers, search]);
+    if (!q) return selectableCustomers.slice(0, 8);
+    return selectableCustomers.filter((c) => matchesSearchFields([c.name, c.mobile], q));
+  }, [selectableCustomers, search]);
   const visibleCustomers = filtered.slice(0, 100);
 
+  async function selectWalkIn() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const walkIn =
+        customers.find(
+          (customer) => customer.name?.trim().toLocaleLowerCase() === "walk-in" && !customer.mobile,
+        ) ??
+        (await addCustomer({
+          name: "Walk-in",
+          mobile: null,
+          creditLimit: 0,
+          ageGroup: null,
+          gender: null,
+        }));
+      onSelect(walkIn, true);
+      onOpenChange(false);
+    } catch (error) {
+      toast.error("Could not start a Walk-in bill", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "The Walk-in customer profile could not be saved.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleAdd() {
-    if (!name.trim() || busy) return;
+    if ((!name.trim() && !mobile.replace(/\D/g, "")) || busy) return;
     setBusy(true);
     try {
       const created = await addCustomer({
-        name: name.trim(),
+        name: name.trim() || null,
         mobile: mobile.trim() || null,
         creditLimit: Number(creditLimit) || 0,
-        ageGroup,
+        ageGroup: ageGroup === "unspecified" ? null : ageGroup,
         gender: gender || null,
       });
       onSelect(created);
@@ -66,10 +99,15 @@ export function CustomerDialog({
       setName("");
       setMobile("");
       setCreditLimit("");
-      setAgeGroup("Adult");
+      setAgeGroup("unspecified");
       setGender("");
       setAdding(false);
       setSearch("");
+    } catch (error) {
+      toast.error("Could not save customer", {
+        description:
+          error instanceof Error ? error.message : "The customer profile could not be saved.",
+      });
     } finally {
       setBusy(false);
     }
@@ -79,11 +117,21 @@ export function CustomerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Customer</DialogTitle>
+          <DialogTitle>Select customer</DialogTitle>
           <DialogDescription>
-            Search by name or mobile — phone number is optional. Pick Walk-in to skip.
+            Search by name or mobile, or create a customer profile.
           </DialogDescription>
         </DialogHeader>
+
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start"
+          disabled={busy}
+          onClick={() => void selectWalkIn()}
+        >
+          Continue as Walk-in
+        </Button>
 
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -113,15 +161,6 @@ export function CustomerDialog({
         </div>
 
         <div className="max-h-56 space-y-1 overflow-y-auto">
-          <button
-            onClick={() => {
-              onSelect(null);
-              onOpenChange(false);
-            }}
-            className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
-          >
-            <UserRound className="h-4 w-4" /> Walk-in (no customer)
-          </button>
           {visibleCustomers.map((c, index) => (
             <button
               key={c.id}
@@ -133,7 +172,7 @@ export function CustomerDialog({
             >
               <span className="flex items-center gap-2">
                 <UserRound className="h-4 w-4 text-muted-foreground" />
-                {c.name}
+                {c.name || "Name not provided"}
                 {c.mobile && <span className="text-xs text-muted-foreground">{c.mobile}</span>}
                 {Number(c.visits) > 0 && (
                   <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
@@ -158,6 +197,24 @@ export function CustomerDialog({
             </button>
           ))}
         </div>
+        {search.trim() &&
+          !adding &&
+          !selectableCustomers.some((customer) =>
+            matchesSearchFields([customer.name, customer.mobile], search.trim()),
+          ) && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-primary hover:bg-accent"
+              onClick={() => {
+                const isPhone = /\d/.test(search);
+                setName(isPhone ? "" : search.trim());
+                setMobile(isPhone ? search.trim() : "");
+                setAdding(true);
+              }}
+            >
+              <Plus className="h-4 w-4" /> Create customer from this search
+            </button>
+          )}
         {filtered.length > visibleCustomers.length && (
           <p className="text-xs text-muted-foreground">
             Showing the first 100 matches. Type more to narrow the list.
@@ -168,7 +225,7 @@ export function CustomerDialog({
           <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <Label htmlFor="cust-name">Name *</Label>
+                <Label htmlFor="cust-name">Name</Label>
                 <Input
                   id="cust-name"
                   value={name}
@@ -192,7 +249,10 @@ export function CustomerDialog({
                 <SearchableSelect
                   value={ageGroup}
                   onValueChange={setAgeGroup}
-                  options={AGE_GROUPS.map((value) => ({ value, label: value }))}
+                  options={[
+                    { value: "unspecified", label: "Not specified" },
+                    ...AGE_GROUPS.map((value) => ({ value, label: value })),
+                  ]}
                 />
               </div>
               <div className="space-y-1">
@@ -219,16 +279,16 @@ export function CustomerDialog({
               <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleAdd} disabled={!name.trim() || busy}>
+              <Button
+                size="sm"
+                onClick={handleAdd}
+                disabled={(!name.trim() && !mobile.replace(/\D/g, "")) || busy}
+              >
                 Save customer
               </Button>
             </div>
           </div>
-        ) : (
-          <Button variant="outline" className="gap-1.5" onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> Add new customer
-          </Button>
-        )}
+        ) : null}
       </DialogContent>
     </Dialog>
   );

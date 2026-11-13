@@ -13,6 +13,7 @@ import {
   canAssignStaffLocations,
   canManageStaffRole,
   canManageStaffTarget,
+  canStaffSyncOperation,
 } from "@/lib/staff-access-policy";
 import { mergeReplicaRows } from "@/lib/replica-merge-policy";
 import {
@@ -31,9 +32,13 @@ describe("staff login identifiers", () => {
     expect(normalizeStaffIdentifier("+91-98765-43210")).toBe("phone:+919876543210");
   });
 
+  it("normalizes usernames for password sign-in", () => {
+    expect(normalizeStaffIdentifier("  Store-User_2 ")).toBe("username:store-user_2");
+  });
+
   it("rejects malformed login identifiers", () => {
-    expect(() => normalizeStaffIdentifier("not-a-login")).toThrow(
-      "Enter a valid mobile number in international format.",
+    expect(() => normalizeStaffIdentifier("x!")).toThrow(
+      "Enter a valid email, username or mobile number.",
     );
   });
 });
@@ -54,6 +59,7 @@ describe("Admin location policy", () => {
       type: "RETAIL",
       address: null,
       phone: null,
+      upi_vpa: null,
       is_active: true,
     });
   });
@@ -62,6 +68,20 @@ describe("Admin location policy", () => {
     expect(normalizeLocationInput({ name: "", code: "1", type: "RETAIL" })).toBeNull();
     expect(normalizeLocationInput({ name: "Store", code: "BAD CODE", type: "RETAIL" })).toBeNull();
     expect(normalizeLocationInput({ name: "Store", code: "MS01", type: "OTHER" })).toBeNull();
+    expect(
+      normalizeLocationInput({ name: "Store", code: "MS01", type: "RETAIL", upi_vpa: "invalid" }),
+    ).toBeNull();
+  });
+
+  it("normalizes the optional merchant UPI identifier for checkout QR codes", () => {
+    expect(
+      normalizeLocationInput({
+        name: "Store",
+        code: "MS01",
+        type: "RETAIL",
+        upi_vpa: "  Store.Pay@ExampleBank  ",
+      })?.upi_vpa,
+    ).toBe("store.pay@examplebank");
   });
 
   it("blocks deactivation until shifts, assignments, and sync alerts are clear", () => {
@@ -91,6 +111,18 @@ describe("role and location-scoped staff access", () => {
     expect(canManageStaffTarget("MANAGER", ["store-a"], "CASHIER", ["store-a", "store-b"])).toBe(
       false,
     );
+  });
+
+  it("enforces the Cashier, Manager, Admin and Warehouse operation boundaries", () => {
+    expect(canStaffSyncOperation("CASHIER", "invoice.finalize")).toBe(true);
+    expect(canStaffSyncOperation("ADMIN", "invoice.finalize")).toBe(false);
+    expect(canStaffSyncOperation("CASHIER", "cash.session.open")).toBe(true);
+    expect(canStaffSyncOperation("ADMIN", "cash.session.open")).toBe(false);
+    expect(canStaffSyncOperation("WAREHOUSE", "inventory.adjustment.create")).toBe(true);
+    expect(canStaffSyncOperation("WAREHOUSE", "purchase.receive")).toBe(false);
+    expect(canStaffSyncOperation("WAREHOUSE", "customer.create")).toBe(false);
+    expect(canStaffSyncOperation("WAREHOUSE", "product.update")).toBe(false);
+    expect(canStaffSyncOperation("MANAGER", "purchase.receive")).toBe(true);
   });
 
   it("preserves offline business rows but drops locations removed from the server snapshot", () => {
@@ -124,6 +156,8 @@ describe("app access policy and data projections", () => {
   it("exposes only the allowlisted public overview API", () => {
     expect(accessPolicy.api.public).toEqual(["/api/public-overview"]);
     expect(accessPolicy.api.staff).toContain("/api/retail-snapshot");
+    expect(accessPolicy.api.staff).toContain("/api/cash-session-override");
+    expect(accessPolicy.api.staff).toContain("/api/retail-workbook-import");
     expect(accessPolicy.api.signIn).toEqual(["/api/pos/login"]);
   });
 

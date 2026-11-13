@@ -1,10 +1,13 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
 
-export type StaffRole = "CASHIER" | "MANAGER" | "ADMIN";
+export type StaffRole = "CASHIER" | "MANAGER" | "ADMIN" | "WAREHOUSE";
 
 export interface StaffAccessProfile {
   user_id: string;
   display_name: string;
+  username: string;
   email: string | null;
   phone: string | null;
   must_change_password: boolean;
@@ -25,7 +28,7 @@ export async function getStaffAccessProfile(userId: string): Promise<StaffAccess
     [
       supabaseAdmin
         .from("users")
-        .select("user_id,display_name,email,phone,role,is_active,must_change_password")
+        .select("user_id,display_name,username,email,phone,role,is_active,must_change_password")
         .eq("user_id", userId)
         .maybeSingle(),
       supabaseAdmin.from("staff_location_access").select("location_id").eq("user_id", userId),
@@ -38,11 +41,12 @@ export async function getStaffAccessProfile(userId: string): Promise<StaffAccess
   if (!staff || !staff.is_active) return null;
 
   const role = String(staff.role).toUpperCase();
-  if (!["CASHIER", "MANAGER", "ADMIN"].includes(role)) return null;
+  if (!["CASHIER", "MANAGER", "ADMIN", "WAREHOUSE"].includes(role)) return null;
 
   return {
     user_id: userId,
     display_name: staff.display_name || "Staff",
+    username: staff.username || "",
     email: staff.email || null,
     phone: staff.phone || null,
     must_change_password: staff.must_change_password,
@@ -84,6 +88,11 @@ export function normalizeStaffIdentifier(value: string) {
     return `email:${email}`;
   }
   const compact = trimmed.replace(/[\s().-]/g, "");
+  if (!/^[+\d]+$/.test(compact)) {
+    const username = trimmed.toLowerCase();
+    if (/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username)) return `username:${username}`;
+    throw new Error("Enter a valid email, username or mobile number.");
+  }
   let phone = compact;
   if (!phone.startsWith("+")) {
     const digits = phone.replace(/\D/g, "");
@@ -100,6 +109,19 @@ export function normalizeStaffPhone(value: string) {
   if (!identifier.startsWith("phone:"))
     throw new Error("Enter a valid mobile number in international format.");
   return identifier.slice("phone:".length);
+}
+
+export async function resolveStaffAuthCredentials(identifier: string, password: string) {
+  const normalized = identifier.includes(":") ? identifier : normalizeStaffIdentifier(identifier);
+  if (normalized.startsWith("email:")) return { email: normalized.slice("email:".length), password };
+  if (normalized.startsWith("phone:")) return { phone: normalized.slice("phone:".length), password };
+  const { data: staff, error } = await supabaseAdmin.from("users")
+    .select("user_id,email,phone").eq("username", normalized.slice("username:".length)).maybeSingle();
+  if (error) throw new Error(`Could not look up the staff username: ${error.message}`);
+  if (!staff) throw new Error("Username or password is incorrect.");
+  if (staff.email) return { email: staff.email, password };
+  if (staff.phone) return { phone: staff.phone, password };
+  throw new Error("This username has no sign-in email or mobile number.");
 }
 
 export async function createStaffAuthUser(input: {
@@ -137,6 +159,39 @@ export async function updateStaffAuthUser(
 export async function replaceStaffPassword(userId: string, password: string) {
   const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password });
   if (error) throw new Error(`Could not update the staff password: ${error.message}`);
+}
+
+export async function verifyStaffPasswordLogin(
+  userId: string,
+  login: string | Array<string | null>,
+  password: string,
+) {
+  const logins = (Array.isArray(login) ? login : [login]).filter(
+    (value): value is string => !!value,
+  );
+  if (!logins.length) return false;
+  const url = process.env["SUPABASE_URL"];
+  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
+  if (!url || !key) throw new Error("Supabase Auth verification is not configured.");
+
+  const authClient = createClient<Database>(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  for (const value of logins) {
+    const credentials = await resolveStaffAuthCredentials(value, password);
+    const { data, error } = await authClient.auth.signInWithPassword(credentials);
+    if (error || data.user?.id !== userId) {
+      await authClient.auth.signOut({ scope: "local" });
+      continue;
+    }
+    const { error: signOutError } = await authClient.auth.signOut({ scope: "local" });
+    if (signOutError)
+      throw new Error(
+        `Password sign-in succeeded, but verification cleanup failed: ${signOutError.message}`,
+      );
+    return true;
+  }
+  return false;
 }
 
 export async function removeStaffAuthUser(userId: string) {

@@ -7,6 +7,7 @@ export type LocationInput = {
   type: LocationType;
   address: string | null;
   phone: string | null;
+  upi_vpa: string | null;
   is_active: boolean;
 };
 
@@ -17,6 +18,12 @@ export function normalizeLocationInput(value: unknown): LocationInput | null {
     typeof record["name"] !== "string" ||
     typeof record["code"] !== "string" ||
     typeof record["type"] !== "string"
+  )
+    return null;
+  if (
+    record["upi_vpa"] !== undefined &&
+    record["upi_vpa"] !== null &&
+    typeof record["upi_vpa"] !== "string"
   )
     return null;
   if (
@@ -36,8 +43,11 @@ export function normalizeLocationInput(value: unknown): LocationInput | null {
   const name = record["name"].trim();
   const code = record["code"].trim().toUpperCase();
   const type = record["type"].trim().toUpperCase();
+  const upiVpa =
+    typeof record["upi_vpa"] === "string" ? record["upi_vpa"].trim().toLowerCase() : "";
   if (!name || name.length > 120 || !/^[A-Z0-9][A-Z0-9_-]{1,19}$/.test(code)) return null;
   if (!LOCATION_TYPES.includes(type as LocationType)) return null;
+  if (upiVpa && !/^[a-z0-9][a-z0-9._-]{1,255}@[a-z0-9][a-z0-9.-]{1,63}$/.test(upiVpa)) return null;
 
   return {
     name,
@@ -45,6 +55,7 @@ export function normalizeLocationInput(value: unknown): LocationInput | null {
     type: type as LocationType,
     address: typeof record["address"] === "string" ? record["address"].trim() || null : null,
     phone: typeof record["phone"] === "string" ? record["phone"].trim() || null : null,
+    upi_vpa: upiVpa || null,
     is_active: record["is_active"] !== false,
   };
 }

@@ -16,6 +16,8 @@ type SyncResult = { synced: number; pending: number; failed: number };
 
 let syncPromise: Promise<SyncResult> | null = null;
 let started = false;
+let retryAttempt = 0;
+let retryTimer: number | null = null;
 
 const REMOTE_COLLECTIONS: Array<{ table: string; store: LocalStoreName }> = [
   { table: "locations", store: "locations" },
@@ -34,6 +36,10 @@ const REMOTE_COLLECTIONS: Array<{ table: string; store: LocalStoreName }> = [
   { table: "stock_transfer_items", store: "transfer_items" },
   { table: "stock_adjustments", store: "stock_adjustments" },
   { table: "inventory_sync_alerts", store: "sync_alerts" },
+  { table: "location_product_assignments", store: "location_products" },
+  { table: "uncounted_sales", store: "uncounted_sales" },
+  { table: "barcode_candidates", store: "barcode_candidates" },
+  { table: "category_reviews", store: "category_reviews" },
 ];
 
 function online() {
@@ -111,6 +117,8 @@ async function mergeRemoteCollection(
           product_id: item["product_id"],
           quantity: item["quantity"],
           unit_cost: item["unit_cost"],
+          manufactured_on: item["manufactured_on"],
+          expires_on: item["expires_on"],
         })),
         sync_status: "SYNCED",
       };
@@ -263,8 +271,32 @@ export function syncOutbox(): Promise<SyncResult> {
       failed,
       at: new Date().toISOString(),
     });
-    if (pending > 0 && failed === 0 && online() && typeof window !== "undefined")
-      window.setTimeout(() => void syncOutbox(), 0);
+    if (pending === 0) {
+      retryAttempt = 0;
+      if (retryTimer !== null && typeof window !== "undefined") {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    } else if (online() && typeof window !== "undefined") {
+      if (failed === 0) {
+        retryAttempt = 0;
+        window.setTimeout(() => {
+          void syncOutbox().catch((error) =>
+            console.error("RetailFlow queued sync could not continue", error),
+          );
+        }, 0);
+      } else {
+        if (retryTimer !== null) window.clearTimeout(retryTimer);
+        const delay = Math.min(60_000, 5_000 * 2 ** retryAttempt);
+        retryAttempt += 1;
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          void syncOutbox().catch((error) =>
+            console.error("RetailFlow queued sync retry failed", error),
+          );
+        }, delay);
+      }
+    }
     return { synced, pending, failed };
   })().finally(() => {
     syncPromise = null;

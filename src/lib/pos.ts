@@ -11,6 +11,9 @@ import {
   type LocalStoreName,
   type SyncStatus,
 } from "@/lib/local-db";
+import { DENOMINATIONS } from "@/lib/cash-denominations";
+import { validateRecordedPaymentSplit } from "@/lib/payment-policy";
+export { DENOMINATIONS } from "@/lib/cash-denominations";
 
 export interface Location {
   id: string;
@@ -19,6 +22,8 @@ export interface Location {
   type: string;
   address: string | null;
   phone: string | null;
+  upi_vpa?: string | null;
+  is_default_warehouse?: boolean;
   is_active: boolean;
 }
 
@@ -30,8 +35,15 @@ export interface Product {
   sku: string | null;
   barcode: string | null;
   hsn: string | null;
+  brand?: string | null;
   category: string | null;
+  subcategory?: string | null;
   variant: string | null;
+  barcode_type?: "MANUFACTURER" | "INTERNAL" | "UNVERIFIED" | null;
+  quantity_precision?: number;
+  review_status?: "PENDING" | "APPROVED" | "REJECTED";
+  review_reason?: string | null;
+  is_active?: boolean;
   rack_location: string | null;
   purchase_cost: number;
   mrp: number;
@@ -54,6 +66,8 @@ export interface ProductPriceTier {
   unit_price: number;
 }
 
+const WHOLESALE_TIER_LABELS = ["Wholesale Small", "Wholesale Medium", "Wholesale Large"] as const;
+
 /** Return the most favorable quantity tier the current basket quantity qualifies for. */
 export function getProductPrice(product: Product, quantity: number) {
   const tier = [...(product.price_tiers ?? [])]
@@ -67,7 +81,7 @@ export function getProductPrice(product: Product, quantity: number) {
   return { unitPrice: tier?.unit_price ?? product.sale_price, tier };
 }
 
-/** Excel/UI format: `6:68,12:64`; JSON arrays are also accepted for exported workbooks. */
+/** Supports named tiers and the legacy `6:68,12:64` format used by existing templates. */
 export function parsePriceTiers(value: unknown): ProductPriceTier[] {
   if (Array.isArray(value)) {
     const tiers = value.map((entry) => {
@@ -78,7 +92,7 @@ export function parsePriceTiers(value: unknown): ProductPriceTier[] {
         unit_price: Number(row.unit_price),
       };
     });
-    return validatePriceTiers(tiers);
+    return validatePriceTiers(nameWholesaleTiers(tiers));
   }
   const text = String(value ?? "").trim();
   if (!text) return [];
@@ -90,17 +104,45 @@ export function parsePriceTiers(value: unknown): ProductPriceTier[] {
       throw new Error("Price tiers must be quantity:price pairs, for example 6:68,12:64.");
     }
   }
-  const tiers = text.split(/[,;\n]/).map((part) => {
-    const match = part.trim().match(/^(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)$/);
-    if (!match) throw new Error("Enter quantity-based tiers like 6:68,12:64.");
-    const min_quantity = Number(match[1]);
+  const parts = text
+    .split(/[,;\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const named = parts.some((part) => /(?:wholesale\s+)?(?:small|medium|large)\s*[:=]/i.test(part));
+  const tiers = parts.map((part) => {
+    const namedMatch = part.match(
+      /^(?:wholesale\s+)?(small|medium|large)\s*[:=]\s*(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)$/i,
+    );
+    if (named && !namedMatch)
+      throw new Error("Use named wholesale tiers such as Small:6:68; Medium:12:64.");
+    const legacyMatch = part.match(/^(\d+(?:\.\d+)?)\s*[:=]\s*(\d+(?:\.\d+)?)$/);
+    if (!namedMatch && !legacyMatch)
+      throw new Error(
+        "Enter named tiers like Small:6:68; Medium:12:64, or legacy quantity:price pairs.",
+      );
+    const min_quantity = Number(namedMatch?.[2] ?? legacyMatch?.[1]);
     return {
-      label: `${min_quantity}+ units`,
+      label: namedMatch
+        ? `Wholesale ${namedMatch[1]!.toLowerCase().replace(/^./, (letter) => letter.toUpperCase())}`
+        : `${min_quantity}+ units`,
       min_quantity,
-      unit_price: Number(match[2]),
+      unit_price: Number(namedMatch?.[3] ?? legacyMatch?.[2]),
     };
   });
-  return validatePriceTiers(tiers);
+  return validatePriceTiers(nameWholesaleTiers(tiers));
+}
+
+function nameWholesaleTiers(tiers: ProductPriceTier[]) {
+  const ordered = [...tiers].sort((a, b) => a.min_quantity - b.min_quantity);
+  if (ordered.length > WHOLESALE_TIER_LABELS.length)
+    throw new Error("Configure no more than Wholesale Small, Medium, and Large.");
+  return ordered.map((tier, index) => {
+    const normalized = tier.label.toLowerCase().replace(/^wholesale\s+/, "");
+    const label = WHOLESALE_TIER_LABELS.find(
+      (candidate) => candidate.toLowerCase().replace(/^wholesale\s+/, "") === normalized,
+    );
+    return { ...tier, label: label ?? WHOLESALE_TIER_LABELS[index]! };
+  });
 }
 
 function validatePriceTiers(tiers: ProductPriceTier[]) {
@@ -117,13 +159,25 @@ function validatePriceTiers(tiers: ProductPriceTier[]) {
     throw new Error("Every price tier needs a positive minimum quantity and unit price.");
   if (new Set(sorted.map((tier) => tier.min_quantity)).size !== sorted.length)
     throw new Error("Each price tier must use a different minimum quantity.");
+  if (new Set(sorted.map((tier) => tier.label)).size !== sorted.length)
+    throw new Error("Use each wholesale tier label only once.");
+  const tierOrder = sorted.map((tier) =>
+    WHOLESALE_TIER_LABELS.indexOf(tier.label as (typeof WHOLESALE_TIER_LABELS)[number]),
+  );
+  if (tierOrder.some((rank, index) => index > 0 && rank <= tierOrder[index - 1]!))
+    throw new Error("Wholesale Small, Medium, and Large thresholds must increase in that order.");
   if (sorted.some((tier, index) => index > 0 && tier.unit_price > sorted[index - 1]!.unit_price))
     throw new Error("A higher quantity tier cannot cost more per unit than the tier below it.");
   return sorted;
 }
 
 export function formatPriceTiers(tiers: ProductPriceTier[] | null | undefined) {
-  return (tiers ?? []).map((tier) => `${tier.min_quantity}:${tier.unit_price}`).join(", ");
+  return (tiers ?? [])
+    .map(
+      (tier) =>
+        `${tier.label.replace(/^Wholesale\s+/i, "")}:${tier.min_quantity}:${tier.unit_price}`,
+    )
+    .join("; ");
 }
 
 /** Internal Code 128 value derived from a unique local SKU; not a GS1-issued retail EAN. */
@@ -134,13 +188,14 @@ export function barcodeForSku(sku: string) {
 
 export interface Customer {
   id: string;
-  name: string;
+  name: string | null;
   mobile: string | null;
   age_group: string | null;
   gender: string | null;
   credit_limit: number;
   outstanding_balance: number;
   visits: number;
+  segment?: string | null;
 }
 
 export interface CustomerFamily {
@@ -173,6 +228,10 @@ export interface CashSession {
   id: string;
   location_id: string;
   opened_by: string;
+  opened_by_id?: string | null;
+  closed_by_id?: string | null;
+  override_by_id?: string | null;
+  override_reason?: string | null;
   opening_cash: number;
   closing_cash: number | null;
   cash_sales: number;
@@ -200,6 +259,8 @@ export interface LocalInvoice {
   invoice_number: string;
   location_id: string;
   customer_id: string | null;
+  customer_segment?: string | null;
+  order_type?: string | null;
   cashier_id: string;
   cashier_name: string;
   total_amount: number;
@@ -232,8 +293,21 @@ export interface LocalPurchaseReceipt {
   reviewed_by?: string | null;
   reviewed_at?: string | null;
   received_at?: string | null;
+  source_total?: number | null;
   sync_status: SyncStatus;
-  items: Array<{ product_id: string; quantity: number; unit_cost: number; name?: string }>;
+  items: Array<{
+    id?: string;
+    product_id: string;
+    quantity: number;
+    unit_cost: number;
+    source_total?: number | null;
+    manufactured_on?: string | null;
+    expires_on?: string | null;
+    name?: string;
+    sku?: string;
+    retail_price?: number;
+    uom?: string;
+  }>;
 }
 
 export interface CartLine {
@@ -249,6 +323,7 @@ export interface ReceiptPayment {
   amount: number;
   tendered?: number;
   change_given?: number;
+  change_denominations?: Record<string, number>;
 }
 
 export type PaymentMode = "CASH" | "UPI" | "CARD" | "CREDIT";
@@ -388,7 +463,9 @@ export function matchesProductSearch(product: Product, query: string): boolean {
     ...(product.search_aliases ?? []),
     product.sku,
     product.barcode,
+    product.brand,
     product.category,
+    product.subcategory,
     product.variant,
   ]
     .filter((field): field is string => !!field)
@@ -465,7 +542,11 @@ export function useLocations() {
 }
 
 export function useProducts() {
-  return useLocalRows<Product & KeyedRecord>("catalog", ["products"]);
+  return useLocalRows<Product & KeyedRecord>(
+    "catalog",
+    ["products"],
+    (product) => product.is_active !== false,
+  );
 }
 
 export interface InventoryRow {
@@ -475,8 +556,53 @@ export interface InventoryRow {
   reserved_qty: number;
 }
 
+export interface LocationProductAssignment {
+  id: string;
+  product_id: string;
+  location_id: string;
+  stock_count_status: "AWAITING_COUNT" | "TRACKED";
+  review_status: "PENDING" | "APPROVED" | "REJECTED";
+  review_reason?: string | null;
+}
+
+export interface BarcodeCandidate {
+  id: string;
+  product_id: string;
+  location_id: string;
+  code: string;
+  status: "PENDING" | "VERIFIED" | "REJECTED";
+  created_at: string;
+  review_reason?: string | null;
+}
+
+export interface CategoryReview {
+  id: string;
+  location_id: string;
+  kind: "CATEGORY" | "SUBCATEGORY";
+  name: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  created_at: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_reason?: string | null;
+}
+
 export function useInventory() {
   return useLocalRows<InventoryRow & KeyedRecord>("inventory_snapshot", ["inventory"]);
+}
+
+export function useLocationProducts() {
+  return useLocalRows<LocationProductAssignment & KeyedRecord>("location_products", [
+    "location-products",
+  ]);
+}
+
+export function useBarcodeCandidates() {
+  return useLocalRows<BarcodeCandidate & KeyedRecord>("barcode_candidates", ["barcode-candidates"]);
+}
+
+export function useCategoryReviews() {
+  return useLocalRows<CategoryReview & KeyedRecord>("category_reviews", ["category-reviews"]);
 }
 
 export function useCustomers() {
@@ -533,6 +659,7 @@ export interface InvoiceItemRow {
   uom: string;
   discount: number;
   total: number;
+  unit_cost_snapshot?: number | null;
   products?: { name: string } | null;
   product_snapshot?: Product | null;
 }
@@ -552,6 +679,7 @@ export interface PaymentRow {
   mode: string;
   tendered: number | null;
   change_given: number | null;
+  change_denominations?: Record<string, number> | null;
   created_at: string;
 }
 
@@ -604,6 +732,7 @@ export interface PaymentSplitInput {
   mode: string;
   tendered?: number;
   change_given?: number;
+  change_denominations?: Record<string, number>;
 }
 
 function localId() {
@@ -650,13 +779,34 @@ async function localStockDelta(
     created_at: new Date().toISOString(),
     sync_status: "PENDING",
   };
+  const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
+    { store: "inventory_snapshot", value: inventory as KeyedRecord },
+    { store: "stock_movements", value: movement as KeyedRecord },
+  ];
+  if (delta > 0) {
+    const assignmentId = `${productId}:${locationId}`;
+    const currentAssignment = await getLocal<LocationProductAssignment & KeyedRecord>(
+      "location_products",
+      assignmentId,
+    );
+    entries.push({
+      store: "location_products",
+      value: {
+        ...(currentAssignment ?? {}),
+        id: assignmentId,
+        product_id: productId,
+        location_id: locationId,
+        stock_count_status: "TRACKED",
+        review_status: currentAssignment?.review_status ?? "PENDING",
+        review_reason: currentAssignment?.review_reason ?? null,
+        sync_status: "PENDING",
+      },
+    });
+  }
   return {
     inventory,
     movement,
-    entries: [
-      { store: "inventory_snapshot" as const, value: inventory as KeyedRecord },
-      { store: "stock_movements" as const, value: movement as KeyedRecord },
-    ],
+    entries,
   };
 }
 
@@ -669,7 +819,7 @@ export type LocalDraftLine = CartLine;
 export interface DraftPayload {
   invoice: LocalInvoice;
   customer: Customer | null;
-  customer_mode: "unset" | "chosen" | "walkin";
+  customer_mode: "unset" | "chosen";
   items: LocalDraftLine[];
   discount_mode: "AMOUNT" | "PERCENT";
   discount_input: number;
@@ -770,7 +920,83 @@ export async function saveLocalDraft(draft: DraftPayload): Promise<void> {
 
 export async function loadLocalDraftPayload(invoiceId: string): Promise<DraftPayload | undefined> {
   const row = await getLocal<KeyedRecord>("settings", `draft:${invoiceId}`);
-  return row?.["value"] as DraftPayload | undefined;
+  const cachedPayload = row?.["value"] as DraftPayload | undefined;
+  if (cachedPayload) return cachedPayload;
+
+  const invoice = await getLocal<LocalInvoice & KeyedRecord>("bills", invoiceId);
+  if (!invoice || invoice.status !== "DRAFT") return undefined;
+  const [invoiceItems, catalog, customers, outbox] = await Promise.all([
+    getAllLocal<InvoiceItemRow & KeyedRecord>("invoice_items"),
+    getAllLocal<Product & KeyedRecord>("catalog"),
+    getAllLocal<Customer & KeyedRecord>("customers"),
+    getAllLocal<KeyedRecord>("outbox"),
+  ]);
+  const productsById = new Map(catalog.map((product) => [product.id, product]));
+  const cachedItems: Array<InvoiceItemRow & KeyedRecord> = invoiceItems
+    .filter((item) => item.invoice_id === invoiceId)
+    .sort((left, right) => Number(left["line_index"] ?? 0) - Number(right["line_index"] ?? 0));
+  const draftOperation = outbox.find((entry) => {
+    if (entry["type"] !== "invoice.draft.save") return false;
+    const payload = entry["payload"];
+    return (
+      typeof payload === "object" &&
+      payload !== null &&
+      (payload as Record<string, unknown>)["record_id"] === invoiceId
+    );
+  });
+  const operationPayload =
+    draftOperation?.["payload"] && typeof draftOperation["payload"] === "object"
+      ? (draftOperation["payload"] as Record<string, unknown>)
+      : undefined;
+  const operationItems = Array.isArray(operationPayload?.["items"])
+    ? (operationPayload["items"] as Array<InvoiceItemRow & KeyedRecord>)
+    : [];
+  const itemRows = cachedItems.length ? cachedItems : operationItems;
+  const items = itemRows.map((item) => {
+    const product = item.product_snapshot ?? productsById.get(item.product_id);
+    if (!product)
+      throw new Error(`Product ${item.product_id} for this held bill is missing from this device.`);
+    return {
+      product,
+      quantity: Number(item.quantity),
+      unit_price: Number(item.unit_price),
+      uom: item.uom,
+      discount: Number(item.discount ?? 0),
+    };
+  });
+  const operationCustomer = operationPayload?.["customer"];
+  const customer =
+    customers.find((entry) => entry.id === invoice.customer_id) ??
+    (operationCustomer && typeof operationCustomer === "object"
+      ? (operationCustomer as Customer)
+      : null);
+  const payload: DraftPayload = {
+    invoice,
+    customer,
+    customer_mode: customer ? "chosen" : "unset",
+    items,
+    discount_mode: invoice.discount_mode ?? "AMOUNT",
+    discount_input: Number(invoice.discount_input ?? invoice.discount_amount ?? 0),
+  };
+  await commitLocalOperation(
+    [
+      {
+        store: "settings",
+        value: { key: `draft:${invoiceId}`, value: payload } as unknown as KeyedRecord,
+      },
+    ],
+    "invoice.draft.save",
+    {
+      record_id: invoiceId,
+      invoice,
+      items: itemRows,
+      customer,
+      customer_mode: payload.customer_mode,
+    },
+    invoice.location_id,
+    invoiceId,
+  );
+  return payload;
 }
 
 export async function voidLocalDraft(invoiceId: string): Promise<void> {
@@ -884,6 +1110,8 @@ export async function createPosInvoice(input: {
   cashierId?: string | null | undefined;
   cashierName?: string | undefined;
   customerId: string | null;
+  customerSegment?: string | null;
+  orderType?: string | null;
   discount: number;
   businessDate: string;
   items: Array<{
@@ -893,12 +1121,30 @@ export async function createPosInvoice(input: {
     uom: string;
     discount: number;
     total: number;
+    unit_cost_snapshot: number;
   }>;
   payments: PaymentSplitInput[];
 }): Promise<InvoiceResult> {
   if (input.items.length === 0) throw new Error("Add at least one item before checkout.");
+  if (!input.customerId) throw new Error("Select a customer before completing the bill.");
+  for (const item of input.items) {
+    const product = (await getLocal<Product & KeyedRecord>("catalog", item.product_id)) ?? null;
+    if (item.quantity <= 0 || !Number.isFinite(item.quantity))
+      throw new Error("Enter a valid item quantity.");
+    if (product && !product.is_loose && !Number.isInteger(item.quantity))
+      throw new Error(`${product.name} is sold in whole units. Enter a whole-number quantity.`);
+    if (product?.is_loose) {
+      const precision = Math.max(0, Math.min(3, product.quantity_precision ?? 3));
+      const scale = 10 ** precision;
+      if (Math.abs(item.quantity * scale - Math.round(item.quantity * scale)) > 0.0001)
+        throw new Error(`${product.name} supports up to ${precision} decimal places.`);
+    }
+  }
   const inventory = await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot");
   const products = await getAllLocal<Product & KeyedRecord>("catalog");
+  const assignments = await getAllLocal<LocationProductAssignment & KeyedRecord>(
+    "location_products",
+  );
   const existing = input.draftId
     ? await getLocal<LocalInvoice & KeyedRecord>("bills", input.draftId)
     : undefined;
@@ -909,6 +1155,10 @@ export async function createPosInvoice(input: {
     const stock = inventory.find(
       (row) => row.product_id === productId && row.location_id === input.locationId,
     );
+    const assignment = assignments.find(
+      (row) => row.product_id === productId && row.location_id === input.locationId,
+    );
+    if (!stock && assignment?.stock_count_status === "AWAITING_COUNT") continue;
     if (!stock || stock.quantity_on_hand - stock.reserved_qty < quantity) {
       const product = products.find((row) => row.id === productId);
       throw new Error(
@@ -917,7 +1167,7 @@ export async function createPosInvoice(input: {
     }
   }
 
-  const deviceId = input.cashierId ?? (await getDeviceId());
+  const deviceId = await getDeviceId();
   const location = await getLocal<Location & KeyedRecord>("locations", input.locationId);
   const invoiceNumber =
     existing?.invoice_number ??
@@ -926,6 +1176,20 @@ export async function createPosInvoice(input: {
   const id = existing?.id ?? input.draftId ?? localId();
   const subtotal = input.items.reduce((sum, item) => sum + item.total, 0);
   const total = Math.max(0, subtotal - input.discount);
+  const paymentError = validateRecordedPaymentSplit(total, input.payments);
+  if (paymentError) throw new Error(paymentError);
+  const creditAllocated = input.payments
+    .filter((payment) => payment.mode === "CREDIT")
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  if (creditAllocated > 0) {
+    const customer = await getLocal<Customer & KeyedRecord>("customers", input.customerId);
+    const availableCredit = Math.max(
+      (customer?.credit_limit ?? 0) - (customer?.outstanding_balance ?? 0),
+      0,
+    );
+    if (creditAllocated > availableCredit)
+      throw new Error(`Customer credit limit exceeded. Available credit: ${inr(availableCredit)}.`);
+  }
   const paid = input.payments
     .filter((payment) => payment.mode !== "CREDIT")
     .reduce((sum, payment) => sum + payment.amount, 0);
@@ -936,7 +1200,9 @@ export async function createPosInvoice(input: {
     invoice_number: invoiceNumber,
     location_id: input.locationId,
     customer_id: input.customerId,
-    cashier_id: deviceId,
+    customer_segment: input.customerSegment ?? null,
+    order_type: input.orderType ?? "Registered customer",
+    cashier_id: input.cashierId ?? deviceId,
     cashier_name: input.cashierName ?? "Cashier",
     total_amount: total,
     discount_amount: input.discount,
@@ -945,7 +1211,7 @@ export async function createPosInvoice(input: {
     payment_status: computePaymentStatus(total, paid),
     status: "COMPLETED",
     business_date: input.businessDate,
-    created_at: existing?.created_at ?? createdAt,
+    created_at: createdAt,
     updated_at: createdAt,
     sync_status: "PENDING",
   };
@@ -972,22 +1238,38 @@ export async function createPosInvoice(input: {
         }
       : row,
   );
-  const movements = [...grouped.entries()].map(([productId, quantity]) => {
-    const stock = stockRows.find(
-      (row) => row.product_id === productId && row.location_id === input.locationId,
-    );
-    return {
+  const trackedProductIds = new Set(
+    inventory.filter((row) => row.location_id === input.locationId).map((row) => row.product_id),
+  );
+  const movements = [...grouped.entries()]
+    .filter(([productId]) => trackedProductIds.has(productId))
+    .map(([productId, quantity]) => {
+      const stock = stockRows.find(
+        (row) => row.product_id === productId && row.location_id === input.locationId,
+      );
+      return {
+        id: localId(),
+        product_id: productId,
+        location_id: input.locationId,
+        movement_type: "SALE",
+        quantity_delta: -quantity,
+        quantity_on_hand: stock?.quantity_on_hand ?? 0,
+        reference: invoiceNumber,
+        created_at: createdAt,
+        sync_status: "PENDING",
+      } as KeyedRecord;
+    });
+  const uncountedSales = [...grouped.entries()]
+    .filter(([productId]) => !trackedProductIds.has(productId))
+    .map(([productId, quantity]) => ({
       id: localId(),
+      invoice_id: id,
       product_id: productId,
       location_id: input.locationId,
-      movement_type: "SALE",
-      quantity_delta: -quantity,
-      quantity_on_hand: stock?.quantity_on_hand ?? 0,
-      reference: invoiceNumber,
+      quantity,
       created_at: createdAt,
       sync_status: "PENDING",
-    } as KeyedRecord;
-  });
+    }));
   const updatedCustomers = input.customerId
     ? (await getAllLocal<Customer & KeyedRecord>("customers")).map((customer) =>
         customer.id === input.customerId
@@ -1019,6 +1301,10 @@ export async function createPosInvoice(input: {
         value: value as unknown as KeyedRecord,
       })),
     ...movements.map((value) => ({ store: "stock_movements" as const, value })),
+    ...uncountedSales.map((value) => ({
+      store: "uncounted_sales" as const,
+      value: value as unknown as KeyedRecord,
+    })),
     ...updatedCustomers
       .filter((customer) => customer.id === input.customerId)
       .map((value) => ({ store: "customers" as const, value: value as unknown as KeyedRecord })),
@@ -1032,6 +1318,7 @@ export async function createPosInvoice(input: {
       items: itemRows,
       payments: paymentRows,
       stock_movements: movements,
+      uncounted_sales: uncountedSales,
     },
     input.locationId,
   );
@@ -1042,6 +1329,10 @@ export async function createPosInvoice(input: {
 export async function addPayment(input: { invoiceId: string; amount: number; mode: string }) {
   const invoice = await getLocal<LocalInvoice & KeyedRecord>("bills", input.invoiceId);
   if (!invoice) throw new Error("Bill not found on this device.");
+  if (!Number.isFinite(input.amount) || input.amount <= 0 || input.amount > invoice.balance_amount)
+    throw new Error("Enter a valid collection amount within the bill balance.");
+  if (!["CASH", "UPI", "CARD"].includes(input.mode))
+    throw new Error("Choose Cash, UPI or Card for a collected payment.");
   const payment = {
     id: localId(),
     invoice_id: invoice.id,
@@ -1120,9 +1411,11 @@ export async function quickAddProduct(input: {
   searchAliases?: string[];
   sku?: string;
   barcode?: string | null;
+  barcodeType?: "MANUFACTURER" | "INTERNAL" | "UNVERIFIED" | null;
   priceTiers?: ProductPriceTier[];
   variant?: string | null;
   category?: string | null;
+  subcategory?: string | null;
   rackLocation?: string | null;
   salePrice: number;
   minSalePrice?: number;
@@ -1130,20 +1423,24 @@ export async function quickAddProduct(input: {
   mrp: number;
   uom: string;
   locationId: string;
-  openingQty: number;
+  openingQty?: number;
   minStock?: number;
   cashierQuickAdd?: boolean;
 }): Promise<Product> {
+  if (!input.name.trim()) throw new Error("Enter an item name.");
+  if (!Number.isFinite(input.salePrice) || input.salePrice <= 0)
+    throw new Error("Retail sell price must be greater than zero.");
+  const openingQty = input.openingQty ?? 0;
+  if (!Number.isFinite(openingQty) || openingQty < 0)
+    throw new Error("Available quantity cannot be negative.");
+  if (!input.uom.trim()) throw new Error("Choose a sale unit.");
   const sku = input.sku?.trim() || (await generateSku());
   const priceTiers = parsePriceTiers(input.priceTiers);
   const floorPrice = Math.min(input.minSalePrice ?? 0, input.salePrice);
   if (priceTiers.some((tier) => tier.unit_price < floorPrice || tier.unit_price > input.salePrice))
     throw new Error("Quantity prices must be between the minimum allowed price and retail price.");
   const allProducts = await getAllLocal<Product & KeyedRecord>("catalog");
-  const barcode = input.barcode?.trim() || barcodeForSku(sku);
-  if (allProducts.some((product) => product.barcode?.toLowerCase() === barcode.toLowerCase())) {
-    throw new Error("This barcode is already assigned to another product.");
-  }
+  const barcode = input.barcode?.trim() || null;
   if (allProducts.some((product) => product.sku?.toLowerCase() === sku.toLowerCase()))
     throw new Error("This SKU already exists.");
   const id = localId();
@@ -1156,7 +1453,15 @@ export async function quickAddProduct(input: {
     barcode,
     hsn: null,
     category: input.category || null,
+    subcategory: input.subcategory || null,
     variant: input.variant || null,
+    barcode_type: barcode
+      ? (input.barcodeType ?? (input.cashierQuickAdd ? "UNVERIFIED" : "MANUFACTURER"))
+      : null,
+    quantity_precision: 0,
+    review_status: "PENDING",
+    review_reason: null,
+    is_active: true,
     rack_location: input.rackLocation || null,
     purchase_cost: input.purchaseCost,
     mrp: input.mrp,
@@ -1174,16 +1479,58 @@ export async function quickAddProduct(input: {
   };
   const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
     { store: "catalog", value: { ...product, sync_status: "PENDING" } as unknown as KeyedRecord },
+    {
+      store: "location_products",
+      value: {
+        id: `${id}:${input.locationId}`,
+        product_id: id,
+        location_id: input.locationId,
+        stock_count_status: openingQty > 0 ? "TRACKED" : "AWAITING_COUNT",
+        review_status: "PENDING",
+        review_reason: null,
+        sync_status: "PENDING",
+      },
+    },
   ];
+  if (barcode && input.cashierQuickAdd) {
+    entries.push({
+      store: "barcode_candidates",
+      value: {
+        id: `${id}:${barcode}`,
+        product_id: id,
+        location_id: input.locationId,
+        code: barcode,
+        status: "PENDING",
+        created_at: new Date().toISOString(),
+      },
+    });
+  }
+  for (const [kind, value] of [
+    ["CATEGORY", input.category],
+    ["SUBCATEGORY", input.subcategory],
+  ] as const) {
+    const normalized = value?.trim();
+    if (!normalized) continue;
+    const reviewId = `${input.locationId}:${kind}:${normalized.toLowerCase()}`;
+    const existingReview = await getLocal<KeyedRecord>("category_reviews", reviewId);
+    if (!existingReview || existingReview["status"] === "REJECTED") {
+      entries.push({
+        store: "category_reviews",
+        value: {
+          ...existingReview,
+          id: reviewId,
+          location_id: input.locationId,
+          kind,
+          name: normalized,
+          status: "PENDING",
+          created_at: new Date().toISOString(),
+        },
+      });
+    }
+  }
   const movement =
-    input.openingQty > 0
-      ? await localStockDelta(
-          product.id,
-          input.locationId,
-          input.openingQty,
-          "OPENING",
-          `SKU ${sku}`,
-        )
+    openingQty > 0
+      ? await localStockDelta(product.id, input.locationId, openingQty, "OPENING", `SKU ${sku}`)
       : null;
   if (movement) entries.push(...movement.entries);
   await commitLocalOperation(
@@ -1192,8 +1539,16 @@ export async function quickAddProduct(input: {
     {
       record_id: id,
       product,
-      opening_qty: input.openingQty,
+      opening_qty: openingQty,
       location_id: input.locationId,
+      location_product: entries.find((entry) => entry.store === "location_products")?.value,
+      barcode_candidate:
+        input.cashierQuickAdd && barcode
+          ? entries.find((entry) => entry.store === "barcode_candidates")?.value
+          : null,
+      category_reviews: entries
+        .filter((entry) => entry.store === "category_reviews")
+        .map((entry) => entry.value),
       stock_movements: movement ? [movement.movement] : [],
     },
     input.locationId,
@@ -1202,25 +1557,121 @@ export async function quickAddProduct(input: {
   return product;
 }
 
-export async function addCustomer(input: {
+export async function resubmitRejectedProduct(input: {
+  productId: string;
+  locationId: string;
   name: string;
+  sku: string;
+  variant: string | null;
+  category: string | null;
+  subcategory: string | null;
+  salePrice: number;
+  uom: string;
+}): Promise<Product> {
+  const current = await getLocal<Product & KeyedRecord>("catalog", input.productId);
+  if (!current || current.review_status !== "REJECTED")
+    throw new Error(
+      "This SKU is no longer awaiting correction. Refresh the catalog and try again.",
+    );
+  if (
+    !input.name.trim() ||
+    !input.uom.trim() ||
+    !Number.isFinite(input.salePrice) ||
+    input.salePrice <= 0
+  )
+    throw new Error("Enter the item name, sale unit and a valid retail price.");
+  const sku = input.sku.trim();
+  if (!sku) throw new Error("Enter a valid SKU.");
+  const duplicate = (await getAllLocal<Product & KeyedRecord>("catalog")).some(
+    (product) => product.id !== current.id && product.sku?.toLowerCase() === sku.toLowerCase(),
+  );
+  if (duplicate) throw new Error("That SKU is already assigned to another product.");
+  const product: Product = {
+    ...current,
+    name: input.name.trim(),
+    sku,
+    variant: input.variant?.trim() || null,
+    category: input.category?.trim() || null,
+    subcategory: input.subcategory?.trim() || null,
+    sale_price: input.salePrice,
+    uom_sale: input.uom.trim(),
+    review_status: "PENDING",
+    review_reason: null,
+    enrichment_status: "PENDING",
+  };
+  const assignmentId = `${product.id}:${input.locationId}`;
+  const assignment = await getLocal<LocationProductAssignment & KeyedRecord>(
+    "location_products",
+    assignmentId,
+  );
+  if (!assignment) throw new Error("This SKU is not assigned to the active store.");
+  const updatedAssignment = {
+    ...assignment,
+    review_status: "PENDING",
+    review_reason: null,
+    sync_status: "PENDING",
+  };
+  const categoryReviews: KeyedRecord[] = [];
+  for (const [kind, value] of [
+    ["CATEGORY", product.category],
+    ["SUBCATEGORY", product.subcategory],
+  ] as const) {
+    if (!value) continue;
+    const id = `${input.locationId}:${kind}:${value.toLowerCase()}`;
+    const existingReview = await getLocal<KeyedRecord>("category_reviews", id);
+    if (!existingReview || existingReview["status"] === "REJECTED")
+      categoryReviews.push({
+        ...existingReview,
+        id,
+        location_id: input.locationId,
+        kind,
+        name: value,
+        status: "PENDING",
+        created_at: new Date().toISOString(),
+      });
+  }
+  await commitLocalOperation(
+    [
+      { store: "catalog", value: { ...product, sync_status: "PENDING" } as unknown as KeyedRecord },
+      { store: "location_products", value: updatedAssignment as unknown as KeyedRecord },
+      ...categoryReviews.map((value) => ({ store: "category_reviews" as const, value })),
+    ],
+    "product.quick_add",
+    {
+      record_id: product.id,
+      product,
+      correction: true,
+      location_id: input.locationId,
+      location_product: updatedAssignment,
+      category_reviews: categoryReviews,
+    },
+    input.locationId,
+  );
+  triggerBackgroundSync();
+  return product;
+}
+
+export async function addCustomer(input: {
+  name: string | null;
   mobile: string | null;
   creditLimit: number;
   ageGroup?: string | null;
   gender?: string | null;
   outstandingBalance?: number;
 }): Promise<Customer> {
-  const normalizedName = input.name.trim().toLocaleLowerCase("hi-IN");
+  const normalizedName = input.name?.trim().toLocaleLowerCase("hi-IN") || null;
   const normalizedMobile = input.mobile?.replace(/\D/g, "") || null;
+  if (!normalizedName && !normalizedMobile)
+    throw new Error("Enter a customer name or mobile number.");
   const duplicate = (await getAllLocal<Customer & KeyedRecord>("customers")).find(
     (customer) =>
-      customer.name.trim().toLocaleLowerCase("hi-IN") === normalizedName &&
+      (customer.name?.trim().toLocaleLowerCase("hi-IN") || null) === normalizedName &&
       (customer.mobile?.replace(/\D/g, "") || null) === normalizedMobile,
   );
   if (duplicate) return duplicate;
   const customer: Customer = {
     id: localId(),
-    name: input.name.trim(),
+    name: input.name?.trim() || null,
     mobile: input.mobile?.trim() || null,
     age_group: input.ageGroup || null,
     gender: input.gender || null,
@@ -1250,6 +1701,8 @@ export async function updateCustomer(
   const current = await getLocal<Customer & KeyedRecord>("customers", customerId);
   if (!current) throw new Error("Customer not found on this device.");
   const updated = { ...current, ...patch, sync_status: "PENDING" };
+  if (!updated.name?.trim() && !updated.mobile?.replace(/\D/g, ""))
+    throw new Error("A customer needs a name or mobile number.");
   await commitLocalOperation(
     [{ store: "customers", value: updated as unknown as KeyedRecord }],
     "customer.update",
@@ -1276,11 +1729,6 @@ export async function updateProductProfile(productId: string, patch: Partial<Pro
     (product) => product.id !== productId && product.sku?.toLowerCase() === nextSku?.toLowerCase(),
   );
   if (duplicateSku) throw new Error("This SKU is already assigned to another product.");
-  const duplicateBarcode = catalog.some(
-    (product) =>
-      product.id !== productId && product.barcode?.toLowerCase() === nextBarcode?.toLowerCase(),
-  );
-  if (duplicateBarcode) throw new Error("This barcode is already assigned to another product.");
   const priceTiers =
     patch.price_tiers === undefined
       ? (current.price_tiers ?? [])
@@ -1294,6 +1742,12 @@ export async function updateProductProfile(productId: string, patch: Partial<Pro
     ...patch,
     sku: nextSku,
     barcode: nextBarcode,
+    barcode_type:
+      nextBarcode === barcodeForSku(nextSku ?? "")
+        ? ("INTERNAL" as const)
+        : nextBarcode
+          ? (patch.barcode_type ?? current.barcode_type ?? "MANUFACTURER")
+          : null,
     price_tiers: priceTiers,
     sync_status: "PENDING",
   };
@@ -1339,25 +1793,49 @@ export async function requestIndent(input: {
   });
 }
 
+function aggregateTransferItems(items: ReadonlyArray<{ product_id: unknown; quantity: unknown }>) {
+  if (items.length === 0) throw new Error("Add at least one product to the transfer.");
+
+  const quantities = new Map<string, number>();
+  for (const item of items) {
+    const productId = typeof item.product_id === "string" ? item.product_id.trim() : "";
+    const quantity = Number(item.quantity);
+    if (!productId) throw new Error("Every transfer item must have a product.");
+    if (!Number.isFinite(quantity) || quantity <= 0)
+      throw new Error("Transfer quantities must be finite and greater than zero.");
+
+    const total = (quantities.get(productId) ?? 0) + quantity;
+    if (!Number.isFinite(total)) throw new Error("The combined transfer quantity is too large.");
+    quantities.set(productId, total);
+  }
+
+  return Array.from(quantities, ([product_id, quantity]) => ({ product_id, quantity }));
+}
+
 export async function createTransfer(input: {
   fromLocationId: string;
   toLocationId: string;
   items: Array<{ product_id: string; quantity: number }>;
   notes: string | null;
 }) {
-  if (input.fromLocationId === input.toLocationId)
-    throw new Error("Choose two different locations.");
-  if (input.items.length === 0 || input.items.some((item) => item.quantity <= 0))
-    throw new Error("Transfer quantities must be greater than zero.");
+  const fromLocationId = input.fromLocationId.trim();
+  const toLocationId = input.toLocationId.trim();
+  if (!fromLocationId || !toLocationId) throw new Error("Choose a source and destination.");
+  if (fromLocationId === toLocationId) throw new Error("Choose two different locations.");
+  const transferItems = aggregateTransferItems(input.items);
   const transfer: StockTransfer = {
     id: localId(),
-    from_location_id: input.fromLocationId,
-    to_location_id: input.toLocationId,
+    from_location_id: fromLocationId,
+    to_location_id: toLocationId,
     status: "REQUESTED",
     notes: input.notes,
     created_at: new Date().toISOString(),
   };
-  const items = input.items.map((item) => ({ id: localId(), transfer_id: transfer.id, ...item }));
+  const items = transferItems.map((item) => ({
+    id: localId(),
+    transfer_id: transfer.id,
+    ...item,
+  }));
   await commitLocalOperation(
     [
       {
@@ -1371,7 +1849,7 @@ export async function createTransfer(input: {
     ],
     "inventory.transfer.create",
     { record_id: transfer.id, transfer, items },
-    input.fromLocationId,
+    fromLocationId,
   );
   triggerBackgroundSync();
   return transfer;
@@ -1383,6 +1861,12 @@ export async function setTransferStatus(transferId: string, status: string) {
   const items = (await getAllLocal<KeyedRecord>("transfer_items")).filter(
     (item) => item["transfer_id"] === transferId,
   );
+  const stockItems = aggregateTransferItems(
+    items.map((item) => ({
+      product_id: item["product_id"],
+      quantity: item["quantity"],
+    })),
+  );
   const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
     {
       store: "stock_transfers",
@@ -1391,11 +1875,11 @@ export async function setTransferStatus(transferId: string, status: string) {
   ];
   const movements: KeyedRecord[] = [];
   if (status === "IN_TRANSIT" && transfer.status === "REQUESTED") {
-    for (const item of items) {
+    for (const item of stockItems) {
       const result = await localStockDelta(
-        String(item["product_id"]),
+        item.product_id,
         transfer.from_location_id,
-        -Number(item["quantity"]),
+        -item.quantity,
         "TRANSFER OUT",
         transferId,
       );
@@ -1419,6 +1903,12 @@ export async function receiveTransfer(transferId: string) {
   const items = (await getAllLocal<KeyedRecord>("transfer_items")).filter(
     (item) => item["transfer_id"] === transferId,
   );
+  const stockItems = aggregateTransferItems(
+    items.map((item) => ({
+      product_id: item["product_id"],
+      quantity: item["quantity"],
+    })),
+  );
   const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
     {
       store: "stock_transfers",
@@ -1426,12 +1916,12 @@ export async function receiveTransfer(transferId: string) {
     },
   ];
   const movements: KeyedRecord[] = [];
-  for (const item of items) {
+  for (const item of stockItems) {
     if (transfer.status === "REQUESTED") {
       const outgoing = await localStockDelta(
-        String(item["product_id"]),
+        item.product_id,
         transfer.from_location_id,
-        -Number(item["quantity"]),
+        -item.quantity,
         "TRANSFER OUT",
         transferId,
       );
@@ -1439,9 +1929,9 @@ export async function receiveTransfer(transferId: string) {
       movements.push(outgoing.movement as unknown as KeyedRecord);
     }
     const incoming = await localStockDelta(
-      String(item["product_id"]),
+      item.product_id,
       transfer.to_location_id,
-      Number(item["quantity"]),
+      item.quantity,
       "TRANSFER IN",
       transferId,
     );
@@ -1505,9 +1995,74 @@ export async function createAdjustment(input: {
   triggerBackgroundSync();
 }
 
+/** Record an absolute physical count and start tracked-stock accounting at this location. */
+export async function countLocationStock(input: {
+  productId: string;
+  locationId: string;
+  countedQuantity: number;
+}) {
+  const counted = input.countedQuantity;
+  if (!Number.isFinite(counted) || counted < 0)
+    throw new Error("Enter a valid non-negative physical count.");
+  const product = await getLocal<Product & KeyedRecord>("catalog", input.productId);
+  if (!product || product.is_active === false)
+    throw new Error("This SKU is no longer active. Refresh the inventory list and try again.");
+  if (!product.is_loose && !Number.isInteger(counted))
+    throw new Error("This SKU is counted in whole units.");
+  const precision = Math.max(0, Math.min(3, product.quantity_precision ?? 0));
+  const scale = 10 ** precision;
+  if (product.is_loose && Math.abs(counted * scale - Math.round(counted * scale)) > 0.0001)
+    throw new Error(`This SKU supports up to ${precision} decimal places.`);
+
+  const current =
+    (await getAllLocal<InventoryRow & KeyedRecord>("inventory_snapshot")).find(
+      (row) => row.product_id === input.productId && row.location_id === input.locationId,
+    )?.quantity_on_hand ?? 0;
+  const delta = counted - current;
+  const reason = `Physical count: ${current} → ${counted}`;
+  const stock = await localStockDelta(input.productId, input.locationId, delta, "COUNT", reason);
+  const assignmentId = `${input.productId}:${input.locationId}`;
+  const assignment = {
+    ...(await getLocal<LocationProductAssignment & KeyedRecord>("location_products", assignmentId)),
+    id: assignmentId,
+    product_id: input.productId,
+    location_id: input.locationId,
+    stock_count_status: "TRACKED" as const,
+    review_status: "APPROVED" as const,
+    review_reason: null,
+    sync_status: "PENDING",
+  };
+  const adjustment = {
+    id: localId(),
+    product_id: input.productId,
+    location_id: input.locationId,
+    quantity: delta,
+    reason,
+    returnable_to_vendor: false,
+    cost_loss: 0,
+    created_at: new Date().toISOString(),
+  };
+  await commitLocalOperation(
+    [
+      ...stock.entries,
+      { store: "location_products", value: assignment as unknown as KeyedRecord },
+      { store: "stock_adjustments", value: { ...adjustment, sync_status: "PENDING" } },
+    ],
+    "inventory.adjustment.create",
+    {
+      record_id: adjustment.id,
+      adjustment,
+      stock_movement: stock.movement,
+    },
+    input.locationId,
+  );
+  triggerBackgroundSync();
+}
+
 export async function openSession(input: {
   locationId: string;
   openedBy: string;
+  openedById: string;
   openingCash: number;
   openingDenominations?: Record<number, number> | null;
 }): Promise<string> {
@@ -1516,6 +2071,7 @@ export async function openSession(input: {
     id,
     location_id: input.locationId,
     opened_by: input.openedBy,
+    opened_by_id: input.openedById,
     opening_cash: input.openingCash,
     closing_cash: null,
     cash_sales: 0,
@@ -1548,6 +2104,7 @@ export async function openSession(input: {
 
 export async function closeSession(input: {
   sessionId: string;
+  actorUserId: string;
   cashIn: number | null;
   cashOut: number | null;
   countedCash: number | null;
@@ -1558,29 +2115,40 @@ export async function closeSession(input: {
     throw new Error("No open cash session found on this device.");
   const invoices = await getAllLocal<LocalInvoice & KeyedRecord>("bills");
   const payments = await getAllLocal<PaymentRow & KeyedRecord>("payments");
-  const invoiceIds = new Set(
+  const locationByInvoiceId = new Map(
     invoices
-      .filter(
-        (invoice) =>
-          invoice.location_id === session.location_id && invoice.created_at >= session.opened_at,
-      )
-      .map((invoice) => invoice.id),
+      .filter((invoice) => invoice.location_id === session.location_id)
+      .map((invoice) => [invoice.id, invoice.location_id]),
   );
+  const closedAt = new Date().toISOString();
   const cashSales = payments
-    .filter((payment) => invoiceIds.has(payment.invoice_id) && payment.mode === "CASH")
+    .filter(
+      (payment) =>
+        locationByInvoiceId.has(payment.invoice_id) &&
+        payment.mode === "CASH" &&
+        payment.created_at >= session.opened_at &&
+        payment.created_at <= closedAt,
+    )
     .reduce((sum, payment) => sum + payment.amount, 0);
   const cashIn = input.cashIn ?? session.cash_in;
   const cashOut = input.cashOut ?? session.cash_out;
   const expected = session.opening_cash + cashSales + cashIn - cashOut;
-  const difference = (input.countedCash ?? expected) - expected;
+  if (input.countedCash === null)
+    throw new Error("Enter the closing denomination count before closing the shift.");
+  const difference = input.countedCash - expected;
+  if (Math.abs(difference) > 0.01)
+    throw new Error(
+      `Drawer is out by ${inr(Math.abs(difference))}. Recount the cash or request a Manager override.`,
+    );
   const updated: CashSession = {
     ...session,
     cash_sales: cashSales,
     cash_in: cashIn,
     cash_out: cashOut,
-    closing_cash: input.countedCash ?? expected,
+    closing_cash: input.countedCash,
+    closed_by_id: input.actorUserId,
     status: "CLOSED",
-    closed_at: new Date().toISOString(),
+    closed_at: closedAt,
     closing_denominations: input.closingDenominations
       ? Object.fromEntries(
           Object.entries(input.closingDenominations).map(([key, value]) => [key, Number(value)]),
@@ -1683,8 +2251,6 @@ export async function legacyStockSet(input: {
 }
 
 /* ----------------------------- denominations ----------------------------- */
-
-export const DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1] as const;
 
 export function denomTotal(counts: Record<string, number> | null | undefined): number {
   if (!counts) return 0;

@@ -82,6 +82,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#176b55" },
       { title: "RetailHub POS" },
       {
         name: "description",
@@ -104,7 +105,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
       { rel: "manifest", href: "/manifest.webmanifest" },
-      { name: "theme-color", content: "#176b55" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {
@@ -163,29 +163,9 @@ function RootComponent() {
         }
       });
     if ("serviceWorker" in navigator && import.meta.env.PROD) {
-      void navigator.serviceWorker
-        .register("/sw.js", { scope: "/" })
-        .then(async () => {
-          await navigator.serviceWorker.ready;
-          await Promise.allSettled([
-            import("./index"),
-            import("./billing"),
-            import("./sales"),
-            import("./inventory"),
-            import("./purchases"),
-            import("./cash-drawer"),
-            import("./manager"),
-            import("./admin"),
-            // Load on-demand bundles online once so offline OCR and spreadsheets
-            // remain usable after the service worker takes control.
-            import("xlsx"),
-            import("tesseract.js"),
-            import("pdfjs-dist/legacy/build/pdf.mjs"),
-          ]);
-        })
-        .catch((error) => {
-          console.warn("RetailFlow offline app shell could not be registered", error);
-        });
+      void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((error) => {
+        console.warn("RetailFlow offline app shell could not be registered", error);
+      });
     }
     return () => {
       cancelled = true;

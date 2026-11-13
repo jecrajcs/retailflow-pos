@@ -6,7 +6,6 @@ import {
   ArrowUpRight,
   CircleAlert,
   Cloud,
-  Plus,
   RefreshCw,
   ShoppingBag,
   Wallet,
@@ -188,9 +187,9 @@ function StaffDashboardPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
       <AppNav active="/" />
-      <main className="mx-auto w-full max-w-[1500px] flex-1 space-y-5 p-3 sm:p-5">
+      <main className="mx-auto min-h-0 w-full max-w-[1500px] flex-1 space-y-5 overflow-y-auto p-3 sm:p-5">
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4 sm:p-6">
           <div>
             <p className="text-sm text-muted-foreground">
@@ -216,11 +215,6 @@ function StaffDashboardPage() {
               className="gap-2"
             >
               <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} /> Sync now
-            </Button>
-            <Button asChild className="gap-2">
-              <Link to="/billing">
-                <Plus className="h-4 w-4" /> New bill
-              </Link>
             </Button>
           </div>
         </section>
