@@ -204,10 +204,15 @@ export async function acceptScannerAnswer(
   await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
 }
 
-export function sendBarcode(channel: RTCDataChannel, code: string) {
+export function sendBarcode(channel: RTCDataChannel, code: string, scanId?: string) {
   const value = code.trim();
   if (!value || channel.readyState !== "open") return false;
-  channel.send(JSON.stringify({ type: "barcode", code: value, at: Date.now() }));
+  const id =
+    scanId ??
+    (typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  channel.send(JSON.stringify({ type: "barcode", code: value, scan_id: id, at: Date.now() }));
   return true;
 }
 
@@ -230,11 +235,16 @@ export async function sendImageReview(channel: RTCDataChannel, image: Blob) {
   channel.send(message);
 }
 
-export function isBarcodeMessage(value: unknown): value is { type: "barcode"; code: string } {
+export function isBarcodeMessage(
+  value: unknown,
+): value is { type: "barcode"; code: string; scan_id?: string } {
   if (!value || typeof value !== "object") return false;
-  const message = value as { type?: unknown; code?: unknown };
+  const message = value as { type?: unknown; code?: unknown; scan_id?: unknown };
   return (
-    message.type === "barcode" && typeof message.code === "string" && message.code.trim().length > 0
+    message.type === "barcode" &&
+    typeof message.code === "string" &&
+    message.code.trim().length > 0 &&
+    (message.scan_id === undefined || typeof message.scan_id === "string")
   );
 }
 

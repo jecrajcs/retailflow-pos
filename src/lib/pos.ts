@@ -920,7 +920,83 @@ export async function saveLocalDraft(draft: DraftPayload): Promise<void> {
 
 export async function loadLocalDraftPayload(invoiceId: string): Promise<DraftPayload | undefined> {
   const row = await getLocal<KeyedRecord>("settings", `draft:${invoiceId}`);
-  return row?.["value"] as DraftPayload | undefined;
+  const cachedPayload = row?.["value"] as DraftPayload | undefined;
+  if (cachedPayload) return cachedPayload;
+
+  const invoice = await getLocal<LocalInvoice & KeyedRecord>("bills", invoiceId);
+  if (!invoice || invoice.status !== "DRAFT") return undefined;
+  const [invoiceItems, catalog, customers, outbox] = await Promise.all([
+    getAllLocal<InvoiceItemRow & KeyedRecord>("invoice_items"),
+    getAllLocal<Product & KeyedRecord>("catalog"),
+    getAllLocal<Customer & KeyedRecord>("customers"),
+    getAllLocal<KeyedRecord>("outbox"),
+  ]);
+  const productsById = new Map(catalog.map((product) => [product.id, product]));
+  const cachedItems: Array<InvoiceItemRow & KeyedRecord> = invoiceItems
+    .filter((item) => item.invoice_id === invoiceId)
+    .sort((left, right) => Number(left["line_index"] ?? 0) - Number(right["line_index"] ?? 0));
+  const draftOperation = outbox.find((entry) => {
+    if (entry["type"] !== "invoice.draft.save") return false;
+    const payload = entry["payload"];
+    return (
+      typeof payload === "object" &&
+      payload !== null &&
+      (payload as Record<string, unknown>)["record_id"] === invoiceId
+    );
+  });
+  const operationPayload =
+    draftOperation?.["payload"] && typeof draftOperation["payload"] === "object"
+      ? (draftOperation["payload"] as Record<string, unknown>)
+      : undefined;
+  const operationItems = Array.isArray(operationPayload?.["items"])
+    ? (operationPayload["items"] as Array<InvoiceItemRow & KeyedRecord>)
+    : [];
+  const itemRows = cachedItems.length ? cachedItems : operationItems;
+  const items = itemRows.map((item) => {
+    const product = item.product_snapshot ?? productsById.get(item.product_id);
+    if (!product)
+      throw new Error(`Product ${item.product_id} for this held bill is missing from this device.`);
+    return {
+      product,
+      quantity: Number(item.quantity),
+      unit_price: Number(item.unit_price),
+      uom: item.uom,
+      discount: Number(item.discount ?? 0),
+    };
+  });
+  const operationCustomer = operationPayload?.["customer"];
+  const customer =
+    customers.find((entry) => entry.id === invoice.customer_id) ??
+    (operationCustomer && typeof operationCustomer === "object"
+      ? (operationCustomer as Customer)
+      : null);
+  const payload: DraftPayload = {
+    invoice,
+    customer,
+    customer_mode: customer ? "chosen" : "unset",
+    items,
+    discount_mode: invoice.discount_mode ?? "AMOUNT",
+    discount_input: Number(invoice.discount_input ?? invoice.discount_amount ?? 0),
+  };
+  await commitLocalOperation(
+    [
+      {
+        store: "settings",
+        value: { key: `draft:${invoiceId}`, value: payload } as unknown as KeyedRecord,
+      },
+    ],
+    "invoice.draft.save",
+    {
+      record_id: invoiceId,
+      invoice,
+      items: itemRows,
+      customer,
+      customer_mode: payload.customer_mode,
+    },
+    invoice.location_id,
+    invoiceId,
+  );
+  return payload;
 }
 
 export async function voidLocalDraft(invoiceId: string): Promise<void> {

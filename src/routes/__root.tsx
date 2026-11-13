@@ -163,32 +163,9 @@ function RootComponent() {
         }
       });
     if ("serviceWorker" in navigator && import.meta.env.PROD) {
-      void navigator.serviceWorker
-        .register("/sw.js", { scope: "/" })
-        .then(async () => {
-          await navigator.serviceWorker.ready;
-          await Promise.allSettled([
-            import("./index"),
-            import("./billing"),
-            import("./sales"),
-            import("./inventory"),
-            import("./purchases"),
-            import("./cash-drawer"),
-            import("./manager"),
-            import("./admin"),
-            import("./barcodes"),
-            import("./scanner"),
-            // Load on-demand bundles online once so offline OCR and spreadsheets
-            // remain usable after the service worker takes control.
-            import("xlsx"),
-            import("tesseract.js"),
-            import("pdfjs-dist/legacy/build/pdf.mjs"),
-            import("@zxing/browser"),
-          ]);
-        })
-        .catch((error) => {
-          console.warn("RetailFlow offline app shell could not be registered", error);
-        });
+      void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((error) => {
+        console.warn("RetailFlow offline app shell could not be registered", error);
+      });
     }
     return () => {
       cancelled = true;

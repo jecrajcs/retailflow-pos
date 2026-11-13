@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Zap } from "lucide-react";
+import { Camera, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BarcodePreview } from "@/components/pos/barcode-preview";
+import { CameraScannerPanel } from "@/components/pos/camera-scanner";
 import {
   UOMS,
   barcodeForSku,
@@ -61,12 +62,14 @@ export function QuickAddModal({
   const [category, setCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [internalBarcode, setInternalBarcode] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
   const [uom, setUom] = useState("Pcs");
   const [salePrice, setSalePrice] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
+      setCameraActive(false);
       if (correctionProduct) {
         setSku(correctionProduct.sku ?? "");
         setName(correctionProduct.name);
@@ -215,12 +218,37 @@ export function QuickAddModal({
                 id="qa-barcode"
                 value={barcode}
                 onChange={(e) => setBarcode(e.target.value)}
-                readOnly={!managerMode}
-                placeholder={managerMode ? "Manufacturer barcode" : "Captured from scan"}
+                placeholder={
+                  managerMode ? "Scan or enter manufacturer barcode" : "Scan or enter barcode"
+                }
                 onKeyDown={(e) => e.key === "Enter" && handleSave()}
               />
             </div>
           </div>
+          {!correctionProduct && (
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCameraActive((active) => !active)}
+              >
+                <Camera className="mr-2 h-4 w-4" />
+                {cameraActive ? "Close barcode camera" : "Scan barcode with camera"}
+              </Button>
+              {cameraActive && (
+                <CameraScannerPanel
+                  active={open && cameraActive}
+                  compact
+                  onScan={(value) => {
+                    setBarcode(value);
+                    setCameraActive(false);
+                    toast.success("Barcode captured", { description: value });
+                  }}
+                />
+              )}
+            </div>
+          )}
 
           <div className={`grid gap-2 ${managerMode ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
             <div className="space-y-1">

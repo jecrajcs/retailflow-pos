@@ -1,6 +1,6 @@
 import { DENOMINATIONS } from "@/lib/cash-denominations";
 
-export const CASH_DENOMINATIONS = [...DENOMINATIONS, 0.5] as const;
+export const CASH_DENOMINATIONS = DENOMINATIONS;
 
 export type PaymentAllocationLine = {
   mode: string;

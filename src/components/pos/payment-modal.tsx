@@ -220,7 +220,7 @@ export function PaymentModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Collect payment</DialogTitle>
           <DialogDescription>
@@ -284,12 +284,12 @@ export function PaymentModal({
             const Icon = MODES.find((m) => m.value === s.mode)?.icon ?? Banknote;
             return (
               <div key={i} className="space-y-1.5">
-                <div className="flex items-center gap-2">
+                <div className="grid grid-cols-[2rem_minmax(0,0.8fr)_minmax(0,1fr)_auto] items-center gap-2 sm:flex">
                   <div className="flex h-9 w-9 items-center justify-center rounded-md border bg-muted/40">
                     <Icon className="h-4 w-4" />
                   </div>
                   <SearchableSelect
-                    className="w-44"
+                    className="min-w-0 sm:w-44 sm:shrink-0"
                     value={s.mode}
                     onValueChange={(value) => updateSplit(i, { mode: value as PaymentMode })}
                     options={availableModes
@@ -302,7 +302,7 @@ export function PaymentModal({
                   />
                   <Input
                     type="number"
-                    className="text-right"
+                    className="min-w-0 text-right"
                     value={s.amount}
                     onChange={(e) => updateSplit(i, { amount: e.target.value })}
                     aria-label={s.mode === "CASH" ? "Cash tendered" : `${s.mode} payment amount`}
@@ -319,7 +319,7 @@ export function PaymentModal({
                   )}
                 </div>
                 {s.mode === "CASH" && (
-                  <div className="flex items-center gap-1.5 pl-11">
+                  <div className="flex flex-wrap items-center gap-1.5 pl-0 sm:pl-11">
                     {CASH_DENOMINATIONS.map((n) => (
                       <button
                         key={n}

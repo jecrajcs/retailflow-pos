@@ -190,7 +190,17 @@ function PosPage() {
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const barcodeRef = useRef<HTMLInputElement>(null);
-  const remoteScanHandler = useRef<(code: string) => void>(() => undefined);
+  const cartLinesRef = useRef<CartLine[]>([]);
+  const remoteScanHandler = useRef<(code: string, scanId?: string) => void>(() => undefined);
+  const pendingScannedCode = useRef<{ code: string; scanId?: string } | null>(null);
+  const pendingBarcodeChoiceScanId = useRef<string | null>(null);
+  const scannerChannelRef = useRef<BroadcastChannel | null>(null);
+
+  const updateLines = useCallback((next: CartLine[] | ((previous: CartLine[]) => CartLine[])) => {
+    const updated = typeof next === "function" ? next(cartLinesRef.current) : next;
+    cartLinesRef.current = updated;
+    setLines(updated);
+  }, []);
 
   useEffect(() => {
     if (draftRestored || salesQuery.isLoading) return;
@@ -220,7 +230,7 @@ function PosPage() {
               !payload.customer.mobile;
             setWalkIn(isWalkIn);
             setCustomerChoice(payload.customer ? (isWalkIn ? "walk-in" : "customer") : "unset");
-            setLines(payload.items);
+            updateLines(payload.items);
             setDiscount(payload.discount_input);
             setDiscountMode(payload.discount_mode);
             setBusinessDate(existing.business_date);
@@ -237,7 +247,7 @@ function PosPage() {
     return () => {
       active = false;
     };
-  }, [sales, draftRestored, profile, salesQuery.isLoading]);
+  }, [sales, draftRestored, profile, salesQuery.isLoading, updateLines]);
 
   useEffect(() => {
     if (!draftRestored || !locationId || !customer || currentInvoice) return;
@@ -346,14 +356,21 @@ function PosPage() {
     setTimeout(() => barcodeRef.current?.focus(), 30);
   }
 
+  useEffect(() => {
+    if (!customer || !locationId || !pendingScannedCode.current) return;
+    const pending = pendingScannedCode.current;
+    pendingScannedCode.current = null;
+    window.setTimeout(() => remoteScanHandler.current(pending.code, pending.scanId), 0);
+  }, [customer, locationId]);
+
   function addToCart(product: Product, allowNewUncounted = false) {
     if (!customer) {
       setCustOpen(true);
-      return;
+      return false;
     }
     if (!locationId) {
       toast.error("Select the store first");
-      return;
+      return false;
     }
     if (product.review_status === "REJECTED") {
       setCorrectionProduct(product);
@@ -362,26 +379,30 @@ function PosPage() {
       toast.error("This SKU needs a correction before sale.", {
         description: product.review_reason || "Review the item details and resubmit them.",
       });
-      return;
+      return false;
     }
     const uncounted = allowNewUncounted || awaitingCount(product.id, locationId);
     if (!uncounted && stockAt(product.id, locationId) <= 0) {
       toast.error("Out of stock at this store", {
         description: `Choose another store or request a transfer for ${product.name}.`,
       });
-      return;
+      return false;
     }
-    setLines((prev) => {
-      const existing = prev.find((l) => l.product.id === product.id);
-      if (existing) {
-        const nextQuantity = existing.quantity + 1;
-        if (!uncounted && nextQuantity > stockAt(product.id, locationId)) {
+    const existing = cartLinesRef.current.find((line) => line.product.id === product.id);
+    if (existing && !uncounted && existing.quantity + 1 > stockAt(product.id, locationId)) {
+      toast.warning(`Only ${stockAt(product.id, locationId)} in stock at this store`);
+      return false;
+    }
+    updateLines((prev) => {
+      const current = prev.find((line) => line.product.id === product.id);
+      if (current) {
+        const quantity = current.quantity + 1;
+        if (!uncounted && quantity > stockAt(product.id, locationId)) {
           toast.warning(`Only ${stockAt(product.id, locationId)} in stock at this store`);
           return prev;
         }
         return prev.map((l) => {
           if (l.product.id !== product.id) return l;
-          const quantity = nextQuantity;
           const { unitPrice } = getProductPrice(product, quantity);
           return {
             ...l,
@@ -407,6 +428,7 @@ function PosPage() {
       ];
     });
     playScanBeep();
+    return true;
   }
 
   function setQuantity(productId: string, quantity: number) {
@@ -420,7 +442,7 @@ function PosPage() {
       toast.warning(`Only ${stockAt(productId, locationId)} in stock at this store`);
       quantity = stockAt(productId, locationId);
     }
-    setLines((prev) =>
+    updateLines((prev) =>
       quantity <= 0
         ? prev.filter((l) => l.product.id !== productId)
         : prev.map((l) => {
@@ -440,7 +462,7 @@ function PosPage() {
   }
 
   function setLineDiscount(productId: string, value: number) {
-    setLines((prev) =>
+    updateLines((prev) =>
       prev.map((l) => {
         if (l.product.id !== productId) return l;
         const max = maxLineDiscount(l.unit_price, l.quantity, l.product.min_sale_price);
@@ -457,48 +479,95 @@ function PosPage() {
     );
   }
 
-  function handleBarcodeValue(value: string) {
+  function reportScannerResult(scanId: string | undefined, status: string, message: string) {
+    if (!scanId) return;
+    scannerChannelRef.current?.postMessage({
+      type: "barcode-result",
+      scan_id: scanId,
+      status,
+      message,
+    });
+  }
+
+  function handleBarcodeValue(value: string, scanId?: string) {
     const cleanValue = value.trim();
-    const q = cleanValue.toLowerCase();
+    const q = cleanValue.toLocaleLowerCase();
     if (!q) return;
-    if (!customer) {
+    if (!customer || !locationId) {
+      pendingScannedCode.current = { code: cleanValue, ...(scanId ? { scanId } : {}) };
       setCustOpen(true);
+      if (!locationId)
+        toast.info("Barcode saved for this bill", {
+          description: "Choose the store and customer to add the scanned item.",
+        });
+      else
+        toast.info("Barcode saved for this bill", {
+          description: "Choose a customer; the scan will be added after selection.",
+        });
       return;
     }
     const codeMatches = products.filter(
-      (p) => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q,
+      (p) => p.barcode?.trim().toLocaleLowerCase() === q || p.sku?.trim().toLocaleLowerCase() === q,
     );
     if (codeMatches.length > 1) {
       setBarcodeChoices(codeMatches);
+      pendingBarcodeChoiceScanId.current = scanId ?? null;
       setBarcode("");
+      reportScannerResult(
+        scanId,
+        "choose-sku",
+        "Barcode matches multiple SKUs; choose one on the POS.",
+      );
       return;
     }
     const hit = codeMatches[0] ?? products.find((p) => p.name.toLowerCase() === q);
     if (hit) {
-      addToCart(hit);
+      const added = addToCart(hit);
       setBarcode("");
       barcodeRef.current?.focus();
+      reportScannerResult(
+        scanId,
+        added ? "added" : "not-added",
+        added
+          ? `${hit.name} added to the current bill.`
+          : `Could not add ${hit.name}; check the POS message.`,
+      );
     } else {
       setQuickPrefill(cleanValue);
       setQuickOpen(true);
       setBarcode("");
+      reportScannerResult(
+        scanId,
+        "new-product",
+        "Barcode sent to the POS. Add the missing SKU before billing.",
+      );
+      toast.info("Barcode not in the catalog", {
+        description: "The scanned code is ready to attach to a new SKU.",
+      });
     }
   }
-
-  remoteScanHandler.current = handleBarcodeValue;
 
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel("retailflow-pos-scanner");
+    scannerChannelRef.current = channel;
     channel.onmessage = (event: MessageEvent<unknown>) => {
       if (!event.data || typeof event.data !== "object") return;
-      const message = event.data as { type?: unknown; code?: unknown };
+      const message = event.data as { type?: unknown; code?: unknown; scan_id?: unknown };
       if (message.type === "barcode" && typeof message.code === "string") {
-        remoteScanHandler.current(message.code);
+        remoteScanHandler.current(
+          message.code,
+          typeof message.scan_id === "string" ? message.scan_id : undefined,
+        );
       }
     };
-    return () => channel.close();
+    return () => {
+      scannerChannelRef.current = null;
+      channel.close();
+    };
   }, []);
+
+  remoteScanHandler.current = handleBarcodeValue;
 
   function handleBarcodeSubmit() {
     handleBarcodeValue(barcode);
@@ -592,7 +661,7 @@ function PosPage() {
       payments,
       createdAt: new Date().toISOString(),
     });
-    setLines([]);
+    updateLines([]);
     setCustomer(null);
     setCustomerChoice("unset");
     setWalkIn(false);
@@ -630,7 +699,7 @@ function PosPage() {
     try {
       await saveCurrentBill();
       setCurrentInvoice(null);
-      setLines([]);
+      updateLines([]);
       setCustomer(null);
       setCustomerChoice("unset");
       setWalkIn(false);
@@ -658,7 +727,7 @@ function PosPage() {
       setCustomer(payload.customer);
       setCustomerChoice(payload.customer ? (isWalkIn ? "walk-in" : "customer") : "unset");
       setWalkIn(isWalkIn);
-      setLines(payload.items);
+      updateLines(payload.items);
       setDiscount(payload.discount_input);
       setDiscountMode(payload.discount_mode);
       setBusinessDate(invoice.business_date);
@@ -753,14 +822,23 @@ function PosPage() {
       </div>
 
       {sales.some(
-        (invoice) => invoice.status === "DRAFT" && canAccessLocation(profile, invoice.location_id),
+        (invoice) =>
+          invoice.status === "DRAFT" &&
+          (invoice.id === currentInvoice?.id ||
+            !!invoice.customer_id ||
+            invoice.total_amount > 0) &&
+          canAccessLocation(profile, invoice.location_id),
       ) && (
         <div className="flex items-center gap-2 overflow-x-auto border-b bg-muted/20 px-3 py-1.5">
           <span className="shrink-0 text-xs font-medium text-muted-foreground">Bills</span>
           {sales
             .filter(
               (invoice) =>
-                invoice.status === "DRAFT" && canAccessLocation(profile, invoice.location_id),
+                invoice.status === "DRAFT" &&
+                (invoice.id === currentInvoice?.id ||
+                  !!invoice.customer_id ||
+                  invoice.total_amount > 0) &&
+                canAccessLocation(profile, invoice.location_id),
             )
             .map((invoice) => (
               <button
@@ -1206,7 +1284,10 @@ function PosPage() {
       <Dialog
         open={barcodeChoices.length > 1}
         onOpenChange={(open) => {
-          if (!open) setBarcodeChoices([]);
+          if (!open) {
+            setBarcodeChoices([]);
+            pendingBarcodeChoiceScanId.current = null;
+          }
         }}
       >
         <DialogContent className="max-w-lg">
@@ -1224,7 +1305,15 @@ function PosPage() {
                 className="flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left hover:bg-accent"
                 onClick={() => {
                   setBarcodeChoices([]);
-                  addToCart(product);
+                  const added = addToCart(product);
+                  reportScannerResult(
+                    pendingBarcodeChoiceScanId.current ?? undefined,
+                    added ? "added" : "not-added",
+                    added
+                      ? `${product.name} added to the current bill.`
+                      : `Could not add ${product.name}; check the POS message.`,
+                  );
+                  pendingBarcodeChoiceScanId.current = null;
                   barcodeRef.current?.focus();
                 }}
               >

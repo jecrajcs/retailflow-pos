@@ -35,6 +35,7 @@ function BarcodeScannerPage() {
   const [connection, setConnection] = useState<"idle" | "waiting" | "connected" | "failed">("idle");
   const [error, setError] = useState("");
   const [lastCode, setLastCode] = useState("");
+  const [scanFeedback, setScanFeedback] = useState("");
   const [reviewImage, setReviewImage] = useState<string | null>(null);
   const [imageRequested, setImageRequested] = useState(false);
   const [serialConnected, setSerialConnected] = useState(false);
@@ -47,8 +48,35 @@ function BarcodeScannerPage() {
   useEffect(() => {
     setPhoneMode(new URLSearchParams(window.location.search).get("mode") === "phone");
     setCaps(scannerCapabilities());
-    if (typeof BroadcastChannel !== "undefined")
+    if (typeof BroadcastChannel !== "undefined") {
       broadcastRef.current = new BroadcastChannel("retailflow-pos-scanner");
+      broadcastRef.current.onmessage = (event: MessageEvent<unknown>) => {
+        if (!event.data || typeof event.data !== "object") return;
+        const message = event.data as {
+          type?: unknown;
+          scan_id?: unknown;
+          status?: unknown;
+          message?: unknown;
+        };
+        const channel = channelRef.current;
+        if (
+          message.type === "barcode-result" &&
+          typeof message.scan_id === "string" &&
+          typeof message.status === "string" &&
+          typeof message.message === "string" &&
+          channel?.readyState === "open"
+        ) {
+          channel.send(
+            JSON.stringify({
+              type: "barcode-result",
+              scan_id: message.scan_id,
+              status: message.status,
+              message: message.message,
+            }),
+          );
+        }
+      };
+    }
     return () => {
       channelRef.current?.close();
       peerRef.current?.close();
@@ -72,7 +100,11 @@ function BarcodeScannerPage() {
         }
         if (isBarcodeMessage(message)) {
           setLastCode(message.code);
-          broadcastRef.current?.postMessage({ type: "barcode", code: message.code });
+          broadcastRef.current?.postMessage({
+            type: "barcode",
+            code: message.code,
+            ...(message.scan_id ? { scan_id: message.scan_id } : {}),
+          });
         } else if (isImageReviewMessage(message)) {
           setReviewImage(message.data_url);
           channel.send(JSON.stringify({ type: "image-review-ack" }));
@@ -100,6 +132,13 @@ function BarcodeScannerPage() {
           (message as { type?: unknown }).type === "image-review-ack"
         ) {
           setImageRequested(false);
+        } else if (
+          message &&
+          typeof message === "object" &&
+          (message as { type?: unknown }).type === "barcode-result" &&
+          typeof (message as { message?: unknown }).message === "string"
+        ) {
+          setScanFeedback((message as { message: string }).message);
         }
       };
     }
@@ -159,6 +198,7 @@ function BarcodeScannerPage() {
           toast.error("The POS connection is not ready yet.");
         else {
           setLastCode(value);
+          setScanFeedback("Scan sent to POS; waiting for billing confirmation…");
           if ("vibrate" in navigator) navigator.vibrate?.(45);
         }
       }
@@ -343,8 +383,11 @@ function BarcodeScannerPage() {
               </Card>
             )}
             {lastCode && (
-              <div className="rounded-lg border bg-card p-3 font-mono text-sm">
-                Last scan: {lastCode}
+              <div className="rounded-lg border bg-card p-3 text-sm">
+                <div className="font-mono">Last scan: {lastCode}</div>
+                {scanFeedback && (
+                  <div className="mt-1 text-xs text-muted-foreground">{scanFeedback}</div>
+                )}
               </div>
             )}
           </div>

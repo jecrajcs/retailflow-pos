@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { itemRowsFromOcr } from "@/lib/purchase-extraction";
+import { generatedSupplierInvoiceNumber } from "@/lib/purchase-utils";
 import type { Product } from "@/lib/pos";
 import { managerExpiryAlerts } from "@/routes/manager";
 import { purchaseLineForProduct } from "@/routes/purchases";
 
 describe("local purchase invoice OCR extraction", () => {
+  it("generates a supplier/category/date reference when the invoice number is omitted", () => {
+    expect(
+      generatedSupplierInvoiceNumber("Sharma & Sons", "Personal care", "2026-11-13", "abc-12345"),
+    ).toBe("AUTO-SHARMASO-PERSONAL-20261113-C12345");
+  });
+
   it("prefills SKU, quantity, cost, source total, and retail price for an unmatched item", () => {
     const [item] = itemRowsFromOcr(
       "SKU: NEW-02 New item Qty: 3 Cost: ₹24 Amount: ₹72 Selling Price: ₹35",

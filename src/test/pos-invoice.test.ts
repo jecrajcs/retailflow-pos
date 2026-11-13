@@ -20,6 +20,8 @@ vi.mock("@/lib/offline-sync", () => ({
 import {
   createPosInvoice,
   createTransfer,
+  loadLocalDraftPayload,
+  matchesProductSearch,
   quickAddProduct,
   setTransferStatus,
   type Customer,
@@ -158,6 +160,70 @@ describe("POS invoice creation", () => {
         )?.value["id"],
     );
     expect(new Set(candidateIds).size).toBe(2);
+  });
+
+  it("finds a catalog product by its barcode", () => {
+    expect(matchesProductSearch(product, "12345")).toBe(true);
+    expect(matchesProductSearch(product, "SUP-5")).toBe(true);
+  });
+
+  it("reconstructs an open bill when the saved draft payload is missing", async () => {
+    const invoice = {
+      id: "draft-1",
+      invoice_number: "SHOP-0001",
+      location_id: "location-1",
+      customer_id: customer.id,
+      cashier_id: "staff-user-1",
+      cashier_name: "Cashier One",
+      total_amount: 5,
+      discount_amount: 0,
+      paid_amount: 0,
+      balance_amount: 5,
+      payment_status: "UNPAID",
+      status: "DRAFT",
+      business_date: "2026-11-13",
+      created_at: "2026-11-13T00:00:00.000Z",
+      sync_status: "SYNCED",
+    };
+    localDb.getLocal.mockImplementation(async (store: string) =>
+      store === "bills" ? invoice : undefined,
+    );
+    localDb.getAllLocal.mockImplementation(async (store: string) => {
+      if (store === "invoice_items")
+        return [
+          {
+            id: "draft-1:product-1",
+            invoice_id: invoice.id,
+            product_id: product.id,
+            quantity: 1,
+            unit_price: 5,
+            uom: "Pcs",
+            discount: 0,
+            total: 5,
+            line_index: 0,
+            product_snapshot: product,
+          },
+        ];
+      if (store === "catalog") return [product];
+      if (store === "customers") return [customer];
+      return [];
+    });
+
+    const payload = await loadLocalDraftPayload(invoice.id);
+
+    expect(payload).toMatchObject({
+      invoice: { id: invoice.id },
+      customer: { id: customer.id },
+      customer_mode: "chosen",
+      items: [{ product: { id: product.id }, quantity: 1, unit_price: 5 }],
+    });
+    expect(localDb.commitLocalOperation).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ store: "settings" })]),
+      "invoice.draft.save",
+      expect.objectContaining({ record_id: invoice.id }),
+      "location-1",
+      invoice.id,
+    );
   });
 
   it("combines repeated SKUs in a transfer before saving the stock request", async () => {

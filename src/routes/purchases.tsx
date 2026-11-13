@@ -28,6 +28,7 @@ import {
 } from "@/lib/pos";
 import { canAccessLocation, canManage, useAccess } from "@/lib/access";
 import { userFacingError } from "@/lib/retail-api";
+import { generatedSupplierInvoiceNumber } from "@/lib/purchase-utils";
 
 export const Route = createFileRoute("/purchases")({ component: PurchasesPage });
 
@@ -396,16 +397,23 @@ function PurchasesPage() {
   }
 
   async function saveDraft(): Promise<boolean> {
-    if (!supplier.trim() || !supplierInvoice.trim() || !warehouseId) {
-      toast.error("Supplier, supplier invoice number, and warehouse are required.");
+    if (!supplier.trim() || !warehouseId) {
+      toast.error("Supplier and warehouse are required.");
       return false;
     }
+    const category =
+      products.find((product) => product.id === items.find((item) => item.product_id)?.product_id)
+        ?.category ?? "General";
+    const invoiceNumber =
+      supplierInvoice.trim() ||
+      generatedSupplierInvoiceNumber(supplier, category, invoiceDate, receiptId);
+    setSupplierInvoice(invoiceNumber);
     setWorking(true);
     try {
       const receipt: LocalPurchaseReceipt = {
         id: receiptId,
         supplier_name: supplier.trim(),
-        supplier_invoice_number: supplierInvoice.trim(),
+        supplier_invoice_number: invoiceNumber,
         invoice_date: invoiceDate,
         warehouse_location_id: warehouseId,
         attachment,
@@ -562,11 +570,11 @@ function PurchasesPage() {
                       placeholder="Supplier name"
                     />
                   </Field>
-                  <Field label="Supplier invoice #">
+                  <Field label="Supplier invoice # (optional)">
                     <Input
                       value={supplierInvoice}
                       onChange={(event) => setSupplierInvoice(event.target.value)}
-                      placeholder="Required for duplicate check"
+                      placeholder="Leave blank to generate a reference"
                     />
                   </Field>
                   <Field label="Invoice date">
@@ -641,21 +649,7 @@ function PurchasesPage() {
                   </Field>
                 )}
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-semibold">Items to receive</h2>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setItems((current) => [
-                          ...current,
-                          { id: newId(), product_id: "", quantity: 1, unit_cost: 0 },
-                        ])
-                      }
-                    >
-                      <Plus className="mr-1 h-4 w-4" /> Add item
-                    </Button>
-                  </div>
+                  <h2 className="font-semibold">Items to receive</h2>
                   {!items.length && (
                     <p className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
                       OCR is a draft. Add or match catalog items and check quantities/costs before
@@ -665,102 +659,106 @@ function PurchasesPage() {
                   {items.map((item, index) => (
                     <div
                       key={`${receiptId}:${index}`}
-                      className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[minmax(0,1fr)_100px_130px_auto]"
+                      className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[minmax(0,1fr)_110px_130px_minmax(200px,240px)_auto]"
                     >
                       <div className="min-w-0 space-y-1">
-                        {item.name && (
-                          <p className="mb-1 truncate text-[10px] text-muted-foreground">
-                            {item.sku ? `${item.sku} · ` : ""}
-                            {item.name}
-                            {item.variant ? ` · ${item.variant}` : ""}
-                            {item.retail_price ? ` · Sell ${inr(item.retail_price)}` : ""}
+                        <Field label="Product / variant">
+                          {item.name && (
+                            <p className="mb-1 truncate text-[10px] text-muted-foreground">
+                              {item.sku ? `${item.sku} · ` : ""}
+                              {item.name}
+                              {item.variant ? ` · ${item.variant}` : ""}
+                              {item.retail_price ? ` · Sell ${inr(item.retail_price)}` : ""}
+                            </p>
+                          )}
+                          <SearchableSelect
+                            value={item.product_id || "unmatched"}
+                            onValueChange={(productId) => {
+                              if (productId === "__add_new_sku__") {
+                                setQuickAddIndex(index);
+                                return;
+                              }
+                              setItems((current) =>
+                                current.map((row, rowIndex) => {
+                                  if (rowIndex !== index) return row;
+                                  const matchedProduct = products.find(
+                                    (product) => product.id === productId,
+                                  );
+                                  return {
+                                    ...row,
+                                    ...(matchedProduct
+                                      ? purchaseLineForProduct(row, matchedProduct)
+                                      : {
+                                          product_id: productId === "unmatched" ? "" : productId,
+                                        }),
+                                  };
+                                }),
+                              );
+                            }}
+                            placeholder="Match product / variant"
+                            searchPlaceholder="Search SKU, variant, English/Hindi name…"
+                            options={[
+                              { value: "unmatched", label: "Choose a product…" },
+                              { value: "__add_new_sku__", label: "Add new SKU / variant…" },
+                              ...products.map((product) => ({
+                                value: product.id,
+                                label: `${product.name}${product.variant ? ` · ${product.variant}` : ""}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,
+                                keywords: [
+                                  product.name_hi ?? "",
+                                  product.variant ?? "",
+                                  product.category ?? "",
+                                  ...(product.search_aliases ?? []),
+                                  product.sku ?? "",
+                                  product.barcode ?? "",
+                                ],
+                              })),
+                            ]}
+                          />
+                        </Field>
+                        {!item.product_id && (
+                          <p className="text-xs text-muted-foreground">
+                            Choose in the search list if it is missing.
                           </p>
                         )}
-                        <SearchableSelect
-                          value={item.product_id || "unmatched"}
-                          onValueChange={(productId) =>
+                      </div>
+                      <Field label="Quantity">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          aria-label="Quantity"
+                          value={item.quantity || ""}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) =>
                             setItems((current) =>
-                              current.map((row, rowIndex) => {
-                                if (rowIndex !== index) return row;
-                                const matchedProduct = products.find(
-                                  (product) => product.id === productId,
-                                );
-                                const name = matchedProduct?.name;
-                                return {
-                                  ...row,
-                                  ...(matchedProduct
-                                    ? purchaseLineForProduct(row, matchedProduct)
-                                    : {
-                                        product_id: productId === "unmatched" ? "" : productId,
-                                      }),
-                                };
-                              }),
+                              current.map((row, rowIndex) =>
+                                rowIndex === index
+                                  ? { ...row, quantity: Number(event.target.value) || 0 }
+                                  : row,
+                              ),
                             )
                           }
-                          placeholder="Match product / variant"
-                          searchPlaceholder="Search SKU, variant, English/Hindi name…"
-                          options={[
-                            { value: "unmatched", label: "Choose a product…" },
-                            ...products.map((product) => ({
-                              value: product.id,
-                              label: `${product.name}${product.variant ? ` · ${product.variant}` : ""}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,
-                              keywords: [
-                                product.name_hi ?? "",
-                                product.variant ?? "",
-                                product.category ?? "",
-                                ...(product.search_aliases ?? []),
-                                product.sku ?? "",
-                                product.barcode ?? "",
-                              ],
-                            })),
-                          ]}
                         />
-                        {!item.product_id && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-7"
-                            disabled={!warehouseId || working}
-                            onClick={() => setQuickAddIndex(index)}
-                          >
-                            <Plus className="mr-1 h-3 w-3" />
-                            Add missing SKU / variant
-                          </Button>
-                        )}
-                      </div>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        aria-label="Quantity"
-                        value={item.quantity}
-                        onChange={(event) =>
-                          setItems((current) =>
-                            current.map((row, rowIndex) =>
-                              rowIndex === index
-                                ? { ...row, quantity: Number(event.target.value) || 0 }
-                                : row,
-                            ),
-                          )
-                        }
-                      />
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        aria-label="Unit cost"
-                        value={item.unit_cost}
-                        onChange={(event) =>
-                          setItems((current) =>
-                            current.map((row, rowIndex) =>
-                              rowIndex === index
-                                ? { ...row, unit_cost: Number(event.target.value) || 0 }
-                                : row,
-                            ),
-                          )
-                        }
-                      />
+                      </Field>
+                      <Field label="Unit cost">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          aria-label="Unit cost"
+                          value={item.unit_cost || ""}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onChange={(event) =>
+                            setItems((current) =>
+                              current.map((row, rowIndex) =>
+                                rowIndex === index
+                                  ? { ...row, unit_cost: Number(event.target.value) || 0 }
+                                  : row,
+                              ),
+                            )
+                          }
+                        />
+                      </Field>
                       <div className="grid gap-2 sm:grid-cols-2">
                         <Field label="MFD">
                           <Input
@@ -806,6 +804,22 @@ function PurchasesPage() {
                       </Button>
                     </div>
                   ))}
+                  <div className="flex justify-start pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={working}
+                      onClick={() =>
+                        setItems((current) => [
+                          ...current,
+                          { id: newId(), product_id: "", quantity: 1, unit_cost: 0 },
+                        ])
+                      }
+                    >
+                      <Plus className="mr-1 h-4 w-4" /> Add item row
+                    </Button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                   <span className="font-semibold">Invoice items total: {inr(total)}</span>

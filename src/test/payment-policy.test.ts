@@ -94,13 +94,23 @@ describe("payment allocation", () => {
     ).toContain("Allocate the full bill amount");
   });
 
-  it("suggests change using valid Indian notes and coins, including 50 paise", () => {
+  it("suggests change using valid whole-rupee notes and coins", () => {
     expect(suggestCashChange(26.5).filter((line) => line.count > 0)).toEqual([
       { denomination: 20, count: 1 },
       { denomination: 5, count: 1 },
       { denomination: 1, count: 1 },
-      { denomination: 0.5, count: 1 },
     ]);
+    expect(
+      validateRecordedPaymentSplit(1, [
+        {
+          mode: "CASH",
+          amount: 1,
+          tendered: 1,
+          change_given: 0,
+          change_denominations: {},
+        },
+      ]),
+    ).toBeNull();
     expect(
       validateRecordedPaymentSplit(1, [
         {
@@ -112,6 +122,6 @@ describe("payment allocation", () => {
         },
         { mode: "UPI", amount: 0.5 },
       ]),
-    ).toBeNull();
+    ).toContain("unsupported denomination");
   });
 });

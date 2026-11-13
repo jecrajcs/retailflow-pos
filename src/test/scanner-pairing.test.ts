@@ -56,10 +56,11 @@ describe("RetailFlow scanner pairing protocol", () => {
 
     const send = vi.fn();
     const channel = { readyState: "open", send } as unknown as RTCDataChannel;
-    expect(sendBarcode(channel, "  12345  ")).toBe(true);
+    expect(sendBarcode(channel, "  12345  ", "scan-1")).toBe(true);
     expect(JSON.parse(send.mock.calls[0]![0] as string)).toMatchObject({
       type: "barcode",
       code: "12345",
+      scan_id: "scan-1",
     });
 
     const closedChannel = { readyState: "closed", send } as unknown as RTCDataChannel;

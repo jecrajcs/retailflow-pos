@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
+  Barcode,
   Boxes,
   ChartNoAxesCombined,
   ClipboardList,
@@ -10,6 +11,7 @@ import {
   MapPin,
   PackageSearch,
   ScanBarcode,
+  ScanLine,
   Vault,
   CircleHelp,
   ShieldCheck,
@@ -37,8 +39,8 @@ const links: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: "/billing", label: "Billing", icon: ScanBarcode },
   { to: "/sales", label: "Sales", icon: ChartNoAxesCombined },
   { to: "/inventory", label: "Inventory", icon: Boxes },
-  { to: "/barcodes", label: "Barcodes", icon: ScanBarcode },
-  { to: "/scanner", label: "Scanner", icon: ScanBarcode },
+  { to: "/barcodes", label: "Barcodes", icon: Barcode },
+  { to: "/scanner", label: "Scanner", icon: ScanLine },
   { to: "/purchases", label: "Purchases", icon: ClipboardList },
   { to: "/cash-drawer", label: "Cash Drawer", icon: Vault },
   { to: "/manager", label: "Manager", icon: PackageSearch },

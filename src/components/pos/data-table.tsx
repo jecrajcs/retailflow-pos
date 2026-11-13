@@ -137,7 +137,7 @@ export function DataTable<T>({
         </label>
       </div>
       <div className={`overflow-auto rounded-md border ${tableHeightClass}`}>
-        <Table>
+        <Table className="min-w-max text-sm">
           <TableHeader className="sticky top-0 z-10 bg-muted/95 backdrop-blur">
             <TableRow>
               {columns.map((column) => {

@@ -5,6 +5,7 @@ import {
   ArrowDownAZ,
   Boxes,
   ClipboardCheck,
+  Pencil,
   Printer,
   Search,
   Truck,
@@ -35,6 +36,7 @@ import {
   useLocationProducts,
   useLocations,
   useProducts,
+  updateProductProfile,
   type Product,
 } from "@/lib/pos";
 import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
@@ -100,6 +102,8 @@ function InventoryPage() {
   const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
   const [countProduct, setCountProduct] = useState<Product | null>(null);
+  const [editProduct, setEditProduct] = useState<Product | null>(null);
+  const canEditCatalog = profile?.role === "MANAGER" || profile?.role === "ADMIN";
 
   const stockAt = (productId: string, locId: string | undefined) =>
     inventory.find((i) => i.product_id === productId && i.location_id === locId)
@@ -328,6 +332,17 @@ function InventoryPage() {
                   .reduce((sum, entry) => sum + stockAt(row.product.id, entry.id), 0);
                 return (
                   <div className="flex gap-1">
+                    {canEditCatalog && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={() => setEditProduct(row.product)}
+                        aria-label={`Edit ${row.product.name}`}
+                      >
+                        <Pencil className="h-3 w-3" /> Edit
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
@@ -372,7 +387,151 @@ function InventoryPage() {
         currentQuantity={countProduct ? stockAt(countProduct.id, location?.id) : 0}
         onClose={() => setCountProduct(null)}
       />
+      {canEditCatalog && (
+        <EditInventoryProductDialog product={editProduct} onClose={() => setEditProduct(null)} />
+      )}
     </div>
+  );
+}
+
+function EditInventoryProductDialog({
+  product,
+  onClose,
+}: {
+  product: Product | null;
+  onClose: () => void;
+}) {
+  const [fields, setFields] = useState({
+    name: "",
+    sku: "",
+    barcode: "",
+    brand: "",
+    category: "",
+    variant: "",
+    rack: "",
+    cost: "",
+    mrp: "",
+    retail: "",
+    minimumPrice: "",
+    minimumStock: "",
+  });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!product) return;
+    setFields({
+      name: product.name,
+      sku: product.sku ?? "",
+      barcode: product.barcode ?? "",
+      brand: product.brand ?? "",
+      category: product.category ?? "",
+      variant: product.variant ?? "",
+      rack: product.rack_location ?? "",
+      cost: String(product.purchase_cost),
+      mrp: String(product.mrp),
+      retail: String(product.sale_price),
+      minimumPrice: String(product.min_sale_price),
+      minimumStock: String(product.min_stock),
+    });
+    setBusy(false);
+  }, [product]);
+
+  function updateField(key: keyof typeof fields, value: string) {
+    setFields((current) => ({ ...current, [key]: value }));
+  }
+
+  async function save() {
+    if (!product || busy) return;
+    setBusy(true);
+    try {
+      await updateProductProfile(product.id, {
+        name: fields.name.trim(),
+        sku: fields.sku.trim() || null,
+        barcode: fields.barcode.trim() || null,
+        brand: fields.brand.trim() || null,
+        category: fields.category.trim() || null,
+        variant: fields.variant.trim() || null,
+        rack_location: fields.rack.trim() || null,
+        purchase_cost: Number(fields.cost) || 0,
+        mrp: Number(fields.mrp) || 0,
+        sale_price: Number(fields.retail) || 0,
+        min_sale_price: Number(fields.minimumPrice) || 0,
+        min_stock: Number(fields.minimumStock) || 0,
+      });
+      toast.success(`${fields.name.trim()} updated`);
+      onClose();
+    } catch (error) {
+      toast.error("Could not update product", {
+        description:
+          error instanceof Error ? error.message : "Check the product details and try again.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const textFields: Array<[keyof typeof fields, string]> = [
+    ["name", "Product name"],
+    ["sku", "SKU"],
+    ["barcode", "Barcode"],
+    ["brand", "Brand"],
+    ["category", "Category"],
+    ["variant", "Variant"],
+    ["rack", "Rack location"],
+  ];
+  const numberFields: Array<[keyof typeof fields, string, string]> = [
+    ["cost", "Cost price", "0.01"],
+    ["mrp", "MRP", "0.01"],
+    ["retail", "Retail price", "0.01"],
+    ["minimumPrice", "Minimum sale price", "0.01"],
+    ["minimumStock", "Minimum stock", "1"],
+  ];
+
+  return (
+    <Dialog open={!!product} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit inventory product</DialogTitle>
+          <DialogDescription>
+            Update catalog fields and pricing. Changes are saved locally and queued for sync.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {textFields.map(([key, label]) => (
+            <div key={key} className="space-y-1">
+              <Label htmlFor={`inventory-edit-${key}`}>{label}</Label>
+              <Input
+                id={`inventory-edit-${key}`}
+                value={fields[key]}
+                onChange={(event) => updateField(key, event.target.value)}
+              />
+            </div>
+          ))}
+          {numberFields.map(([key, label, step]) => (
+            <div key={key} className="space-y-1">
+              <Label htmlFor={`inventory-edit-${key}`}>{label}</Label>
+              <Input
+                id={`inventory-edit-${key}`}
+                type="number"
+                min="0"
+                step={step}
+                value={fields[key]}
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => updateField(key, event.target.value)}
+              />
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={() => void save()} disabled={busy || !fields.name.trim()}>
+            {busy ? "Saving…" : "Save product"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

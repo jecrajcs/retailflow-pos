@@ -7,16 +7,24 @@ import {
   useMemo,
   useRef,
   useState,
+  lazy,
+  Suspense,
   type FormEvent,
   type ReactNode,
 } from "react";
 import { LockKeyhole, WifiOff } from "lucide-react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   deleteLocal,
   getAllLocal,
@@ -29,6 +37,12 @@ import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { pageAccessClass } from "@/lib/access-policy";
 import { summarizeIdleSales } from "@/lib/idle-analytics";
 import { toast } from "sonner";
+
+const IdleSalesChart = lazy(() =>
+  import("@/components/pos/idle-sales-chart").then((module) => ({
+    default: module.IdleSalesChart,
+  })),
+);
 
 export type AccessRole = "CASHIER" | "MANAGER" | "ADMIN" | "WAREHOUSE";
 export const ACTIVE_LOCATION_KEY = "pos-location-id";
@@ -755,39 +769,15 @@ function StaffIdleScreen({
                   </span>
                 </div>
                 <div className="mt-3 h-36 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={stats.salesTrend}
-                      margin={{ top: 6, right: 8, left: -24, bottom: 0 }}
-                    >
-                      <CartesianGrid stroke="rgba(255,255,255,.1)" vertical={false} />
-                      <XAxis
-                        dataKey="day"
-                        tick={{ fill: "rgba(255,255,255,.62)", fontSize: 11 }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <YAxis
-                        tick={{ fill: "rgba(255,255,255,.48)", fontSize: 10 }}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <Tooltip
-                        formatter={(value) =>
-                          new Intl.NumberFormat("en-IN", {
-                            style: "currency",
-                            currency: "INR",
-                          }).format(Number(value ?? 0))
-                        }
-                        contentStyle={{
-                          background: "#10231f",
-                          border: "1px solid rgba(255,255,255,.18)",
-                          borderRadius: 12,
-                        }}
-                      />
-                      <Bar dataKey="sales" fill="#63d7a3" radius={[5, 5, 0, 0]} isAnimationActive />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense
+                    fallback={
+                      <div className="grid h-full place-items-center text-xs text-white/55">
+                        Loading sales chart…
+                      </div>
+                    }
+                  >
+                    <IdleSalesChart data={stats.salesTrend} />
+                  </Suspense>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -817,81 +807,92 @@ function StaffIdleScreen({
             )}
           </div>
           {showUnlock && (
-            <div className="fixed inset-0 z-10 grid place-items-center bg-black/45 p-4 backdrop-blur-sm">
-              <form
-                ref={resumeFormRef}
-                onSubmit={(event) => void resume(event)}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="idle-resume-title"
-                className="w-full max-w-md space-y-3 rounded-2xl border border-white/20 bg-slate-950/95 p-5 text-white shadow-2xl"
+            <Dialog open={showUnlock} onOpenChange={setShowUnlock}>
+              <DialogContent
+                className="z-[120] max-w-md border-white/20 bg-slate-950 p-5 text-white shadow-2xl [&>button]:hidden"
+                onOpenAutoFocus={(event) => {
+                  event.preventDefault();
+                  window.requestAnimationFrame(() =>
+                    resumeFormRef.current?.querySelector("input")?.focus(),
+                  );
+                }}
+                onEscapeKeyDown={() => setShowUnlock(false)}
               >
-                <div className="flex items-center gap-2">
-                  <LockKeyhole className="h-4 w-4" />
-                  <h2 id="idle-resume-title" className="font-medium">
+                <DialogHeader className="space-y-1 text-left">
+                  <DialogTitle className="flex items-center gap-2 text-base">
+                    <LockKeyhole className="h-4 w-4" />
                     Resume as {profile.display_name}
-                  </h2>
-                </div>
-                {online ? (
-                  <div className="space-y-1">
-                    <Label htmlFor="idle-password" className="text-white/80">
-                      Staff password
-                    </Label>
-                    <Input
-                      id="idle-password"
-                      type="password"
-                      autoComplete="current-password"
-                      placeholder="Enter your password"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <p className="flex items-center gap-2 text-xs text-white/65">
-                      <WifiOff className="h-3.5 w-3.5" />
-                      Offline resume uses this device’s PIN.
-                    </p>
+                  </DialogTitle>
+                  <DialogDescription className="text-white/65">
+                    Verify your identity to unlock this POS session.
+                  </DialogDescription>
+                </DialogHeader>
+                <form
+                  ref={resumeFormRef}
+                  onSubmit={(event) => void resume(event)}
+                  className="space-y-3"
+                >
+                  {online ? (
                     <div className="space-y-1">
-                      <Label htmlFor="idle-pin" className="text-white/80">
-                        {savedPin ? "Device PIN" : "Create a 6 to 8 digit device PIN"}
+                      <Label htmlFor="idle-password" className="text-white/80">
+                        Staff password
                       </Label>
                       <Input
-                        id="idle-pin"
+                        id="idle-password"
                         type="password"
-                        inputMode="numeric"
-                        autoComplete="off"
-                        value={pin}
-                        onChange={(event) => setPin(event.target.value)}
+                        autoComplete="current-password"
+                        placeholder="Enter your password"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
                       />
                     </div>
-                    {!savedPin && (
+                  ) : (
+                    <>
+                      <p className="flex items-center gap-2 text-xs text-white/65">
+                        <WifiOff className="h-3.5 w-3.5" />
+                        Offline resume uses this device’s PIN.
+                      </p>
                       <div className="space-y-1">
-                        <Label htmlFor="idle-pin-confirm" className="text-white/80">
-                          Confirm device PIN
+                        <Label htmlFor="idle-pin" className="text-white/80">
+                          {savedPin ? "Device PIN" : "Create a 6 to 8 digit device PIN"}
                         </Label>
                         <Input
-                          id="idle-pin-confirm"
+                          id="idle-pin"
                           type="password"
                           inputMode="numeric"
                           autoComplete="off"
-                          value={pinConfirmation}
-                          onChange={(event) => setPinConfirmation(event.target.value)}
+                          value={pin}
+                          onChange={(event) => setPin(event.target.value)}
                         />
                       </div>
-                    )}
-                  </>
-                )}
-                {message && (
-                  <p role="alert" className="text-sm text-rose-200">
-                    {message}
-                  </p>
-                )}
-                <Button className="w-full" disabled={working}>
-                  {working ? "Verifying…" : "Resume POS"}
-                </Button>
-              </form>
-            </div>
+                      {!savedPin && (
+                        <div className="space-y-1">
+                          <Label htmlFor="idle-pin-confirm" className="text-white/80">
+                            Confirm device PIN
+                          </Label>
+                          <Input
+                            id="idle-pin-confirm"
+                            type="password"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            value={pinConfirmation}
+                            onChange={(event) => setPinConfirmation(event.target.value)}
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {message && (
+                    <p role="alert" className="text-sm text-rose-200">
+                      {message}
+                    </p>
+                  )}
+                  <Button className="w-full" disabled={working}>
+                    {working ? "Verifying…" : "Resume POS"}
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
           )}
         </div>
       )}
