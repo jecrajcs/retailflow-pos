@@ -1,5 +1,7 @@
 import { DENOMINATIONS } from "@/lib/cash-denominations";
 
+export const CASH_DENOMINATIONS = [...DENOMINATIONS, 0.5] as const;
+
 export type PaymentAllocationLine = {
   mode: string;
   amount: number | string;
@@ -20,6 +22,15 @@ export type RecordedPaymentLine = PaymentAllocationLine & {
   change_given?: number;
   change_denominations?: Record<string, number>;
 };
+
+export function suggestCashChange(amount: number) {
+  let remaining = Math.max(0, Math.round(amount * 100) / 100);
+  return CASH_DENOMINATIONS.map((denomination) => {
+    const count = Math.floor((remaining + 0.0001) / denomination);
+    remaining = Math.round((remaining - count * denomination) * 100) / 100;
+    return { denomination, count };
+  });
+}
 
 /** Cash amount means tendered; other modes mean the amount applied to the bill. */
 export function calculatePaymentAllocation(
@@ -78,7 +89,7 @@ export function validateRecordedPaymentSplit(total: number, lines: readonly Reco
         const denomination = Number(rawDenomination);
         const count = Number(rawCount);
         if (
-          !DENOMINATIONS.includes(denomination as (typeof DENOMINATIONS)[number]) ||
+          !CASH_DENOMINATIONS.includes(denomination as (typeof CASH_DENOMINATIONS)[number]) ||
           !Number.isInteger(count) ||
           count < 0
         )

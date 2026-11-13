@@ -14,6 +14,15 @@ export interface ScannerAdapter {
   disconnect(): Promise<void>;
 }
 
+export function shouldEmitScannedCode(
+  lastScan: { value: string; at: number },
+  value: string,
+  now: number,
+  duplicateWindowMs = 500,
+) {
+  return value !== lastScan.value || now - lastScan.at >= duplicateWindowMs;
+}
+
 export function registerScannerAdapter(adapter: ScannerAdapter) {
   const adapters = getScannerAdapterRegistry();
   adapters.set(adapter.id, adapter);
@@ -83,6 +92,7 @@ export function createWebSerialScannerAdapter(baudRate = 9600): ScannerAdapter {
 }
 
 const PAIR_TTL_MS = 5 * 60 * 1000;
+const SCANNER_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export function parseScannerPairPayload(value: string, expectedRole?: ScannerPairPayload["role"]) {
   let parsed: unknown;
@@ -122,7 +132,7 @@ function waitForIceGathering(peer: RTCPeerConnection) {
       peer.removeEventListener("icegatheringstatechange", onStateChange);
       reject(
         new Error(
-          "The device network could not prepare a local pairing connection. Try again on the same Wi-Fi.",
+          "The device network could not prepare a pairing connection. Try a shared Wi-Fi or hotspot with local device communication enabled.",
         ),
       );
     }, 12000);
@@ -143,7 +153,7 @@ function newSessionId() {
 }
 
 export async function createScannerOffer(onChannel: (channel: RTCDataChannel) => void) {
-  const peer = new RTCPeerConnection({ iceServers: [] });
+  const peer = new RTCPeerConnection({ iceServers: SCANNER_ICE_SERVERS });
   const channel = peer.createDataChannel("retailflow-barcode", { ordered: true });
   onChannel(channel);
   const offer = await peer.createOffer();
@@ -166,7 +176,7 @@ export async function acceptScannerOffer(
   onChannel: (channel: RTCDataChannel) => void,
 ) {
   const offer = parseScannerPairPayload(value, "offer");
-  const peer = new RTCPeerConnection({ iceServers: [] });
+  const peer = new RTCPeerConnection({ iceServers: SCANNER_ICE_SERVERS });
   peer.ondatachannel = (event) => onChannel(event.channel);
   await peer.setRemoteDescription({ type: "offer", sdp: offer.sdp });
   const answer = await peer.createAnswer();

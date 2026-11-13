@@ -36,6 +36,30 @@ function newId() {
     ? crypto.randomUUID()
     : `purchase-${Date.now()}`;
 }
+
+type PurchaseItemDraft = LocalPurchaseReceipt["items"][number] & {
+  variant?: string;
+  manufactured_on?: string;
+  expires_on?: string;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function purchaseLineForProduct(
+  line: PurchaseItemDraft,
+  product: Product,
+): PurchaseItemDraft {
+  return {
+    ...line,
+    product_id: product.id,
+    name: product.name,
+    retail_price: product.sale_price,
+    uom: product.uom_sale,
+    unit_cost: line.unit_cost > 0 ? line.unit_cost : product.purchase_cost,
+    ...(product.sku ? { sku: product.sku } : {}),
+    ...(product.variant ? { variant: product.variant } : {}),
+  };
+}
+
 function today() {
   const value = new Date();
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
@@ -152,6 +176,12 @@ async function parseExcelPurchase(file: File, products: Product[]) {
         ) ||
         product?.sale_price ||
         0;
+      const manufacturedOn = excelDate(
+        value(row, ["mfd", "manufacturingdate", "manufactureddate", "dateofmanufacture"]),
+      );
+      const expiresOn = excelDate(
+        value(row, ["expiry", "expirydate", "expirationdate", "expdate"]),
+      );
       const sourceTotal = amount > 0 ? amount : quantity * unitCost;
       const resolvedSku = sku || product?.sku || undefined;
       return [
@@ -172,6 +202,8 @@ async function parseExcelPurchase(file: File, products: Product[]) {
             value(row, ["invoiceno", "invoicenumber", "billno", "billnumber"]) ?? "",
           ).trim(),
           date: excelDate(value(row, ["date", "invoicedate", "billdate"])),
+          ...(manufacturedOn ? { manufactured_on: manufacturedOn } : {}),
+          ...(expiresOn ? { expires_on: expiresOn } : {}),
         },
       ];
     })
@@ -201,7 +233,7 @@ function PurchasesPage() {
   const [attachment, setAttachment] = useState<Blob | null>(null);
   const [attachmentName, setAttachmentName] = useState("");
   const [ocrText, setOcrText] = useState("");
-  const [items, setItems] = useState<LocalPurchaseReceipt["items"]>([]);
+  const [items, setItems] = useState<PurchaseItemDraft[]>([]);
   const [quickAddIndex, setQuickAddIndex] = useState<number | null>(null);
   const [status, setStatus] = useState<LocalPurchaseReceipt["status"]>("DRAFT");
   const [working, setWorking] = useState(false);
@@ -222,7 +254,7 @@ function PurchasesPage() {
     setAttachment(receipt.attachment ?? null);
     setAttachmentName(receipt.attachment_name ?? "");
     setOcrText(receipt.ocr_text ?? "");
-    setItems(receipt.items ?? []);
+    setItems((receipt.items ?? []) as PurchaseItemDraft[]);
     setStatus(receipt.status);
   }
 
@@ -467,6 +499,7 @@ function PurchasesPage() {
         locationId={warehouseId}
         prefill={quickAddItem?.name ?? ""}
         {...(quickAddItem?.sku ? { prefillSku: quickAddItem.sku } : {})}
+        {...(quickAddItem?.variant ? { prefillVariant: quickAddItem.variant } : {})}
         {...(quickAddItem?.retail_price !== undefined
           ? { prefillRetailPrice: quickAddItem.retail_price }
           : {})}
@@ -487,6 +520,7 @@ function PurchasesPage() {
                       retail_price: product.sale_price,
                       uom: product.uom_sale,
                       ...(product.sku ? { sku: product.sku } : {}),
+                      ...(product.variant ? { variant: product.variant } : {}),
                     }
                   : row,
               ),
@@ -638,6 +672,7 @@ function PurchasesPage() {
                           <p className="mb-1 truncate text-[10px] text-muted-foreground">
                             {item.sku ? `${item.sku} · ` : ""}
                             {item.name}
+                            {item.variant ? ` · ${item.variant}` : ""}
                             {item.retail_price ? ` · Sell ${inr(item.retail_price)}` : ""}
                           </p>
                         )}
@@ -653,28 +688,26 @@ function PurchasesPage() {
                                 const name = matchedProduct?.name;
                                 return {
                                   ...row,
-                                  product_id: productId === "unmatched" ? "" : productId,
-                                  ...(matchedProduct?.sku ? { sku: matchedProduct.sku } : {}),
                                   ...(matchedProduct
-                                    ? {
-                                        retail_price: matchedProduct.sale_price,
-                                        uom: matchedProduct.uom_sale,
-                                        ...(name ? { name } : {}),
-                                      }
-                                    : {}),
+                                    ? purchaseLineForProduct(row, matchedProduct)
+                                    : {
+                                        product_id: productId === "unmatched" ? "" : productId,
+                                      }),
                                 };
                               }),
                             )
                           }
-                          placeholder="Match catalog product"
-                          searchPlaceholder="Search SKU, English/Hindi name…"
+                          placeholder="Match product / variant"
+                          searchPlaceholder="Search SKU, variant, English/Hindi name…"
                           options={[
                             { value: "unmatched", label: "Choose a product…" },
                             ...products.map((product) => ({
                               value: product.id,
-                              label: `${product.name}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,
+                              label: `${product.name}${product.variant ? ` · ${product.variant}` : ""}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,
                               keywords: [
                                 product.name_hi ?? "",
+                                product.variant ?? "",
+                                product.category ?? "",
                                 ...(product.search_aliases ?? []),
                                 product.sku ?? "",
                                 product.barcode ?? "",
@@ -692,7 +725,7 @@ function PurchasesPage() {
                             onClick={() => setQuickAddIndex(index)}
                           >
                             <Plus className="mr-1 h-3 w-3" />
-                            Add new SKU
+                            Add missing SKU / variant
                           </Button>
                         )}
                       </div>
@@ -728,6 +761,40 @@ function PurchasesPage() {
                           )
                         }
                       />
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Field label="MFD">
+                          <Input
+                            type="date"
+                            aria-label="Manufacturing date"
+                            value={item.manufactured_on ?? ""}
+                            onChange={(event) =>
+                              setItems((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? { ...row, manufactured_on: event.target.value }
+                                    : row,
+                                ),
+                              )
+                            }
+                          />
+                        </Field>
+                        <Field label="Expiry">
+                          <Input
+                            type="date"
+                            aria-label="Expiry date"
+                            value={item.expires_on ?? ""}
+                            onChange={(event) =>
+                              setItems((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? { ...row, expires_on: event.target.value }
+                                    : row,
+                                ),
+                              )
+                            }
+                          />
+                        </Field>
+                      </div>
                       <Button
                         variant="ghost"
                         size="sm"

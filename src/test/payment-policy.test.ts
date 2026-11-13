@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { calculatePaymentAllocation, validateRecordedPaymentSplit } from "@/lib/payment-policy";
+import {
+  calculatePaymentAllocation,
+  suggestCashChange,
+  validateRecordedPaymentSplit,
+} from "@/lib/payment-policy";
 
 describe("payment allocation", () => {
   it("returns the correct change for a cash and UPI split", () => {
@@ -31,6 +35,21 @@ describe("payment allocation", () => {
       creditAllocated: 70,
       paid: 30,
       change: 0,
+      remaining: 0,
+    });
+  });
+
+  it("applies UPI first and returns only the cash excess for a mixed tender", () => {
+    expect(
+      calculatePaymentAllocation(80, [
+        { mode: "CASH", amount: 50 },
+        { mode: "UPI", amount: 50 },
+      ]),
+    ).toMatchObject({
+      cashApplied: 30,
+      nonCashPaid: 50,
+      paid: 80,
+      change: 20,
       remaining: 0,
     });
   });
@@ -73,5 +92,26 @@ describe("payment allocation", () => {
         { mode: "CASH", amount: 5, tendered: 5, change_given: 0 },
       ]),
     ).toContain("Allocate the full bill amount");
+  });
+
+  it("suggests change using valid Indian notes and coins, including 50 paise", () => {
+    expect(suggestCashChange(26.5).filter((line) => line.count > 0)).toEqual([
+      { denomination: 20, count: 1 },
+      { denomination: 5, count: 1 },
+      { denomination: 1, count: 1 },
+      { denomination: 0.5, count: 1 },
+    ]);
+    expect(
+      validateRecordedPaymentSplit(1, [
+        {
+          mode: "CASH",
+          amount: 0.5,
+          tendered: 1,
+          change_given: 0.5,
+          change_denominations: { "0.5": 1 },
+        },
+        { mode: "UPI", amount: 0.5 },
+      ]),
+    ).toBeNull();
   });
 });

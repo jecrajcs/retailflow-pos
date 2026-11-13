@@ -13,6 +13,7 @@ import {
   Truck,
   UserRound,
   Zap,
+  Clock3,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -30,7 +31,15 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
 import { userFacingError } from "@/lib/retail-api";
+import { expiringProductSuggestions } from "@/lib/expiry-alerts";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   categoryIcon,
@@ -48,6 +57,7 @@ import {
   useLocationProducts,
   useLocations,
   useProducts,
+  usePurchases,
   useSales,
   useShortcutTiles,
   type CartLine,
@@ -117,6 +127,7 @@ function PosPage() {
   const { data: inventory = [] } = useInventory();
   const { data: locationProducts = [] } = useLocationProducts();
   const { data: customers = [] } = useCustomers();
+  const { data: purchases = [] } = usePurchases();
   const salesQuery = useSales();
   const sales = useMemo(() => salesQuery.data ?? [], [salesQuery.data]);
   const { data: shortcutRows = [] } = useShortcutTiles();
@@ -162,7 +173,10 @@ function PosPage() {
 
   const [lines, setLines] = useState<CartLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  const [customerChoice, setCustomerChoice] = useState<"unset" | "walk-in" | "customer">("unset");
+  const [walkIn, setWalkIn] = useState(false);
   const [barcode, setBarcode] = useState("");
+  const [barcodeChoices, setBarcodeChoices] = useState<Product[]>([]);
   const [activeProductIndex, setActiveProductIndex] = useState(0);
   const [discount, setDiscount] = useState(0);
   const [discountMode, setDiscountMode] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
@@ -177,7 +191,6 @@ function PosPage() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const barcodeRef = useRef<HTMLInputElement>(null);
   const remoteScanHandler = useRef<(code: string) => void>(() => undefined);
-  const customerPrompted = useRef(false);
 
   useEffect(() => {
     if (draftRestored || salesQuery.isLoading) return;
@@ -202,6 +215,11 @@ function PosPage() {
             setCurrentInvoice(existing);
             setLocationId(existing.location_id);
             setCustomer(payload.customer);
+            const isWalkIn =
+              payload.customer?.name?.trim().toLocaleLowerCase() === "walk-in" &&
+              !payload.customer.mobile;
+            setWalkIn(isWalkIn);
+            setCustomerChoice(payload.customer ? (isWalkIn ? "walk-in" : "customer") : "unset");
             setLines(payload.items);
             setDiscount(payload.discount_input);
             setDiscountMode(payload.discount_mode);
@@ -240,10 +258,9 @@ function PosPage() {
   }, [draftRestored, locationId, customer, currentInvoice, businessDate, profile]);
 
   useEffect(() => {
-    if (!draftRestored || !locationId || customer || customerPrompted.current) return;
-    customerPrompted.current = true;
+    if (!draftRestored || !locationId || customerChoice !== "unset") return;
     setCustOpen(true);
-  }, [draftRestored, locationId, customer]);
+  }, [draftRestored, locationId, customerChoice]);
 
   useEffect(() => {
     if (!currentInvoice) return;
@@ -290,6 +307,17 @@ function PosPage() {
       : `${stockAt(productId, locId)} in stock`;
   }
 
+  const expiringSuggestions = useMemo(() => {
+    const availableProductIds = new Set(
+      products
+        .filter(
+          (product) => stockAt(product.id, locationId) > 0 || awaitingCount(product.id, locationId),
+        )
+        .map((product) => product.id),
+    );
+    return expiringProductSuggestions(purchases, products, availableProductIds).slice(0, 6);
+  }, [awaitingCount, locationId, products, purchases, stockAt]);
+
   const subtotal = useMemo(
     () => lines.reduce((s, l) => s + l.quantity * l.unit_price - l.discount, 0),
     [lines],
@@ -310,9 +338,10 @@ function PosPage() {
       ? ((discount / subtotal) * 100).toFixed(2)
       : discount || "";
 
-  function resolveCustomer(c: Customer | null) {
+  function resolveCustomer(c: Customer | null, isWalkIn = false) {
     setCustomer(c);
-    customerPrompted.current = !!c;
+    setWalkIn(isWalkIn && !!c);
+    setCustomerChoice(c ? (isWalkIn ? "walk-in" : "customer") : "unset");
     void queryClient.invalidateQueries({ queryKey: ["customers"] });
     setTimeout(() => barcodeRef.current?.focus(), 30);
   }
@@ -436,9 +465,15 @@ function PosPage() {
       setCustOpen(true);
       return;
     }
-    const hit =
-      products.find((p) => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q) ??
-      products.find((p) => p.name.toLowerCase() === q);
+    const codeMatches = products.filter(
+      (p) => p.barcode?.toLowerCase() === q || p.sku?.toLowerCase() === q,
+    );
+    if (codeMatches.length > 1) {
+      setBarcodeChoices(codeMatches);
+      setBarcode("");
+      return;
+    }
+    const hit = codeMatches[0] ?? products.find((p) => p.name.toLowerCase() === q);
     if (hit) {
       addToCart(hit);
       setBarcode("");
@@ -497,6 +532,14 @@ function PosPage() {
       setActiveProductIndex((index) => Math.max(0, index - 1));
     } else if (event.key === "Enter") {
       event.preventDefault();
+      const cleanValue = barcode.trim().toLowerCase();
+      const codeMatches = products.filter(
+        (p) => p.barcode?.toLowerCase() === cleanValue || p.sku?.toLowerCase() === cleanValue,
+      );
+      if (codeMatches.length) {
+        handleBarcodeValue(barcode);
+        return;
+      }
       const result = searchResults[activeProductIndex];
       if (result) {
         addToCart(result);
@@ -551,7 +594,8 @@ function PosPage() {
     });
     setLines([]);
     setCustomer(null);
-    customerPrompted.current = false;
+    setCustomerChoice("unset");
+    setWalkIn(false);
     setDiscount(0);
     setBusinessDate(todayBusinessDate());
     setPayOpen(false);
@@ -563,6 +607,66 @@ function PosPage() {
     void queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
     toast.success(`Bill ${result.invoice_number} saved`);
     setTimeout(() => barcodeRef.current?.focus(), 30);
+  }
+
+  async function saveCurrentBill() {
+    if (!currentInvoice) return;
+    await saveLocalDraft({
+      invoice: {
+        ...currentInvoice,
+        location_id: locationId || currentInvoice.location_id,
+        business_date: businessDate,
+      },
+      customer,
+      customer_mode: customer ? "chosen" : "unset",
+      items: lines,
+      discount_mode: discountMode,
+      discount_input: discount,
+    });
+  }
+
+  async function holdCurrentBill() {
+    if (!currentInvoice || (!lines.length && discount <= 0)) return;
+    try {
+      await saveCurrentBill();
+      setCurrentInvoice(null);
+      setLines([]);
+      setCustomer(null);
+      setCustomerChoice("unset");
+      setWalkIn(false);
+      setDiscount(0);
+      setBarcode("");
+    } catch (error) {
+      toast.error("Could not hold this bill", {
+        description: userFacingError(error, "The current bill could not be saved."),
+      });
+    }
+  }
+
+  async function openHeldBill(invoice: LocalInvoice) {
+    if (invoice.id === currentInvoice?.id) return;
+    try {
+      await saveCurrentBill();
+      const payload = await loadLocalDraftPayload(invoice.id);
+      if (!payload) throw new Error("The held bill could not be loaded from this device.");
+      const isWalkIn =
+        payload.customer?.name?.trim().toLocaleLowerCase() === "walk-in" &&
+        !payload.customer.mobile;
+      setCurrentInvoice(invoice);
+      setLocationId(invoice.location_id);
+      saveActiveLocation(invoice.location_id);
+      setCustomer(payload.customer);
+      setCustomerChoice(payload.customer ? (isWalkIn ? "walk-in" : "customer") : "unset");
+      setWalkIn(isWalkIn);
+      setLines(payload.items);
+      setDiscount(payload.discount_input);
+      setDiscountMode(payload.discount_mode);
+      setBusinessDate(invoice.business_date);
+    } catch (error) {
+      toast.error("Could not open held bill", {
+        description: userFacingError(error, "The held bill could not be loaded."),
+      });
+    }
   }
 
   const lowStockIds = useMemo(
@@ -647,6 +751,74 @@ function PosPage() {
           </Popover>
         </div>
       </div>
+
+      {sales.some(
+        (invoice) => invoice.status === "DRAFT" && canAccessLocation(profile, invoice.location_id),
+      ) && (
+        <div className="flex items-center gap-2 overflow-x-auto border-b bg-muted/20 px-3 py-1.5">
+          <span className="shrink-0 text-xs font-medium text-muted-foreground">Bills</span>
+          {sales
+            .filter(
+              (invoice) =>
+                invoice.status === "DRAFT" && canAccessLocation(profile, invoice.location_id),
+            )
+            .map((invoice) => (
+              <button
+                key={invoice.id}
+                type="button"
+                onClick={() => void openHeldBill(invoice)}
+                className={cn(
+                  "shrink-0 rounded-md border px-2.5 py-1 text-xs",
+                  invoice.id === currentInvoice?.id
+                    ? "border-primary bg-primary/10 font-semibold text-primary"
+                    : "bg-background hover:bg-accent",
+                )}
+              >
+                {invoice.invoice_number}
+                {invoice.id === currentInvoice?.id ? " · Current" : ""}
+              </button>
+            ))}
+          {currentInvoice && (lines.length > 0 || discount > 0) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void holdCurrentBill()}
+            >
+              Hold current bill
+            </Button>
+          )}
+        </div>
+      )}
+
+      {customer && expiringSuggestions.length > 0 && (
+        <section
+          aria-label="Products to suggest before expiry"
+          className="flex flex-wrap items-center gap-2 border-b border-warning/40 bg-warning/5 px-3 py-2"
+        >
+          <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-warning">
+            <Clock3 className="h-3.5 w-3.5" />
+            Near expiry · suggest
+          </span>
+          {expiringSuggestions.map(({ product, quantity, expiresOn }) => (
+            <button
+              key={product.id}
+              type="button"
+              onClick={() => addToCart(product)}
+              className="rounded-md border border-warning/30 bg-background px-2.5 py-1 text-left text-xs hover:bg-warning/10"
+              title={`${quantity} received in expiring lots; store stock ${stockAt(product.id, locationId) || "awaiting count"}`}
+            >
+              <span className="font-medium">{product.name}</span>
+              {product.variant && (
+                <span className="text-muted-foreground"> · {product.variant}</span>
+              )}
+              <span className="block text-[10px] text-muted-foreground">
+                Expires {new Date(`${expiresOn}T00:00:00`).toLocaleDateString("en-IN")}
+              </span>
+            </button>
+          ))}
+        </section>
+      )}
 
       <main className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:gap-4">
         {/* Left: scan + cart */}
@@ -968,7 +1140,7 @@ function PosPage() {
             </div>
           </div>
 
-          {customer && customer.outstanding_balance > 0 && (
+          {customer && !walkIn && customer.outstanding_balance > 0 && (
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
               <div className="font-medium text-destructive">⚠️ Udhar due</div>
               <div className="tabular-nums">
@@ -1021,6 +1193,7 @@ function PosPage() {
         businessDate={businessDate}
         minTotal={minTotal}
         customer={customer}
+        walkIn={walkIn}
         upiVpa={location?.upi_vpa ?? null}
         upiPayeeName={location?.name ?? "RetailFlow Store"}
         onPaid={handlePaid}
@@ -1028,8 +1201,53 @@ function PosPage() {
       <CustomerDialog
         open={custOpen}
         onOpenChange={setCustOpen}
-        onSelect={(c) => resolveCustomer(c)}
+        onSelect={(c, isWalkIn) => resolveCustomer(c, !!isWalkIn)}
       />
+      <Dialog
+        open={barcodeChoices.length > 1}
+        onOpenChange={(open) => {
+          if (!open) setBarcodeChoices([]);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Choose the matching SKU</DialogTitle>
+            <DialogDescription>
+              This code matches multiple products. Select the intended item before adding it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {barcodeChoices.map((product) => (
+              <button
+                key={product.id}
+                type="button"
+                className="flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left hover:bg-accent"
+                onClick={() => {
+                  setBarcodeChoices([]);
+                  addToCart(product);
+                  barcodeRef.current?.focus();
+                }}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{product.name}</span>
+                  {product.variant && (
+                    <span className="block text-xs text-muted-foreground">{product.variant}</span>
+                  )}
+                  <span className="block font-mono text-xs text-muted-foreground">
+                    SKU {product.sku ?? "—"} · Barcode {product.barcode ?? "—"}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block font-semibold">{inr(product.sale_price)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {stockLabel(product.id, location?.id)} in stock
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
       <QuickAddModal
         open={quickOpen}
         onOpenChange={(open) => {

@@ -3,6 +3,7 @@ import {
   isBarcodeMessage,
   isImageReviewMessage,
   parseScannerPairPayload,
+  shouldEmitScannedCode,
   sendBarcode,
   sendImageReview,
 } from "@/lib/scanner-pairing";
@@ -20,6 +21,14 @@ function pairingCode(overrides: Record<string, unknown> = {}) {
 }
 
 describe("RetailFlow scanner pairing protocol", () => {
+  it("allows continuous camera scans while suppressing duplicate frames", () => {
+    const lastScan = { value: "12345", at: 1_000 };
+
+    expect(shouldEmitScannedCode(lastScan, "12345", 1_250)).toBe(false);
+    expect(shouldEmitScannedCode(lastScan, "12345", 1_500)).toBe(true);
+    expect(shouldEmitScannedCode(lastScan, "67890", 1_100)).toBe(true);
+  });
+
   it("accepts a current POS offer and checks the expected QR role", () => {
     expect(parseScannerPairPayload(pairingCode(), "offer")).toMatchObject({
       app: "retailflow-scanner",

@@ -40,8 +40,10 @@ import {
   openSession,
   useCashSessions,
   useCashTransactions,
+  useCustomers,
   useLocations,
   usePaymentsSince,
+  useSales,
   type CashTxnRow,
   type PaymentRow,
   type CashSession,
@@ -81,6 +83,8 @@ function CashDrawerPage() {
   const queryClient = useQueryClient();
   const { profile } = useAccess();
   const { data: locations = [] } = useLocations();
+  const { data: customers = [] } = useCustomers();
+  const { data: sales = [] } = useSales();
   const allowedLocations = locations.filter(
     (entry) => entry.is_active && canAccessLocation(profile, entry.id),
   );
@@ -120,6 +124,11 @@ function CashDrawerPage() {
   const since = open?.opened_at ?? startOfToday();
   const { data: payments = [] } = usePaymentsSince(location?.id ?? null, since);
   const { data: txns = [] } = useCashTransactions(location?.id ?? null, since);
+  const customersById = useMemo(
+    () => new Map(customers.map((customer) => [customer.id, customer])),
+    [customers],
+  );
+  const salesById = useMemo(() => new Map(sales.map((sale) => [sale.id, sale])), [sales]);
 
   const byMode: { CASH: number; UPI: number; CARD: number; CREDIT: number } = useMemo(() => {
     const map: { CASH: number; UPI: number; CARD: number; CREDIT: number } = {
@@ -235,14 +244,13 @@ function CashDrawerPage() {
                   onClosed={refresh}
                 />
               </>
+            ) : profile?.role === "CASHIER" ? (
+              <OpenShiftCard locationId={location?.id ?? ""} profile={profile} onOpened={refresh} />
             ) : (
-              profile?.role === "CASHIER" ? (
-                <OpenShiftCard locationId={location?.id ?? ""} profile={profile} onOpened={refresh} />
-              ) : (
-                <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
-                  No cashier shift is open at this location. A Cashier must count the drawer and open the shift before sales begin.
-                </div>
-              )
+              <div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+                No cashier shift is open at this location. A Cashier must count the drawer and open
+                the shift before sales begin.
+              </div>
             )}
           </TabsContent>
 
@@ -355,10 +363,53 @@ function CashDrawerPage() {
                     cell: (row) => <ModeChip mode={row.mode} />,
                   },
                   {
+                    id: "customer",
+                    header: "Customer name / mobile",
+                    accessor: (row) => {
+                      const invoice = salesById.get(row.invoice_id);
+                      const customer = invoice?.customer_id
+                        ? customersById.get(invoice.customer_id)
+                        : undefined;
+                      return (
+                        `${customer?.name ?? ""} ${customer?.mobile ?? ""}`.trim() || "Walk-in"
+                      );
+                    },
+                    cell: (row) => {
+                      const invoice = salesById.get(row.invoice_id);
+                      const customer = invoice?.customer_id
+                        ? customersById.get(invoice.customer_id)
+                        : undefined;
+                      return (
+                        <span className="block min-w-28">
+                          <span className="block font-medium">{customer?.name ?? "Walk-in"}</span>
+                          {customer?.mobile && (
+                            <span className="block text-xs text-muted-foreground">
+                              {customer.mobile}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    },
+                  },
+                  {
+                    id: "received",
+                    header: "Amount received",
+                    accessor: (row) =>
+                      row.mode === "CREDIT"
+                        ? null
+                        : row.mode === "CASH"
+                          ? (row.tendered ?? row.amount)
+                          : row.amount,
+                    cell: (row) =>
+                      row.mode === "CREDIT"
+                        ? "—"
+                        : inr(row.mode === "CASH" ? (row.tendered ?? row.amount) : row.amount),
+                  },
+                  {
                     id: "amount",
-                    header: "Amount",
-                    accessor: (row) => row.amount,
-                    cell: (row) => inr(row.amount),
+                    header: "Bill amount",
+                    accessor: (row) => salesById.get(row.invoice_id)?.total_amount ?? row.amount,
+                    cell: (row) => inr(salesById.get(row.invoice_id)?.total_amount ?? row.amount),
                   },
                   {
                     id: "change",
@@ -800,7 +851,8 @@ function CloseShiftCard({
         </Button>
       </div>
       {Object.keys(closingCounts).length > 0 &&
-        profile?.role !== "ADMIN" && (Math.abs(difference) > 0.01 || managerClosingForOperator) && (
+        profile?.role !== "ADMIN" &&
+        (Math.abs(difference) > 0.01 || managerClosingForOperator) && (
           <div className="mt-4 space-y-3 rounded-lg border border-warning/50 bg-warning/5 p-3">
             <p className="text-sm font-medium">
               {managerClosingForOperator

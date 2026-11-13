@@ -1,15 +1,25 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { CalendarDays, Printer } from "lucide-react";
+import { toast } from "sonner";
 import { AppNav } from "@/components/pos/app-nav";
 import { DataTable } from "@/components/pos/data-table";
+import { ReceiptDialog, type ReceiptData } from "@/components/pos/receipt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { inr, useCustomers, useInvoiceItems, useLocations, useSales } from "@/lib/pos";
+import {
+  inr,
+  useCustomers,
+  useInvoiceItems,
+  useLocations,
+  useProducts,
+  useSales,
+  type InvoiceItemRow,
+} from "@/lib/pos";
 import { getAllLocal, type KeyedRecord } from "@/lib/local-db";
 import type { PaymentRow } from "@/lib/pos";
 import { useEffect } from "react";
@@ -22,6 +32,7 @@ function SalesPage() {
   const { data: sales = [] } = useSales();
   const { data: locations = [] } = useLocations();
   const { data: customers = [] } = useCustomers();
+  const { data: products = [] } = useProducts();
   const allowedLocations = locations.filter((location) => canAccessLocation(profile, location.id));
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -29,8 +40,57 @@ function SalesPage() {
   const [paymentStatus, setPaymentStatus] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const selected = sales.find((invoice) => invoice.id === selectedId) ?? null;
   const { data: items = [] } = useInvoiceItems(selectedId);
+
+  async function reprintSelectedReceipt() {
+    if (!selected) return;
+    try {
+      const [allItems, allPayments] = await Promise.all([
+        getAllLocal<InvoiceItemRow & KeyedRecord>("invoice_items"),
+        getAllLocal<PaymentRow & KeyedRecord>("payments"),
+      ]);
+      const invoiceItems = allItems.filter((item) => item.invoice_id === selected.id);
+      const invoicePayments = allPayments.filter((payment) => payment.invoice_id === selected.id);
+      const location = locations.find((entry) => entry.id === selected.location_id);
+      setReceipt({
+        invoiceNumber: selected.invoice_number,
+        locationName: location?.name ?? "RetailFlow Store",
+        customerName: customers.find((entry) => entry.id === selected.customer_id)?.name ?? null,
+        lines: invoiceItems.map((item) => ({
+          name:
+            item.product_snapshot?.name ??
+            products.find((product) => product.id === item.product_id)?.name ??
+            item.products?.name ??
+            `Item ${item.product_id}`,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          uom: item.uom,
+          total: item.total,
+        })),
+        subtotal:
+          invoiceItems.reduce((sum, item) => sum + item.total, 0) + selected.discount_amount,
+        discount: selected.discount_amount,
+        total: selected.total_amount,
+        payments: invoicePayments.map((payment) => ({
+          mode: payment.mode,
+          amount: payment.amount,
+          ...(payment.tendered != null ? { tendered: payment.tendered } : {}),
+          ...(payment.change_given != null ? { change_given: payment.change_given } : {}),
+          ...(payment.change_denominations
+            ? { change_denominations: payment.change_denominations }
+            : {}),
+        })),
+        createdAt: selected.created_at,
+      });
+    } catch (error) {
+      console.error("Could not load receipt data", error);
+      toast.error("Could not load this receipt", {
+        description: "The bill remains saved. Reopen it and try printing again.",
+      });
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -240,7 +300,7 @@ function SalesPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => window.print()}
+                  onClick={() => void reprintSelectedReceipt()}
                   className="print:hidden"
                 >
                   <Printer className="mr-2 h-4 w-4" /> Reprint receipt
@@ -299,6 +359,11 @@ function SalesPage() {
           )}
         </DialogContent>
       </Dialog>
+      <ReceiptDialog
+        open={!!receipt}
+        onOpenChange={(open) => !open && setReceipt(null)}
+        data={receipt}
+      />
     </div>
   );
 }

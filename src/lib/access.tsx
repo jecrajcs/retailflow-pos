@@ -27,6 +27,7 @@ import {
 } from "@/lib/local-db";
 import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { pageAccessClass } from "@/lib/access-policy";
+import { summarizeIdleSales } from "@/lib/idle-analytics";
 import { toast } from "sonner";
 
 export type AccessRole = "CASHIER" | "MANAGER" | "ADMIN" | "WAREHOUSE";
@@ -54,8 +55,26 @@ function roleCanOpenPath(role: AccessRole, path: string) {
   if (role === "CASHIER") return ["/billing", "/cash-drawer", "/scanner"].includes(path);
   if (role === "WAREHOUSE") return ["/inventory", "/barcodes", "/scanner"].includes(path);
   if (role === "MANAGER")
-    return ["/", "/sales", "/inventory", "/purchases", "/manager", "/cash-drawer", "/barcodes", "/scanner"].includes(path);
-  return ["/", "/admin", "/manager", "/sales", "/inventory", "/purchases", "/barcodes", "/scanner"].includes(path);
+    return [
+      "/",
+      "/sales",
+      "/inventory",
+      "/purchases",
+      "/manager",
+      "/cash-drawer",
+      "/barcodes",
+      "/scanner",
+    ].includes(path);
+  return [
+    "/",
+    "/admin",
+    "/manager",
+    "/sales",
+    "/inventory",
+    "/purchases",
+    "/barcodes",
+    "/scanner",
+  ].includes(path);
 }
 
 interface AccessContextValue {
@@ -213,13 +232,14 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!profile || roleCanOpenPath(profile.role, pathname)) return;
-    const destination = profile.role === "CASHIER"
-      ? "/cash-drawer"
-      : profile.role === "WAREHOUSE"
-        ? "/inventory"
-        : profile.role === "MANAGER"
-          ? "/manager"
-          : "/admin";
+    const destination =
+      profile.role === "CASHIER"
+        ? "/cash-drawer"
+        : profile.role === "WAREHOUSE"
+          ? "/inventory"
+          : profile.role === "MANAGER"
+            ? "/manager"
+            : "/admin";
     void navigate({ to: destination });
   }, [profile, pathname, navigate]);
 
@@ -349,7 +369,11 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
     );
   if (profile.must_change_password) return <ChangePasswordScreen onComplete={refresh} />;
   if (!roleCanOpenPath(profile.role, pathname))
-    return <div className="grid h-dvh place-items-center text-sm text-muted-foreground">Opening your permitted workspace…</div>;
+    return (
+      <div className="grid h-dvh place-items-center text-sm text-muted-foreground">
+        Opening your permitted workspace…
+      </div>
+    );
   return (
     <AccessContext.Provider value={value}>
       <CashierShiftGate profile={profile}>
@@ -471,6 +495,7 @@ function StaffIdleScreen({
   const [pinConfirmation, setPinConfirmation] = useState("");
   const [message, setMessage] = useState("");
   const [working, setWorking] = useState(false);
+  const resumeFormRef = useRef<HTMLFormElement>(null);
   const idleRef = useRef(false);
   const lastActivity = useRef(Date.now());
   const pinSettingKey = `staff_device_resume_pin:${profile.user_id}`;
@@ -483,7 +508,10 @@ function StaffIdleScreen({
       setIdle(true);
     };
     const resetActivity = () => {
-      if (idleRef.current) return;
+      if (idleRef.current) {
+        setShowUnlock(true);
+        return;
+      }
       lastActivity.current = Date.now();
       window.clearTimeout(timer);
       timer = window.setTimeout(enterIdle, 5 * 60 * 1000);
@@ -516,6 +544,10 @@ function StaffIdleScreen({
   }, [profile.user_id, pinSettingKey]);
 
   useEffect(() => {
+    if (showUnlock) resumeFormRef.current?.querySelector("input")?.focus();
+  }, [showUnlock]);
+
+  useEffect(() => {
     if (!idle) return;
     let active = true;
     const refreshStats = async () => {
@@ -545,24 +577,18 @@ function StaffIdleScreen({
       const scopedBills = salesRows.filter(
         (row) =>
           scope.includes(String(row["location_id"] ?? "")) &&
-          String(row["status"] ?? row["invoice_status"] ?? "").toUpperCase() === "COMPLETED" &&
+          String(row["status"] || row["invoice_status"] || "").toUpperCase() === "COMPLETED" &&
           (profile.role !== "CASHIER" || row["cashier_id"] === profile.user_id),
       );
-      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
-        new Date(),
+      const { bills, sales, salesTrend } = summarizeIdleSales(
+        scopedBills.map((row) => ({
+          business_date: String(row["business_date"] ?? ""),
+          created_at: String(row["created_at"] ?? ""),
+          total_amount: Number(row["total_amount"] ?? 0),
+          status: String(row["status"] ?? ""),
+          invoice_status: String(row["invoice_status"] ?? ""),
+        })),
       );
-      const todaysBills = scopedBills.filter((row) => String(row["business_date"] ?? "") === today);
-      const salesTrend = Array.from({ length: 7 }, (_, index) => {
-        const date = new Date();
-        date.setDate(date.getDate() - (6 - index));
-        const key = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
-        return {
-          day: new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short" }).format(date),
-          sales: scopedBills
-            .filter((row) => String(row["business_date"] ?? "") === key)
-            .reduce((sum, row) => sum + Number(row["total_amount"] ?? 0), 0),
-        };
-      });
       const productById = new Map(products.map((row) => [String(row["id"] ?? ""), row]));
       const lowStock = inventory.filter((row) => {
         if (!scope.includes(String(row["location_id"] ?? ""))) return false;
@@ -601,8 +627,8 @@ function StaffIdleScreen({
           ).length
         : 0;
       setStats({
-        bills: todaysBills.length,
-        sales: todaysBills.reduce((sum, row) => sum + Number(row["total_amount"] ?? 0), 0),
+        bills,
+        sales,
         lowStock,
         pendingSync,
         syncAlerts,
@@ -613,9 +639,18 @@ function StaffIdleScreen({
     };
     void refreshStats();
     const timer = window.setInterval(() => void refreshStats(), 30000);
+    const unsubscribe = subscribeLocalChanges((store) => {
+      if (
+        ["bills", "inventory_snapshot", "outbox", "catalog", "purchases", "sync_alerts"].includes(
+          store,
+        )
+      )
+        void refreshStats();
+    });
     return () => {
       active = false;
       window.clearInterval(timer);
+      unsubscribe();
     };
   }, [idle, profile]);
 
@@ -626,8 +661,7 @@ function StaffIdleScreen({
     setMessage("");
     try {
       if (online) {
-        if (!password)
-          throw new Error("Enter this staff account’s password to resume.");
+        if (!password) throw new Error("Enter this staff account’s password to resume.");
         const { data: previous } = await supabase.auth.getSession();
         const result = await retailApi<{
           ok: boolean;
@@ -677,7 +711,7 @@ function StaffIdleScreen({
       {children}
       {idle && (
         <div
-          className="retailflow-lock-screen fixed inset-0 z-[100] overflow-y-auto p-4 text-white sm:p-8"
+          className={`retailflow-lock-screen fixed inset-0 z-[100] overflow-y-auto p-4 text-white transition-colors sm:p-8 ${showUnlock ? "bg-black/50" : ""}`}
           onPointerMove={() => setShowUnlock(true)}
           onPointerDown={() => setShowUnlock(true)}
           onTouchStart={() => setShowUnlock(true)}
@@ -685,10 +719,16 @@ function StaffIdleScreen({
           tabIndex={-1}
         >
           <div className="retailflow-lock-glow" aria-hidden="true" />
-          <div className="relative mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-5">
+          <div
+            aria-hidden={showUnlock}
+            inert={showUnlock}
+            className={`relative mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-5 transition-all duration-200 ${showUnlock ? "pointer-events-none scale-[0.99] opacity-20 blur-sm" : ""}`}
+          >
             <header className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <p className="text-sm uppercase tracking-[0.25em] text-emerald-200/80">RetailFlow · {profile.role.toLowerCase()}</p>
+                <p className="text-sm uppercase tracking-[0.25em] text-emerald-200/80">
+                  RetailFlow · {profile.role.toLowerCase()}
+                </p>
                 <h1 className="mt-1 text-3xl font-semibold sm:text-4xl">Store at a glance</h1>
               </div>
               <p className="text-sm text-white/60">
@@ -702,17 +742,49 @@ function StaffIdleScreen({
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-white/65">Sales · last 7 days</p>
-                    <p className="mt-1 text-2xl font-semibold tabular-nums">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(stats.sales)}</p>
+                    <p className="mt-1 text-2xl font-semibold tabular-nums">
+                      {new Intl.NumberFormat("en-IN", {
+                        style: "currency",
+                        currency: "INR",
+                        maximumFractionDigits: 0,
+                      }).format(stats.sales)}
+                    </p>
                   </div>
-                  <span className="rounded-full bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">{stats.bills} bills today</span>
+                  <span className="rounded-full bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">
+                    {stats.bills} bills today
+                  </span>
                 </div>
                 <div className="mt-3 h-36 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={stats.salesTrend} margin={{ top: 6, right: 8, left: -24, bottom: 0 }}>
+                    <BarChart
+                      data={stats.salesTrend}
+                      margin={{ top: 6, right: 8, left: -24, bottom: 0 }}
+                    >
                       <CartesianGrid stroke="rgba(255,255,255,.1)" vertical={false} />
-                      <XAxis dataKey="day" tick={{ fill: "rgba(255,255,255,.62)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: "rgba(255,255,255,.48)", fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(Number(value ?? 0))} contentStyle={{ background: "#10231f", border: "1px solid rgba(255,255,255,.18)", borderRadius: 12 }} />
+                      <XAxis
+                        dataKey="day"
+                        tick={{ fill: "rgba(255,255,255,.62)", fontSize: 11 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        tick={{ fill: "rgba(255,255,255,.48)", fontSize: 10 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        formatter={(value) =>
+                          new Intl.NumberFormat("en-IN", {
+                            style: "currency",
+                            currency: "INR",
+                          }).format(Number(value ?? 0))
+                        }
+                        contentStyle={{
+                          background: "#10231f",
+                          border: "1px solid rgba(255,255,255,.18)",
+                          borderRadius: 12,
+                        }}
+                      />
                       <Bar dataKey="sales" fill="#63d7a3" radius={[5, 5, 0, 0]} isAnimationActive />
                     </BarChart>
                   </ResponsiveContainer>
@@ -734,7 +806,7 @@ function StaffIdleScreen({
                 <IdleAction label="Purchases awaiting receipt" value={stats.purchases} />
               </div>
             </section>
-            {!showUnlock ? (
+            {!showUnlock && (
               <button
                 type="button"
                 className="retailflow-lock-prompt ml-auto rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm text-white/85 transition hover:bg-white/15"
@@ -742,74 +814,85 @@ function StaffIdleScreen({
               >
                 Move the mouse or press a key to unlock
               </button>
-            ) : <form
-              onSubmit={(event) => void resume(event)}
-              className="ml-auto w-full max-w-md space-y-3 rounded-2xl border border-white/15 bg-white/10 p-4"
-            >
-              <div className="flex items-center gap-2">
-                <LockKeyhole className="h-4 w-4" />
-                <h2 className="font-medium">Resume as {profile.display_name}</h2>
-              </div>
-              {online ? (
-                <div className="space-y-1">
-                  <Label htmlFor="idle-password" className="text-white/80">
-                    Staff password
-                  </Label>
-                  <Input
-                    id="idle-password"
-                    type="password"
-                    autoComplete="current-password"
-                    placeholder="Enter your password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                  />
+            )}
+          </div>
+          {showUnlock && (
+            <div className="fixed inset-0 z-10 grid place-items-center bg-black/45 p-4 backdrop-blur-sm">
+              <form
+                ref={resumeFormRef}
+                onSubmit={(event) => void resume(event)}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="idle-resume-title"
+                className="w-full max-w-md space-y-3 rounded-2xl border border-white/20 bg-slate-950/95 p-5 text-white shadow-2xl"
+              >
+                <div className="flex items-center gap-2">
+                  <LockKeyhole className="h-4 w-4" />
+                  <h2 id="idle-resume-title" className="font-medium">
+                    Resume as {profile.display_name}
+                  </h2>
                 </div>
-              ) : (
-                <>
-                  <p className="flex items-center gap-2 text-xs text-white/65">
-                    <WifiOff className="h-3.5 w-3.5" />
-                    Offline resume uses this device’s PIN.
-                  </p>
+                {online ? (
                   <div className="space-y-1">
-                    <Label htmlFor="idle-pin" className="text-white/80">
-                      {savedPin ? "Device PIN" : "Create a 6 to 8 digit device PIN"}
+                    <Label htmlFor="idle-password" className="text-white/80">
+                      Staff password
                     </Label>
                     <Input
-                      id="idle-pin"
+                      id="idle-password"
                       type="password"
-                      inputMode="numeric"
-                      autoComplete="off"
-                      value={pin}
-                      onChange={(event) => setPin(event.target.value)}
+                      autoComplete="current-password"
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
                     />
                   </div>
-                  {!savedPin && (
+                ) : (
+                  <>
+                    <p className="flex items-center gap-2 text-xs text-white/65">
+                      <WifiOff className="h-3.5 w-3.5" />
+                      Offline resume uses this device’s PIN.
+                    </p>
                     <div className="space-y-1">
-                      <Label htmlFor="idle-pin-confirm" className="text-white/80">
-                        Confirm device PIN
+                      <Label htmlFor="idle-pin" className="text-white/80">
+                        {savedPin ? "Device PIN" : "Create a 6 to 8 digit device PIN"}
                       </Label>
                       <Input
-                        id="idle-pin-confirm"
+                        id="idle-pin"
                         type="password"
                         inputMode="numeric"
                         autoComplete="off"
-                        value={pinConfirmation}
-                        onChange={(event) => setPinConfirmation(event.target.value)}
+                        value={pin}
+                        onChange={(event) => setPin(event.target.value)}
                       />
                     </div>
-                  )}
-                </>
-              )}
-              {message && (
-                <p role="alert" className="text-sm text-rose-200">
-                  {message}
-                </p>
-              )}
-              <Button className="w-full" disabled={working}>
-                {working ? "Verifying…" : "Resume POS"}
-              </Button>
-            </form>}
-          </div>
+                    {!savedPin && (
+                      <div className="space-y-1">
+                        <Label htmlFor="idle-pin-confirm" className="text-white/80">
+                          Confirm device PIN
+                        </Label>
+                        <Input
+                          id="idle-pin-confirm"
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          value={pinConfirmation}
+                          onChange={(event) => setPinConfirmation(event.target.value)}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+                {message && (
+                  <p role="alert" className="text-sm text-rose-200">
+                    {message}
+                  </p>
+                )}
+                <Button className="w-full" disabled={working}>
+                  {working ? "Verifying…" : "Resume POS"}
+                </Button>
+              </form>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -897,7 +980,9 @@ function ChangePasswordScreen({
           <LockKeyhole className="h-6 w-6" />
         </div>
         <div>
-          <h1 className="text-xl font-bold">{changed ? "Password changed" : "Set your password"}</h1>
+          <h1 className="text-xl font-bold">
+            {changed ? "Password changed" : "Set your password"}
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {changed
               ? "Your new password is active. Continue into RetailFlow or return to sign in and verify your new credentials."
@@ -906,47 +991,58 @@ function ChangePasswordScreen({
         </div>
         {changed ? (
           <div className="space-y-2">
-            <p role="status" className="rounded-lg bg-success/10 p-3 text-sm text-success">Password updated successfully.</p>
-            <Button type="button" className="w-full" onClick={() => void continueToPos()}>Continue to RetailFlow</Button>
-            <Button type="button" variant="outline" className="w-full" onClick={() => void backToLogin()}>Return to sign-in</Button>
+            <p role="status" className="rounded-lg bg-success/10 p-3 text-sm text-success">
+              Password updated successfully.
+            </p>
+            <Button type="button" className="w-full" onClick={() => void continueToPos()}>
+              Continue to RetailFlow
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => void backToLogin()}
+            >
+              Return to sign-in
+            </Button>
           </div>
         ) : (
-        <>
-        <div className="space-y-1">
-          <Label htmlFor="new-password">New password</Label>
-          <Input
-            id="new-password"
-            type="password"
-            autoComplete="new-password"
-            placeholder="Enter a new password"
-            minLength={10}
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="confirm-password">Confirm password</Label>
-          <Input
-            id="confirm-password"
-            type="password"
-            autoComplete="new-password"
-            placeholder="Confirm your new password"
-            minLength={10}
-            required
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-          />
-        </div>
-        {message && (
-          <p role="alert" className="text-sm text-destructive">
-            {message}
-          </p>
-        )}
-        <Button className="w-full" disabled={working}>
-          {working ? "Updating…" : "Set password and continue"}
-        </Button>
-        </>
+          <>
+            <div className="space-y-1">
+              <Label htmlFor="new-password">New password</Label>
+              <Input
+                id="new-password"
+                type="password"
+                autoComplete="new-password"
+                placeholder="Enter a new password"
+                minLength={10}
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="confirm-password">Confirm password</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                autoComplete="new-password"
+                placeholder="Confirm your new password"
+                minLength={10}
+                required
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+              />
+            </div>
+            {message && (
+              <p role="alert" className="text-sm text-destructive">
+                {message}
+              </p>
+            )}
+            <Button className="w-full" disabled={working}>
+              {working ? "Updating…" : "Set password and continue"}
+            </Button>
+          </>
         )}
       </form>
     </main>
@@ -1027,8 +1123,8 @@ function SignInScreen({
         <div>
           <h1 className="text-xl font-bold">Sign in to RetailFlow</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Sign in with your email, username or confirmed mobile number and password. Your
-            account also needs an active RetailFlow role profile.
+            Sign in with your email, username or confirmed mobile number and password. Your account
+            also needs an active RetailFlow role profile.
           </p>
         </div>
         {!online && (

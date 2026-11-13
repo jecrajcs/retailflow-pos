@@ -3,6 +3,7 @@ import { BrowserMultiFormatReader } from "@zxing/browser";
 import { Camera, ImageUp, LoaderCircle, ScanBarcode } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { shouldEmitScannedCode } from "@/lib/scanner-pairing";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +23,12 @@ async function lowResolutionJpeg(source: CanvasImageSource, width: number, heigh
     context.drawImage(source, 0, 0, canvas.width, canvas.height);
     for (const quality of [0.42, 0.32, 0.24]) {
       const blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not prepare the review image.")), "image/jpeg", quality),
+        canvas.toBlob(
+          (value) =>
+            value ? resolve(value) : reject(new Error("Could not prepare the review image.")),
+          "image/jpeg",
+          quality,
+        ),
       );
       if (blob.size <= 32_000) return blob;
     }
@@ -33,12 +39,14 @@ async function lowResolutionJpeg(source: CanvasImageSource, width: number, heigh
 export function CameraScannerPanel({
   active,
   onScan,
+  scanMode = "barcode",
   onImageReview,
   requestReviewImage = false,
   compact = false,
 }: {
   active: boolean;
   onScan: (value: string) => void;
+  scanMode?: "barcode" | "qr";
   onImageReview?: (image: Blob) => void | Promise<void>;
   requestReviewImage?: boolean;
   compact?: boolean;
@@ -71,7 +79,7 @@ export function CameraScannerPanel({
         if (!result || cancelled) return;
         const value = result.getText().trim();
         const now = Date.now();
-        if (!value || (value === lastCode.current.value && now - lastCode.current.at < 1400)) return;
+        if (!value || !shouldEmitScannedCode(lastCode.current, value, now)) return;
         lastCode.current = { value, at: now };
         setCameraState("ready");
         callbackRef.current(value);
@@ -112,14 +120,19 @@ export function CameraScannerPanel({
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       bitmap.close();
       const blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("Could not prepare this image."))), "image/jpeg", 0.72),
+        canvas.toBlob(
+          (value) => (value ? resolve(value) : reject(new Error("Could not prepare this image."))),
+          "image/jpeg",
+          0.72,
+        ),
       );
       reviewBlob = await lowResolutionJpeg(canvas, canvas.width, canvas.height);
       const imageUrl = URL.createObjectURL(blob);
       try {
         const result = await new BrowserMultiFormatReader().decodeFromImageUrl(imageUrl);
         const value = result.getText().trim();
-        if (!value) throw new Error("No barcode was found. Try a clearer photo or use live camera scanning.");
+        if (!value)
+          throw new Error("No barcode was found. Try a clearer photo or use live camera scanning.");
         callbackRef.current(value);
       } finally {
         URL.revokeObjectURL(imageUrl);
@@ -143,7 +156,11 @@ export function CameraScannerPanel({
 
   async function sendCurrentFrameForReview() {
     const video = videoRef.current;
-    if (!video || !imageReviewRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (
+      !video ||
+      !imageReviewRef.current ||
+      video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+    ) {
       toast.error("Wait for the camera preview before sending a review image.");
       return;
     }
@@ -154,7 +171,8 @@ export function CameraScannerPanel({
       toast.success("Low-resolution photo sent to the POS");
     } catch (error) {
       toast.error("Could not send the camera image", {
-        description: error instanceof Error ? error.message : "Try again on the same local network.",
+        description:
+          error instanceof Error ? error.message : "Try again on the same local network.",
       });
     } finally {
       setImageBusy(false);
@@ -162,34 +180,59 @@ export function CameraScannerPanel({
   }
 
   useEffect(() => {
-    if (active && requestReviewImage && cameraState === "ready")
-      void sendCurrentFrameForReview();
+    if (active && requestReviewImage && cameraState === "ready") void sendCurrentFrameForReview();
     // A single requested photo is sent per true request; the parent clears it on acknowledgement.
   }, [active, requestReviewImage, cameraState]);
 
   return (
     <div className="space-y-3">
-      <div className={`relative overflow-hidden rounded-xl bg-slate-950 ${compact ? "aspect-[4/3]" : "aspect-video"}`}>
-        <video ref={videoRef} muted playsInline className="h-full w-full object-cover" aria-label="Live barcode camera" />
-        <div className="pointer-events-none absolute inset-x-8 top-1/2 h-20 -translate-y-1/2 rounded-xl border-2 border-emerald-300/90 shadow-[0_0_35px_rgba(52,211,153,.4)]" />
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 animate-pulse bg-emerald-300/80" />
+      <div
+        className={`relative overflow-hidden rounded-xl bg-slate-950 ${compact ? "aspect-[4/3]" : "aspect-video"}`}
+      >
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          className="h-full w-full object-cover"
+          aria-label={scanMode === "qr" ? "Live QR code camera" : "Live barcode camera"}
+        />
+        {scanMode === "qr" ? (
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[78%] aspect-square -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-sky-300/90 shadow-[0_0_35px_rgba(56,189,248,.4)]" />
+        ) : (
+          <>
+            <div className="pointer-events-none absolute inset-x-8 top-1/2 h-20 -translate-y-1/2 rounded-xl border-2 border-emerald-300/90 shadow-[0_0_35px_rgba(52,211,153,.4)]" />
+            <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 animate-pulse bg-emerald-300/80" />
+          </>
+        )}
         {cameraState === "starting" && (
           <div className="absolute inset-0 grid place-items-center bg-slate-950/70 text-sm text-white">
-            <span className="flex items-center gap-2"><LoaderCircle className="h-4 w-4 animate-spin" /> Starting camera…</span>
+            <span className="flex items-center gap-2">
+              <LoaderCircle className="h-4 w-4 animate-spin" /> Starting camera…
+            </span>
           </div>
         )}
         {cameraState === "failed" && (
           <div className="absolute inset-0 grid place-items-center bg-slate-950/85 p-5 text-center text-sm text-white/85">
-            <div><Camera className="mx-auto mb-2 h-6 w-6 text-emerald-200" />{cameraError}</div>
+            <div>
+              <Camera className="mx-auto mb-2 h-6 w-6 text-emerald-200" />
+              {cameraError}
+            </div>
           </div>
         )}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
-          <ScanBarcode className="h-4 w-4" /> Keep the code in the frame. Scans stay on this device.
+          <ScanBarcode className="h-4 w-4" />
+          {scanMode === "qr"
+            ? "Align the pairing QR inside the square."
+            : "Keep the product barcode inside the frame."}
         </p>
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent">
-          {imageBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ImageUp className="h-4 w-4" />}
+          {imageBusy ? (
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+          ) : (
+            <ImageUp className="h-4 w-4" />
+          )}
           Read a photo
           <input
             className="sr-only"
@@ -204,7 +247,13 @@ export function CameraScannerPanel({
           />
         </label>
         {onImageReview && (
-          <Button type="button" variant="outline" size="sm" disabled={imageBusy || cameraState !== "ready"} onClick={() => void sendCurrentFrameForReview()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={imageBusy || cameraState !== "ready"}
+            onClick={() => void sendCurrentFrameForReview()}
+          >
             Send photo to POS for review
           </Button>
         )}
@@ -227,18 +276,14 @@ export function CameraScannerDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Scan a product barcode</DialogTitle>
-          <DialogDescription>Use this device camera, or read a photo stored on this device.</DialogDescription>
+          <DialogDescription>
+            Use this device camera, or read a photo stored on this device.
+          </DialogDescription>
         </DialogHeader>
-        {open && (
-          <CameraScannerPanel
-            active={open}
-            onScan={(value) => {
-              onScan(value);
-              onOpenChange(false);
-            }}
-          />
-        )}
-        <Button variant="outline" onClick={() => onOpenChange(false)}>Close scanner</Button>
+        {open && <CameraScannerPanel active={open} onScan={onScan} />}
+        <Button variant="outline" onClick={() => onOpenChange(false)}>
+          Close scanner
+        </Button>
       </DialogContent>
     </Dialog>
   );

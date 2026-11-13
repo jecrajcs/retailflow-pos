@@ -55,6 +55,7 @@ import {
   useLocations,
   useInventory,
   useProducts,
+  usePurchases,
   useSyncAlerts,
   useCategoryReviews,
   type CategoryReview,
@@ -107,11 +108,56 @@ interface AdjustmentRow {
   locations?: { name: string } | null;
 }
 
+type PurchaseExpiryReceipt = {
+  id: string;
+  status: string;
+  supplier_invoice_number: string;
+  items: Array<{
+    product_id: string;
+    quantity: number;
+    expires_on?: string | null;
+  }>;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function managerExpiryAlerts(
+  purchases: PurchaseExpiryReceipt[],
+  products: Product[],
+  now = new Date(),
+) {
+  const horizon = new Date(now);
+  horizon.setDate(horizon.getDate() + 30);
+  const today = new Date(now.toDateString());
+  return purchases
+    .filter((receipt) => receipt.status === "RECEIVED")
+    .flatMap((receipt) =>
+      receipt.items.flatMap((item) => {
+        if (!item.expires_on) return [];
+        const expires = new Date(`${item.expires_on}T00:00:00`);
+        if (Number.isNaN(expires.getTime()) || expires > horizon) return [];
+        const product = products.find((candidate) => candidate.id === item.product_id);
+        return [
+          {
+            id: `${receipt.id}:${item.product_id}:${item.expires_on}`,
+            name: product?.name ?? "Unknown SKU",
+            variant: product?.variant,
+            quantity: item.quantity,
+            expiresOn: item.expires_on,
+            invoice: receipt.supplier_invoice_number,
+            expired: expires < today,
+          },
+        ];
+      }),
+    )
+    .sort((a, b) => a.expiresOn.localeCompare(b.expiresOn));
+}
+
 function ManagerPage() {
   const queryClient = useQueryClient();
   const { profile } = useAccess();
   const { data: locations = [] } = useLocations();
   const { data: products = [] } = useProducts();
+  const { data: purchases = [] } = usePurchases();
   const allowedLocations = locations.filter((item) => canAccessLocation(profile, item.id));
   const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
   const location = allowedLocations.find((l) => l.id === locationId) ?? allowedLocations[0];
@@ -125,6 +171,10 @@ function ManagerPage() {
   const { data: categoryReviews = [] } = useCategoryReviews();
   const pendingCategories = categoryReviews.filter(
     (review) => review.location_id === location?.id && review.status === "PENDING",
+  );
+  const expiryAlerts = useMemo(
+    () => managerExpiryAlerts(purchases, products),
+    [purchases, products],
   );
   const transfers = allTransfers.filter(
     (row) =>
@@ -214,6 +264,32 @@ function ManagerPage() {
       </div>
 
       <main className="mx-auto min-h-0 w-full max-w-[1200px] flex-1 overflow-y-auto p-3">
+        {expiryAlerts.length > 0 && (
+          <section
+            aria-label="Product expiry alerts"
+            className="mb-3 rounded-lg border border-warning/40 bg-warning/10 p-3"
+          >
+            <div className="mb-2 flex items-center gap-2 font-semibold text-warning">
+              <CircleAlert className="h-4 w-4" />
+              Expiry alerts · {expiryAlerts.length} received lot(s) expiring within 30 days or
+              expired
+            </div>
+            <ul className="grid gap-1 text-sm sm:grid-cols-2">
+              {expiryAlerts.slice(0, 8).map((alert) => (
+                <li key={alert.id}>
+                  <span className={alert.expired ? "font-semibold text-destructive" : ""}>
+                    {alert.name}
+                    {alert.variant ? ` · ${alert.variant}` : ""} · {alert.quantity}
+                  </span>
+                  {" — "}
+                  {alert.expired ? "Expired" : "Expires"}{" "}
+                  {new Date(`${alert.expiresOn}T00:00:00`).toLocaleDateString("en-IN")} · Invoice{" "}
+                  {alert.invoice}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         <Tabs defaultValue="enrichment">
           <TabsList className="flex h-auto flex-wrap">
             <TabsTrigger value="enrichment" className="gap-1.5">
@@ -1438,6 +1514,7 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
           .filter(Boolean),
         category: d["category"] ?? p.category ?? null,
         subcategory: d["subcategory"] ?? p.subcategory ?? null,
+        brand: d["brand"] ?? p.brand ?? null,
         barcode: d["barcode"] ?? p.barcode ?? null,
         sku: d["sku"] ?? p.sku ?? null,
         hsn: d["hsn"] ?? p.hsn ?? null,
@@ -1508,8 +1585,10 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
     );
   }
 
-  const field = (p: Product, key: keyof Product) =>
-    drafts[p.id]?.[key] ?? String((p[key] as string | number | boolean | null) ?? "");
+  const field = (p: Product, key: keyof Product) => {
+    const value = p[key];
+    return drafts[p.id]?.[key] ?? String((value as string | number | boolean | null) ?? "");
+  };
 
   return (
     <section className="space-y-2 rounded-lg border bg-card p-3">
@@ -1586,6 +1665,25 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
                   }
                 />
               </div>
+            ),
+          },
+          {
+            id: "brand",
+            header: "Brand",
+            accessor: (p) => p.brand ?? "",
+            cell: (p) => (
+              <Input
+                aria-label={`Brand for ${p.name}`}
+                className="h-7 w-28 text-xs"
+                value={field(p, "brand")}
+                placeholder="Brand"
+                onChange={(event) =>
+                  setDrafts((drafts) => ({
+                    ...drafts,
+                    [p.id]: { ...drafts[p.id], brand: event.target.value },
+                  }))
+                }
+              />
             ),
           },
           ...(["barcode", "sku", "hsn"] as const).map((k) => ({
@@ -1808,7 +1906,7 @@ function NewTransferCard({
   }
 
   async function submit() {
-    if (!fromId || !toId || lines.length === 0 || busy) return;
+    if (!fromId || !toId || fromId === toId || lines.length === 0 || busy) return;
     setBusy(true);
     try {
       await createTransfer({
@@ -1888,6 +1986,13 @@ function NewTransferCard({
           Add
         </Button>
       </div>
+      {fromId && toId && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Transfer direction:{" "}
+          {locations.find((location) => location.id === fromId)?.name ?? "Source"} →{" "}
+          {locations.find((location) => location.id === toId)?.name ?? "Destination"}
+        </p>
+      )}
       {lines.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {lines.map((l, i) => (
@@ -1916,7 +2021,10 @@ function NewTransferCard({
             placeholder="Optional note"
           />
         </div>
-        <Button onClick={submit} disabled={busy || !toId || lines.length === 0}>
+        <Button
+          onClick={submit}
+          disabled={busy || !fromId || !toId || fromId === toId || lines.length === 0}
+        >
           Create transfer
         </Button>
       </div>

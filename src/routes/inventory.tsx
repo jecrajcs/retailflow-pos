@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { AlertTriangle, ArrowDownAZ, Boxes, ClipboardCheck, Search, Truck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDownAZ,
+  Boxes,
+  ClipboardCheck,
+  Printer,
+  Search,
+  Truck,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
@@ -89,6 +97,7 @@ function InventoryPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | ReorderStatus>("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [indentProduct, setIndentProduct] = useState<Product | null>(null);
   const [countProduct, setCountProduct] = useState<Product | null>(null);
 
@@ -113,6 +122,7 @@ function InventoryPage() {
         const status = productStatus(p, location?.id);
         return { product: p, qty, status };
       })
+      .filter((r) => categoryFilter === "ALL" || (r.product.category ?? "") === categoryFilter)
       .filter((r) => (statusFilter === "ALL" ? true : r.status === statusFilter))
       .filter((r) => {
         if (!q) return true;
@@ -123,7 +133,7 @@ function InventoryPage() {
         return order[a.status] - order[b.status] || a.product.name.localeCompare(b.product.name);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, inventory, locationProducts, location?.id, search, statusFilter]);
+  }, [products, inventory, locationProducts, location?.id, search, statusFilter, categoryFilter]);
 
   const counts = useMemo(() => {
     const c = { OUT: 0, REORDER: 0, IN: 0, COUNT: 0, UNASSIGNED: 0, total: products.length };
@@ -141,9 +151,11 @@ function InventoryPage() {
 
   return (
     <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
-      <AppNav active="/inventory" />
+      <div className="print:hidden">
+        <AppNav active="/inventory" />
+      </div>
 
-      <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2 print:hidden">
         <SearchableSelect
           className="w-64"
           value={location?.id ?? ""}
@@ -177,34 +189,68 @@ function InventoryPage() {
             { value: "OUT", label: `Out of Stock (${counts.OUT})` },
           ]}
         />
+        <SearchableSelect
+          className="w-48"
+          value={categoryFilter}
+          onValueChange={setCategoryFilter}
+          options={[
+            { value: "ALL", label: "All categories" },
+            ...Array.from(new Set(products.map((product) => product.category).filter(Boolean)))
+              .sort((a, b) => String(a).localeCompare(String(b)))
+              .map((category) => ({ value: category!, label: category! })),
+          ]}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          className="print:hidden"
+          onClick={() => window.print()}
+          disabled={!rows.length}
+        >
+          <Printer className="mr-1.5 h-4 w-4" /> Print inventory
+        </Button>
       </div>
 
-      <main className="mx-auto min-h-0 w-full max-w-[1600px] flex-1 overflow-y-auto p-3">
+      <main className="mx-auto min-h-0 w-full max-w-[1600px] flex-1 overflow-y-auto p-3 print:max-w-none print:overflow-visible">
         <div className="mb-3 flex flex-wrap gap-2">
-          <StatChip label="Total SKUs" value={String(products.length)} icon={Boxes} />
+          <StatChip
+            label="Total SKUs"
+            value={String(products.length)}
+            icon={Boxes}
+            selected={statusFilter === "ALL"}
+            onClick={() => setStatusFilter("ALL")}
+          />
           <StatChip
             label="In Stock"
             value={String(counts.IN)}
             icon={ArrowDownAZ}
             className="text-success"
+            selected={statusFilter === "IN"}
+            onClick={() => setStatusFilter("IN")}
           />
           <StatChip
             label="Reorder Now"
             value={String(counts.REORDER)}
             icon={AlertTriangle}
             className="text-warning"
+            selected={statusFilter === "REORDER"}
+            onClick={() => setStatusFilter("REORDER")}
           />
           <StatChip
             label="Out of Stock"
             value={String(counts.OUT)}
             icon={AlertTriangle}
             className="text-destructive"
+            selected={statusFilter === "OUT"}
+            onClick={() => setStatusFilter("OUT")}
           />
           <StatChip
             label="Count Required"
             value={String(counts.COUNT)}
             icon={ClipboardCheck}
             className="text-info"
+            selected={statusFilter === "COUNT"}
+            onClick={() => setStatusFilter("COUNT")}
           />
         </div>
 
@@ -212,7 +258,8 @@ function InventoryPage() {
           rows={rows}
           getRowId={(row) => row.product.id}
           searchable={false}
-          resetKey={`${location?.id ?? ""}:${statusFilter}:${search}`}
+          resetKey={`${location?.id ?? ""}:${statusFilter}:${categoryFilter}:${search}`}
+          initialPageSize={2000}
           emptyMessage="No inventory records match these filters."
           columns={[
             {
@@ -419,22 +466,30 @@ function StatChip({
   value,
   icon: Icon,
   className,
+  selected = false,
+  onClick,
 }: {
   label: string;
   value: string;
   icon: typeof Boxes;
   className?: string;
+  selected?: boolean;
+  onClick: () => void;
 }) {
   return (
-    <div
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onClick}
       className={cn(
-        "flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm",
+        "flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-left text-sm transition hover:border-primary/50 hover:bg-accent",
+        selected && "border-primary ring-1 ring-primary/30",
         className,
       )}
     >
       <Icon className="h-4 w-4" />
       <span className="font-bold tabular-nums">{value}</span>
       <span className="text-xs text-muted-foreground">{label}</span>
-    </div>
+    </button>
   );
 }

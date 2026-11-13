@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Plus, Search, UserRound } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +31,7 @@ export function CustomerDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (customer: Customer | null) => void;
+  onSelect: (customer: Customer | null, walkIn?: boolean) => void;
 }) {
   const { data: customers = [] } = useCustomers();
   const [search, setSearch] = useState("");
@@ -38,17 +39,49 @@ export function CustomerDialog({
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [creditLimit, setCreditLimit] = useState("");
-  const [ageGroup, setAgeGroup] = useState("Adult");
+  const [ageGroup, setAgeGroup] = useState("unspecified");
   const [gender, setGender] = useState("");
   const [busy, setBusy] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
+  const selectableCustomers = customers.filter(
+    (customer) => customer.name?.trim().toLocaleLowerCase() !== "walk-in" || !!customer.mobile,
+  );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return customers.slice(0, 8);
-    return customers.filter((c) => matchesSearchFields([c.name, c.mobile], q));
-  }, [customers, search]);
+    if (!q) return selectableCustomers.slice(0, 8);
+    return selectableCustomers.filter((c) => matchesSearchFields([c.name, c.mobile], q));
+  }, [selectableCustomers, search]);
   const visibleCustomers = filtered.slice(0, 100);
+
+  async function selectWalkIn() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const walkIn =
+        customers.find(
+          (customer) => customer.name?.trim().toLocaleLowerCase() === "walk-in" && !customer.mobile,
+        ) ??
+        (await addCustomer({
+          name: "Walk-in",
+          mobile: null,
+          creditLimit: 0,
+          ageGroup: null,
+          gender: null,
+        }));
+      onSelect(walkIn, true);
+      onOpenChange(false);
+    } catch (error) {
+      toast.error("Could not start a Walk-in bill", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "The Walk-in customer profile could not be saved.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleAdd() {
     if ((!name.trim() && !mobile.replace(/\D/g, "")) || busy) return;
@@ -58,7 +91,7 @@ export function CustomerDialog({
         name: name.trim() || null,
         mobile: mobile.trim() || null,
         creditLimit: Number(creditLimit) || 0,
-        ageGroup,
+        ageGroup: ageGroup === "unspecified" ? null : ageGroup,
         gender: gender || null,
       });
       onSelect(created);
@@ -66,10 +99,15 @@ export function CustomerDialog({
       setName("");
       setMobile("");
       setCreditLimit("");
-      setAgeGroup("Adult");
+      setAgeGroup("unspecified");
       setGender("");
       setAdding(false);
       setSearch("");
+    } catch (error) {
+      toast.error("Could not save customer", {
+        description:
+          error instanceof Error ? error.message : "The customer profile could not be saved.",
+      });
     } finally {
       setBusy(false);
     }
@@ -80,8 +118,20 @@ export function CustomerDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Select customer</DialogTitle>
-          <DialogDescription>Search by name or mobile, or create a customer profile.</DialogDescription>
+          <DialogDescription>
+            Search by name or mobile, or create a customer profile.
+          </DialogDescription>
         </DialogHeader>
+
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start"
+          disabled={busy}
+          onClick={() => void selectWalkIn()}
+        >
+          Continue as Walk-in
+        </Button>
 
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -149,7 +199,7 @@ export function CustomerDialog({
         </div>
         {search.trim() &&
           !adding &&
-          !customers.some((customer) =>
+          !selectableCustomers.some((customer) =>
             matchesSearchFields([customer.name, customer.mobile], search.trim()),
           ) && (
             <button
@@ -199,7 +249,10 @@ export function CustomerDialog({
                 <SearchableSelect
                   value={ageGroup}
                   onValueChange={setAgeGroup}
-                  options={AGE_GROUPS.map((value) => ({ value, label: value }))}
+                  options={[
+                    { value: "unspecified", label: "Not specified" },
+                    ...AGE_GROUPS.map((value) => ({ value, label: value })),
+                  ]}
                 />
               </div>
               <div className="space-y-1">
@@ -226,7 +279,11 @@ export function CustomerDialog({
               <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleAdd} disabled={(!name.trim() && !mobile.replace(/\D/g, "")) || busy}>
+              <Button
+                size="sm"
+                onClick={handleAdd}
+                disabled={(!name.trim() && !mobile.replace(/\D/g, "")) || busy}
+              >
                 Save customer
               </Button>
             </div>

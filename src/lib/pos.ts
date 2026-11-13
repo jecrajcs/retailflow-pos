@@ -35,6 +35,7 @@ export interface Product {
   sku: string | null;
   barcode: string | null;
   hsn: string | null;
+  brand?: string | null;
   category: string | null;
   subcategory?: string | null;
   variant: string | null;
@@ -300,6 +301,8 @@ export interface LocalPurchaseReceipt {
     quantity: number;
     unit_cost: number;
     source_total?: number | null;
+    manufactured_on?: string | null;
+    expires_on?: string | null;
     name?: string;
     sku?: string;
     retail_price?: number;
@@ -460,6 +463,7 @@ export function matchesProductSearch(product: Product, query: string): boolean {
     ...(product.search_aliases ?? []),
     product.sku,
     product.barcode,
+    product.brand,
     product.category,
     product.subcategory,
     product.variant,
@@ -1087,7 +1091,7 @@ export async function createPosInvoice(input: {
     }
   }
 
-  const deviceId = input.cashierId ?? (await getDeviceId());
+  const deviceId = await getDeviceId();
   const location = await getLocal<Location & KeyedRecord>("locations", input.locationId);
   const invoiceNumber =
     existing?.invoice_number ??
@@ -1122,7 +1126,7 @@ export async function createPosInvoice(input: {
     customer_id: input.customerId,
     customer_segment: input.customerSegment ?? null,
     order_type: input.orderType ?? "Registered customer",
-    cashier_id: deviceId,
+    cashier_id: input.cashierId ?? deviceId,
     cashier_name: input.cashierName ?? "Cashier",
     total_amount: total,
     discount_amount: input.discount,
@@ -1361,12 +1365,6 @@ export async function quickAddProduct(input: {
     throw new Error("Quantity prices must be between the minimum allowed price and retail price.");
   const allProducts = await getAllLocal<Product & KeyedRecord>("catalog");
   const barcode = input.barcode?.trim() || null;
-  if (
-    barcode &&
-    allProducts.some((product) => product.barcode?.toLowerCase() === barcode.toLowerCase())
-  ) {
-    throw new Error("This barcode is already assigned to another product.");
-  }
   if (allProducts.some((product) => product.sku?.toLowerCase() === sku.toLowerCase()))
     throw new Error("This SKU already exists.");
   const id = localId();
@@ -1655,11 +1653,6 @@ export async function updateProductProfile(productId: string, patch: Partial<Pro
     (product) => product.id !== productId && product.sku?.toLowerCase() === nextSku?.toLowerCase(),
   );
   if (duplicateSku) throw new Error("This SKU is already assigned to another product.");
-  const duplicateBarcode = catalog.some(
-    (product) =>
-      product.id !== productId && product.barcode?.toLowerCase() === nextBarcode?.toLowerCase(),
-  );
-  if (duplicateBarcode) throw new Error("This barcode is already assigned to another product.");
   const priceTiers =
     patch.price_tiers === undefined
       ? (current.price_tiers ?? [])
@@ -1724,25 +1717,49 @@ export async function requestIndent(input: {
   });
 }
 
+function aggregateTransferItems(items: ReadonlyArray<{ product_id: unknown; quantity: unknown }>) {
+  if (items.length === 0) throw new Error("Add at least one product to the transfer.");
+
+  const quantities = new Map<string, number>();
+  for (const item of items) {
+    const productId = typeof item.product_id === "string" ? item.product_id.trim() : "";
+    const quantity = Number(item.quantity);
+    if (!productId) throw new Error("Every transfer item must have a product.");
+    if (!Number.isFinite(quantity) || quantity <= 0)
+      throw new Error("Transfer quantities must be finite and greater than zero.");
+
+    const total = (quantities.get(productId) ?? 0) + quantity;
+    if (!Number.isFinite(total)) throw new Error("The combined transfer quantity is too large.");
+    quantities.set(productId, total);
+  }
+
+  return Array.from(quantities, ([product_id, quantity]) => ({ product_id, quantity }));
+}
+
 export async function createTransfer(input: {
   fromLocationId: string;
   toLocationId: string;
   items: Array<{ product_id: string; quantity: number }>;
   notes: string | null;
 }) {
-  if (input.fromLocationId === input.toLocationId)
-    throw new Error("Choose two different locations.");
-  if (input.items.length === 0 || input.items.some((item) => item.quantity <= 0))
-    throw new Error("Transfer quantities must be greater than zero.");
+  const fromLocationId = input.fromLocationId.trim();
+  const toLocationId = input.toLocationId.trim();
+  if (!fromLocationId || !toLocationId) throw new Error("Choose a source and destination.");
+  if (fromLocationId === toLocationId) throw new Error("Choose two different locations.");
+  const transferItems = aggregateTransferItems(input.items);
   const transfer: StockTransfer = {
     id: localId(),
-    from_location_id: input.fromLocationId,
-    to_location_id: input.toLocationId,
+    from_location_id: fromLocationId,
+    to_location_id: toLocationId,
     status: "REQUESTED",
     notes: input.notes,
     created_at: new Date().toISOString(),
   };
-  const items = input.items.map((item) => ({ id: localId(), transfer_id: transfer.id, ...item }));
+  const items = transferItems.map((item) => ({
+    id: localId(),
+    transfer_id: transfer.id,
+    ...item,
+  }));
   await commitLocalOperation(
     [
       {
@@ -1756,7 +1773,7 @@ export async function createTransfer(input: {
     ],
     "inventory.transfer.create",
     { record_id: transfer.id, transfer, items },
-    input.fromLocationId,
+    fromLocationId,
   );
   triggerBackgroundSync();
   return transfer;
@@ -1768,6 +1785,12 @@ export async function setTransferStatus(transferId: string, status: string) {
   const items = (await getAllLocal<KeyedRecord>("transfer_items")).filter(
     (item) => item["transfer_id"] === transferId,
   );
+  const stockItems = aggregateTransferItems(
+    items.map((item) => ({
+      product_id: item["product_id"],
+      quantity: item["quantity"],
+    })),
+  );
   const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
     {
       store: "stock_transfers",
@@ -1776,11 +1799,11 @@ export async function setTransferStatus(transferId: string, status: string) {
   ];
   const movements: KeyedRecord[] = [];
   if (status === "IN_TRANSIT" && transfer.status === "REQUESTED") {
-    for (const item of items) {
+    for (const item of stockItems) {
       const result = await localStockDelta(
-        String(item["product_id"]),
+        item.product_id,
         transfer.from_location_id,
-        -Number(item["quantity"]),
+        -item.quantity,
         "TRANSFER OUT",
         transferId,
       );
@@ -1804,6 +1827,12 @@ export async function receiveTransfer(transferId: string) {
   const items = (await getAllLocal<KeyedRecord>("transfer_items")).filter(
     (item) => item["transfer_id"] === transferId,
   );
+  const stockItems = aggregateTransferItems(
+    items.map((item) => ({
+      product_id: item["product_id"],
+      quantity: item["quantity"],
+    })),
+  );
   const entries: Array<{ store: LocalStoreName; value: KeyedRecord }> = [
     {
       store: "stock_transfers",
@@ -1811,12 +1840,12 @@ export async function receiveTransfer(transferId: string) {
     },
   ];
   const movements: KeyedRecord[] = [];
-  for (const item of items) {
+  for (const item of stockItems) {
     if (transfer.status === "REQUESTED") {
       const outgoing = await localStockDelta(
-        String(item["product_id"]),
+        item.product_id,
         transfer.from_location_id,
-        -Number(item["quantity"]),
+        -item.quantity,
         "TRANSFER OUT",
         transferId,
       );
@@ -1824,9 +1853,9 @@ export async function receiveTransfer(transferId: string) {
       movements.push(outgoing.movement as unknown as KeyedRecord);
     }
     const incoming = await localStockDelta(
-      String(item["product_id"]),
+      item.product_id,
       transfer.to_location_id,
-      Number(item["quantity"]),
+      item.quantity,
       "TRANSFER IN",
       transferId,
     );

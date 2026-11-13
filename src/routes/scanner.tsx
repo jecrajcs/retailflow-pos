@@ -241,7 +241,7 @@ function BarcodeScannerPage() {
 
   return (
     <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
-      {!phoneMode && <AppNav active="/barcodes" />}
+      {!phoneMode && <AppNav active="/scanner" />}
       <main className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto p-3 sm:p-6">
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -262,13 +262,11 @@ function BarcodeScannerPage() {
               {connectionLabel}
             </Badge>
           )}
-          {!phoneMode &&
-            profile &&
-            ["ADMIN", "MANAGER", "WAREHOUSE"].includes(profile.role) && (
-              <Button asChild variant="outline">
-                <Link to="/barcodes">Manager barcode review</Link>
-              </Button>
-            )}
+          {!phoneMode && profile && ["ADMIN", "MANAGER", "WAREHOUSE"].includes(profile.role) && (
+            <Button asChild variant="outline">
+              <Link to="/barcodes">Manager barcode review</Link>
+            </Button>
+          )}
         </header>
 
         {error && (
@@ -296,7 +294,7 @@ function BarcodeScannerPage() {
                       products.
                     </p>
                     <div className="mx-auto w-fit rounded-xl bg-white p-3">
-                      <QRCodeSVG value={JSON.stringify(answer)} size={248} />
+                      <QRCodeSVG value={JSON.stringify(answer)} size={320} />
                     </div>
                     <div className="text-center text-sm">{connectionLabel}</div>
                   </>
@@ -317,6 +315,7 @@ function BarcodeScannerPage() {
             {cameraActive && (
               <CameraScannerPanel
                 active
+                scanMode={answer ? "barcode" : "qr"}
                 onScan={handleCameraValue}
                 requestReviewImage={imageRequested}
                 onImageReview={(image) => {
@@ -354,14 +353,18 @@ function BarcodeScannerPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Link2 className="h-5 w-5" /> Pair a phone over local Wi-Fi
+                  <Link2 className="h-5 w-5" /> Pair a phone over Wi-Fi or hotspot
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">
                   Open the phone companion in RetailFlow, scan the POS QR with its camera, then scan
                   the reply QR from the phone here. Both devices must be on the same Wi-Fi or
-                  hotspot. Pairing expires after five minutes.
+                  hotspot with local device communication enabled. Pairing expires after five
+                  minutes. Bluetooth keyboard-wedge scanners work directly; Bluetooth-only phone
+                  camera transfer is not supported by this browser app. Pairing uses Google's public
+                  STUN service to improve hotspot connectivity; restrictive networks may still
+                  require a relay service.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={() => void startDesktopPairing()}>
@@ -399,7 +402,7 @@ function BarcodeScannerPage() {
                 {offer && (
                   <div className="grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
                     <div className="mx-auto w-fit rounded-xl bg-white p-3">
-                      <QRCodeSVG value={JSON.stringify(offer)} size={248} />
+                      <QRCodeSVG value={JSON.stringify(offer)} size={320} />
                     </div>
                     <div className="space-y-3">
                       <p className="text-sm">1. Scan this QR from the phone companion.</p>
@@ -416,7 +419,9 @@ function BarcodeScannerPage() {
                     </div>
                   </div>
                 )}
-                {cameraActive && <CameraScannerPanel active onScan={handleCameraValue} />}
+                {cameraActive && (
+                  <CameraScannerPanel active scanMode="qr" onScan={handleCameraValue} />
+                )}
                 {lastCode && (
                   <div className="rounded-lg border bg-card p-3 font-mono text-sm">
                     Phone scan: {lastCode}

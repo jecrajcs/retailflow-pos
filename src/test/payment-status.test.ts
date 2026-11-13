@@ -49,6 +49,11 @@ describe("POS search and bill rules", () => {
     expect(matchesProductSearch(product, "balti")).toBe(true);
     expect(matchesProductSearch(product, "baltiy")).toBe(true);
   });
+
+  it("matches product brands", () => {
+    const product = { name: "Supari", brand: "Sweety" } as Product;
+    expect(matchesProductSearch(product, "sweety")).toBe(true);
+  });
 });
 
 describe("quantity based wholesale pricing", () => {

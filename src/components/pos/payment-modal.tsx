@@ -14,7 +14,6 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { cn } from "@/lib/utils";
 import {
-  DENOMINATIONS,
   createPosInvoice,
   inr,
   type CartLine,
@@ -24,7 +23,11 @@ import {
   type PaymentSplitInput,
 } from "@/lib/pos";
 import { userFacingError } from "@/lib/retail-api";
-import { calculatePaymentAllocation } from "@/lib/payment-policy";
+import {
+  calculatePaymentAllocation,
+  CASH_DENOMINATIONS,
+  suggestCashChange,
+} from "@/lib/payment-policy";
 
 const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }> = [
   { value: "CASH", label: "Cash", icon: Banknote },
@@ -32,18 +35,6 @@ const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }>
   { value: "CARD", label: "Card", icon: CreditCard },
   { value: "CREDIT", label: "Udhar (Customer Credit)", icon: Wallet },
 ];
-
-const NOTES = DENOMINATIONS;
-
-function suggestChange(amount: number) {
-  const denominations = DENOMINATIONS;
-  let remaining = Math.round(amount * 100) / 100;
-  return denominations.map((denomination) => {
-    const count = Math.floor((remaining + 0.0001) / denomination);
-    remaining = Math.round((remaining - count * denomination) * 100) / 100;
-    return { denomination, count };
-  });
-}
 
 interface Split {
   mode: PaymentMode;
@@ -66,6 +57,7 @@ export function PaymentModal({
   onDiscountChange,
   minTotal,
   customer,
+  walkIn = false,
   upiVpa,
   upiPayeeName,
   onPaid,
@@ -85,6 +77,7 @@ export function PaymentModal({
   /** Sum of qty × floor (min allowed) price — bill discount cannot go below this. */
   minTotal: number;
   customer: Customer | null;
+  walkIn?: boolean;
   upiVpa: string | null;
   upiPayeeName: string;
   onPaid: (result: InvoiceResult, payments: PaymentSplitInput[]) => void;
@@ -109,16 +102,16 @@ export function PaymentModal({
   const allocation = useMemo(() => calculatePaymentAllocation(total, splits), [total, splits]);
   const { nonCashPaid, creditAllocated, cashTendered, cashApplied, paid, remaining, change } =
     allocation;
-  const creditAvailable = Math.max(
-    (customer?.credit_limit ?? 0) - (customer?.outstanding_balance ?? 0),
-    0,
-  );
+  const availableModes = walkIn ? MODES.filter((mode) => mode.value !== "CREDIT") : MODES;
+  const creditAvailable = walkIn
+    ? 0
+    : Math.max((customer?.credit_limit ?? 0) - (customer?.outstanding_balance ?? 0), 0);
   const changeDenominationTotal = changeNotes.reduce(
     (sum, item) => sum + item.denomination * item.count,
     0,
   );
 
-  useEffect(() => setChangeNotes(suggestChange(change)), [change]);
+  useEffect(() => setChangeNotes(suggestCashChange(change)), [change]);
 
   const upiAmount = splits
     .filter((s) => s.mode === "UPI")
@@ -197,7 +190,7 @@ export function PaymentModal({
         cashierName,
         customerId: customer?.id ?? null,
         customerSegment: customer?.segment ?? null,
-        orderType: "Registered customer",
+        orderType: walkIn ? "Walk-in" : "Registered customer",
         discount,
         businessDate,
         items: lines.map((l) => ({
@@ -282,8 +275,8 @@ export function PaymentModal({
         </div>
 
         <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
-          Customer: <strong>{customer?.name || customer?.mobile}</strong>
-          {customer?.credit_limit ? ` · credit limit ${inr(customer.credit_limit)}` : ""}
+          Customer: <strong>{walkIn ? "Walk-in" : customer?.name || customer?.mobile}</strong>
+          {!walkIn && customer?.credit_limit ? ` · credit limit ${inr(customer.credit_limit)}` : ""}
         </div>
 
         <div className="space-y-2">
@@ -299,11 +292,13 @@ export function PaymentModal({
                     className="w-44"
                     value={s.mode}
                     onValueChange={(value) => updateSplit(i, { mode: value as PaymentMode })}
-                    options={MODES.filter(
-                      (mode) =>
-                        mode.value === s.mode ||
-                        !splits.some((split, index) => index !== i && split.mode === mode.value),
-                    ).map((mode) => ({ value: mode.value, label: mode.label }))}
+                    options={availableModes
+                      .filter(
+                        (mode) =>
+                          mode.value === s.mode ||
+                          !splits.some((split, index) => index !== i && split.mode === mode.value),
+                      )
+                      .map((mode) => ({ value: mode.value, label: mode.label }))}
                   />
                   <Input
                     type="number"
@@ -325,7 +320,7 @@ export function PaymentModal({
                 </div>
                 {s.mode === "CASH" && (
                   <div className="flex items-center gap-1.5 pl-11">
-                    {NOTES.map((n) => (
+                    {CASH_DENOMINATIONS.map((n) => (
                       <button
                         key={n}
                         onClick={() =>
@@ -366,10 +361,12 @@ export function PaymentModal({
             <Button
               variant="outline"
               size="sm"
-              disabled={!MODES.some((mode) => !splits.some((split) => split.mode === mode.value))}
+              disabled={
+                !availableModes.some((mode) => !splits.some((split) => split.mode === mode.value))
+              }
               onClick={() =>
                 setSplits((prev) => {
-                  const nextMode = MODES.find(
+                  const nextMode = availableModes.find(
                     (mode) => !prev.some((split) => split.mode === mode.value),
                   )?.value;
                   return nextMode ? [...prev, { mode: nextMode, amount: "", tendered: "" }] : prev;
@@ -469,7 +466,7 @@ export function PaymentModal({
                     −
                   </button>
                   <span>
-                    ₹{denomination} × {count}
+                    ₹{denomination < 1 ? denomination.toFixed(2) : denomination} × {count}
                   </span>
                   <button
                     aria-label={`Add one ${denomination} rupee denomination`}

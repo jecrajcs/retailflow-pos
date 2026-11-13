@@ -13,7 +13,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BarcodePreview } from "@/components/pos/barcode-preview";
-import { UOMS, barcodeForSku, generateSku, inr, quickAddProduct, resubmitRejectedProduct, type Product } from "@/lib/pos";
+import {
+  UOMS,
+  barcodeForSku,
+  generateSku,
+  inr,
+  quickAddProduct,
+  resubmitRejectedProduct,
+  type Product,
+} from "@/lib/pos";
 import { userFacingError } from "@/lib/retail-api";
 
 export function QuickAddModal({
@@ -22,6 +30,7 @@ export function QuickAddModal({
   locationId,
   prefill,
   prefillSku,
+  prefillVariant,
   prefillRetailPrice,
   prefillPurchaseCost,
   prefillUom,
@@ -36,6 +45,7 @@ export function QuickAddModal({
   /** Text typed/scanned in the billing search box that found no product. */
   prefill?: string;
   prefillSku?: string;
+  prefillVariant?: string;
   prefillRetailPrice?: number;
   prefillPurchaseCost?: number;
   prefillUom?: string;
@@ -77,6 +87,7 @@ export function QuickAddModal({
       setBarcode(isNumeric ? text : "");
       setInternalBarcode(false);
       if (prefillSku?.trim()) setSku(prefillSku.trim());
+      setVariant(prefillVariant?.trim() || "");
       setUom(prefillUom?.trim() || "Pcs");
       setSalePrice(prefillRetailPrice && prefillRetailPrice > 0 ? String(prefillRetailPrice) : "");
       setBusy(false);
@@ -87,18 +98,21 @@ export function QuickAddModal({
           })
           .catch(() => setSku(""));
     }
-  }, [open, prefill, prefillSku, prefillRetailPrice, prefillPurchaseCost, prefillUom, correctionProduct]);
+  }, [
+    open,
+    prefill,
+    prefillSku,
+    prefillVariant,
+    prefillRetailPrice,
+    prefillPurchaseCost,
+    prefillUom,
+    correctionProduct,
+  ]);
 
   const saleNum = Number(salePrice) || 0;
 
   async function handleSave() {
-    if (
-      !sku ||
-      !name.trim() ||
-      !(saleNum > 0) ||
-      busy
-    )
-      return;
+    if (!sku || !name.trim() || !(saleNum > 0) || busy) return;
     setBusy(true);
     try {
       const product = correctionProduct
@@ -114,31 +128,34 @@ export function QuickAddModal({
             uom,
           })
         : await quickAddProduct({
-        name: name.trim(),
-        sku,
-        barcode: barcode.trim() || null,
-        barcodeType: internalBarcode ? "INTERNAL" : managerMode ? "MANUFACTURER" : "UNVERIFIED",
-        variant: variant.trim() || null,
-        category: category.trim() || null,
-        subcategory: subcategory.trim() || null,
-        rackLocation: null,
-        salePrice: saleNum,
-        minSalePrice: 0,
-        priceTiers: [],
-        purchaseCost: Number(prefillPurchaseCost) || 0,
-        mrp: 0,
-        uom,
-        locationId,
-        openingQty: 0,
-        cashierQuickAdd: !managerMode,
-      });
+            name: name.trim(),
+            sku,
+            barcode: barcode.trim() || null,
+            barcodeType: internalBarcode ? "INTERNAL" : managerMode ? "MANUFACTURER" : "UNVERIFIED",
+            variant: variant.trim() || null,
+            category: category.trim() || null,
+            subcategory: subcategory.trim() || null,
+            rackLocation: null,
+            salePrice: saleNum,
+            minSalePrice: 0,
+            priceTiers: [],
+            purchaseCost: Number(prefillPurchaseCost) || 0,
+            mrp: 0,
+            uom,
+            locationId,
+            openingQty: 0,
+            cashierQuickAdd: !managerMode,
+          });
       onAdded(product);
       onOpenChange(false);
-      toast.success(correctionProduct ? `${product.name} corrected` : `${product.name} added — ${sku}`, {
-        description: correctionProduct
-          ? "The corrected SKU has been resubmitted for Manager review."
-          : `${inr(saleNum)}/${uom} · Catalog details are ready for Manager review.`,
-      });
+      toast.success(
+        correctionProduct ? `${product.name} corrected` : `${product.name} added — ${sku}`,
+        {
+          description: correctionProduct
+            ? "The corrected SKU has been resubmitted for Manager review."
+            : `${inr(saleNum)}/${uom} · Catalog details are ready for Manager review.`,
+        },
+      );
     } catch (e) {
       toast.error("Could not save item", {
         description: userFacingError(e, "Check the item details and try again."),
@@ -153,14 +170,16 @@ export function QuickAddModal({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <Zap className="h-4 w-4 text-warning" /> {correctionProduct ? "Correct rejected SKU" : "Quick add item"}
+            <Zap className="h-4 w-4 text-warning" />{" "}
+            {correctionProduct ? "Correct rejected SKU" : "Quick add item"}
           </DialogTitle>
           <DialogDescription>
             {correctionProduct
-              ? correctionProduct.review_reason || "Correct the product details and resubmit for review."
+              ? correctionProduct.review_reason ||
+                "Correct the product details and resubmit for review."
               : context === "purchase"
-              ? "Add the missing SKU with its item name, retail price, and sale unit. The invoice quantity will be added when the receipt is received."
-              : "Add the selling details. Stock is assigned to this store and can be counted by a Manager later."}
+                ? "Add the missing SKU with its item name, retail price, and sale unit. The invoice quantity will be added when the receipt is received."
+                : "Add the selling details. Stock is assigned to this store and can be counted by a Manager later."}
           </DialogDescription>
         </DialogHeader>
 
@@ -168,7 +187,13 @@ export function QuickAddModal({
           <div className="grid grid-cols-[auto_1fr_1fr] gap-2">
             <div className="space-y-1">
               <Label htmlFor="qa-sku">SKU (auto)</Label>
-              <Input id="qa-sku" readOnly={!correctionProduct} value={sku} onChange={(event) => setSku(event.target.value)} className="w-40 bg-muted font-mono text-xs" />
+              <Input
+                id="qa-sku"
+                readOnly={!correctionProduct}
+                value={sku}
+                onChange={(event) => setSku(event.target.value)}
+                className="w-40 bg-muted font-mono text-xs"
+              />
             </div>
             <div className="space-y-1">
               <Label htmlFor="qa-name">Item name *</Label>
@@ -182,7 +207,9 @@ export function QuickAddModal({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="qa-barcode">{managerMode ? "Barcode" : "Scanned barcode (pending review)"}</Label>
+              <Label htmlFor="qa-barcode">
+                {managerMode ? "Barcode" : "Scanned barcode (pending review)"}
+              </Label>
               <Input
                 autoFocus={!!barcode && managerMode}
                 id="qa-barcode"
@@ -195,31 +222,59 @@ export function QuickAddModal({
             </div>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className={`grid gap-2 ${managerMode ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
             <div className="space-y-1">
               <Label htmlFor="qa-variant">Variant</Label>
-              <Input id="qa-variant" value={variant} onChange={(e) => setVariant(e.target.value)} placeholder="Size, shade, pack" />
+              <Input
+                id="qa-variant"
+                value={variant}
+                onChange={(e) => setVariant(e.target.value)}
+                placeholder="Size, shade, pack"
+              />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="qa-category">Category</Label>
-              <Input id="qa-category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Personal care" />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="qa-subcategory">Subcategory</Label>
-              <Input id="qa-subcategory" value={subcategory} onChange={(e) => setSubcategory(e.target.value)} placeholder="e.g. Shampoo" />
-            </div>
+            {managerMode && (
+              <>
+                <div className="space-y-1">
+                  <Label htmlFor="qa-category">Category</Label>
+                  <Input
+                    id="qa-category"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    placeholder="e.g. Personal care"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="qa-subcategory">Subcategory</Label>
+                  <Input
+                    id="qa-subcategory"
+                    value={subcategory}
+                    onChange={(e) => setSubcategory(e.target.value)}
+                    placeholder="e.g. Shampoo"
+                  />
+                </div>
+              </>
+            )}
           </div>
 
           {managerMode && sku && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <Label>Internal Code 128 label</Label>
-                <Button type="button" variant="outline" size="sm" onClick={() => {
-                  setBarcode(barcodeForSku(sku));
-                  setInternalBarcode(true);
-                }}>Generate internal label</Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setBarcode(barcodeForSku(sku));
+                    setInternalBarcode(true);
+                  }}
+                >
+                  Generate internal label
+                </Button>
               </div>
-              {internalBarcode && <BarcodePreview value={barcode} caption={`${name || sku} · Internal label`} />}
+              {internalBarcode && (
+                <BarcodePreview value={barcode} caption={`${name || sku} · Internal label`} />
+              )}
             </div>
           )}
           <div className="grid gap-2 sm:grid-cols-2">
@@ -247,14 +302,13 @@ export function QuickAddModal({
           <Button
             className="w-full"
             onClick={handleSave}
-            disabled={
-              !sku ||
-              !name.trim() ||
-              !(saleNum > 0) ||
-              busy
-            }
+            disabled={!sku || !name.trim() || !(saleNum > 0) || busy}
           >
-            {correctionProduct ? "Resubmit corrected SKU" : managerMode ? "Save item" : "Add item to bill"}
+            {correctionProduct
+              ? "Resubmit corrected SKU"
+              : managerMode
+                ? "Save item"
+                : "Add item to bill"}
             {salePrice ? ` — ${inr(saleNum)}/${uom}` : ""}
           </Button>
         </div>

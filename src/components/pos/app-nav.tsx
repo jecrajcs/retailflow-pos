@@ -64,10 +64,29 @@ export function AppNav({ active }: { active: string }) {
   const shiftOpen = sessions.some((session) => session.status === "OPEN");
   const visibleLinks = links.filter(({ to }) => {
     if (!profile) return false;
-    if (profile.role === "CASHIER") return ["/billing", "/cash-drawer"].includes(to);
+    if (profile.role === "CASHIER") return ["/billing", "/cash-drawer", "/scanner"].includes(to);
     if (profile.role === "WAREHOUSE") return ["/inventory", "/barcodes", "/scanner"].includes(to);
-    if (profile.role === "MANAGER") return ["/", "/sales", "/inventory", "/purchases", "/cash-drawer", "/manager", "/barcodes", "/scanner"].includes(to);
-    return ["/", "/admin", "/sales", "/inventory", "/purchases", "/manager", "/barcodes", "/scanner"].includes(to);
+    if (profile.role === "MANAGER")
+      return [
+        "/",
+        "/sales",
+        "/inventory",
+        "/purchases",
+        "/cash-drawer",
+        "/manager",
+        "/barcodes",
+        "/scanner",
+      ].includes(to);
+    return [
+      "/",
+      "/admin",
+      "/sales",
+      "/inventory",
+      "/purchases",
+      "/manager",
+      "/barcodes",
+      "/scanner",
+    ].includes(to);
   });
   return (
     <>
@@ -202,7 +221,9 @@ function UsernameProfileDialog() {
       await refresh();
       setOpen(false);
     } catch (error) {
-      toast.error("Could not update username", { description: userFacingError(error, "Check availability and try again.") });
+      toast.error("Could not update username", {
+        description: userFacingError(error, "Check availability and try again."),
+      });
     } finally {
       setSaving(false);
     }
@@ -211,21 +232,38 @@ function UsernameProfileDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <button className="hidden text-right sm:block" title="Edit your profile username">
-          <span className="block max-w-28 truncate text-[11px] font-medium">{profile.display_name}</span>
-          <span className="block text-[9px] text-muted-foreground">{profile.username} · {profile.role.toLowerCase()}</span>
+          <span className="block max-w-28 truncate text-[11px] font-medium">
+            {profile.display_name}
+          </span>
+          <span className="block text-[9px] text-muted-foreground">
+            {profile.username} · {profile.role.toLowerCase()}
+          </span>
         </button>
       </DialogTrigger>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>My profile</DialogTitle>
-          <DialogDescription>Your username can be used with your password to sign in.</DialogDescription>
+          <DialogDescription>
+            Your username can be used with your password to sign in.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-1">
           <Label htmlFor="my-username">Username</Label>
-          <Input id="my-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Choose a username" />
-          <p className="text-xs text-muted-foreground">3–32 letters, numbers, dots, underscores or hyphens. Availability is checked when saved.</p>
+          <Input
+            id="my-username"
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="Choose a username"
+          />
+          <p className="text-xs text-muted-foreground">
+            3–32 letters, numbers, dots, underscores or hyphens. Availability is checked when saved.
+          </p>
         </div>
-        <Button onClick={() => void save()} disabled={saving || !username.trim() || username === profile.username}>
+        <Button
+          onClick={() => void save()}
+          disabled={saving || !username.trim() || username === profile.username}
+        >
           {saving ? "Checking…" : "Save username"}
         </Button>
       </DialogContent>
