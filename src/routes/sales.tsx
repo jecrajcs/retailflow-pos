@@ -51,7 +51,10 @@ function SalesPage() {
         getAllLocal<InvoiceItemRow & KeyedRecord>("invoice_items"),
         getAllLocal<PaymentRow & KeyedRecord>("payments"),
       ]);
-      const invoiceItems = allItems.filter((item) => item.invoice_id === selected.id);
+      const savedItems = allItems.filter((item) => item.invoice_id === selected.id);
+      const invoiceItems = savedItems.length
+        ? savedItems
+        : items.filter((item) => item.invoice_id === selected.id);
       const invoicePayments = allPayments.filter((payment) => payment.invoice_id === selected.id);
       const location = locations.find((entry) => entry.id === selected.location_id);
       setReceipt({

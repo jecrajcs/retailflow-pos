@@ -6,14 +6,13 @@ The public dashboard exposes only aggregate totals. Operational pages and APIs r
 
 ## Database setup
 
-The baseline migration is [`20260625000000_retailflow_supabase_auth_baseline.sql`](../supabase/migrations/20260625000000_retailflow_supabase_auth_baseline.sql). It is intentionally destructive to the old schema: it drops the app-owned tables and functions from the previous SQL migrations, then creates the current schema. It does **not** drop Supabase-managed Auth, Storage, or system schemas. Later migrations are forward-only; they add Manager-scoped Cashier provisioning, cash denomination settings, and server-backed offline PIN verifiers.
+The single consolidated baseline is [`20261114000000_retailflow_mvp_baseline.sql`](../supabase/migrations/20261114000000_retailflow_mvp_baseline.sql). It applies the schema and runtime changes in dependency order in one transaction. It is intentionally destructive to app-owned objects and must only be run against the intentionally reset application schema. It does **not** drop Supabase-managed Auth, Storage, or system schemas.
 
 1. Back up anything you may need. This reset removes app business records, staff profiles, role/location assignments, and the old Better Auth tables. It does not remove Supabase Auth accounts.
-2. Run the entire baseline migration once from the Supabase SQL editor or apply it through the configured Supabase migration workflow. Do not run it against a database whose data you need to keep; do not re-run it after setup because it drops and recreates the app schema. If the baseline has already been run, do not run it again.
-3. Apply `20261109000000_manager_scoped_cashier_access.sql` after the baseline. This migration replaces the staff-profile RPC without dropping existing data. It is required for Manager-managed Cashier accounts; it does not replace or re-run the baseline.
-4. Apply the remaining forward migrations, including `20261113120000_cash_denomination_settings.sql` and `20261113130000_staff_offline_pin_verifiers.sql`.
-5. Configure server-only `SUPABASE_SERVICE_ROLE_KEY` and the server `SUPABASE_URL`. The browser/build also needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`; the server login proxy uses `SUPABASE_PUBLISHABLE_KEY`. Never expose the service-role key in browser variables, source control, or chat.
-6. If staff will sign in by mobile number, enable/configure the Supabase Auth phone provider and SMS delivery. Phone users must be confirmed according to the project’s Auth settings.
+2. Run the entire consolidated baseline once, either in the Supabase SQL editor or through the configured migration workflow. Do not run it against a database whose app data you need to keep, and do not re-run it after setup.
+3. This repository now has a squashed migration history. If the linked Supabase project still records the previous migration versions, inspect and reconcile its migration history before using `supabase db push`; do not push with unreconciled old versions or mark the new baseline applied before it has succeeded. If you run the SQL in the dashboard, record the new version as applied before a later CLI deployment.
+4. Configure server-only `SUPABASE_SERVICE_ROLE_KEY` and the server `SUPABASE_URL`. The browser/build also needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`; the server login proxy uses `SUPABASE_PUBLISHABLE_KEY`. Never expose the service-role key in browser variables, source control, or chat.
+5. If staff will sign in by mobile number, enable/configure the Supabase Auth phone provider and SMS delivery. Phone users must be confirmed according to the project’s Auth settings.
 
 The app and the migration do not drop the Supabase Auth user you created in Lovable. Supabase Auth remains the source of credentials; the profile table only grants DailyPlazaa POS access. The shared sign-in screen accepts the email or confirmed mobile number and password for every role. A successful Supabase Auth login must also match an active `public.users` profile to enter the POS.
 
@@ -42,7 +41,7 @@ Staff sign-in, provisioning, password changes, device PIN enrollment, and server
 
 ## Verification boundary
 
-The repository test suite verifies route matching and local policy rules, and the app can be built and served locally. These checks do not prove a real Supabase login, database migration state, or a full sale-to-sync journey. Before relying on the deployment, apply the forward Manager-scope migration, verify the manually linked Admin and first active location, and then test a uniquely identified Cashier sale in an isolated/test project. Do not use production customer, inventory, or staff records as test fixtures; do not re-run the destructive baseline to test.
+The repository test suite verifies route matching and local policy rules, and the app can be built and served locally. These checks do not prove a real Supabase login, database migration state, or a full sale-to-sync journey. Before relying on the deployment, apply the consolidated baseline to an intentionally reset/test project, verify the manually linked Admin and first active location, and then test a uniquely identified Cashier sale in an isolated/test project. Do not use production customer, inventory, or staff records as test fixtures; do not re-run the destructive baseline to test.
 
 ## Product pricing and barcode data
 

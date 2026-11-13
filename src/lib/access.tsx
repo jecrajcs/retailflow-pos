@@ -152,6 +152,17 @@ async function cachedProfile() {
   return (await getSetting<UserAccessProfile>("active_access_profile")) ?? null;
 }
 
+async function cacheAccessProfile(profile: UserAccessProfile) {
+  try {
+    await setSetting("active_access_profile", profile);
+  } catch (error) {
+    console.error("Could not cache the signed-in staff profile for offline access", error);
+    toast.warning("Signed in online, but offline access could not be saved", {
+      description: "Keep this device online and check its storage before relying on offline mode.",
+    });
+  }
+}
+
 export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
   const pendingLogout = await logoutIsPending();
   if (pendingLogout) {
@@ -172,7 +183,7 @@ export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
   if (typeof navigator !== "undefined" && !navigator.onLine) return cached;
   try {
     const { profile } = await retailApi<{ profile: UserAccessProfile }>("/api/staff-session");
-    await setSetting("active_access_profile", profile);
+    await cacheAccessProfile(profile);
     return profile;
   } catch (error) {
     if (error instanceof RetailApiError && error.status === 401) {
@@ -229,7 +240,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
   }, []);
 
   const acceptSignedInProfile = useCallback(async (next: UserAccessProfile) => {
-    if (!LOCAL_E2E_AUTH_ENABLED) await setSetting("active_access_profile", next);
+    if (!LOCAL_E2E_AUTH_ENABLED) await cacheAccessProfile(next);
     setProfile(next);
     setLogoutPending(false);
     setAccessError("");
@@ -1321,6 +1332,9 @@ function SignInScreen({
             id="login-email"
             type="text"
             autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             required
             value={identifier}
             onChange={(event) => setIdentifier(event.target.value)}
@@ -1333,6 +1347,7 @@ function SignInScreen({
             id="login-password"
             type="password"
             autoComplete="current-password"
+            autoCapitalize="none"
             placeholder="Enter your password"
             required
             value={password}

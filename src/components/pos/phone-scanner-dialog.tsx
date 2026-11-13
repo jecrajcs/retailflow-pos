@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { listenForPhoneScannerDialog } from "@/lib/phone-scanner-events";
+import { ScannerWorkspace } from "@/routes/scanner";
 
 export function PhoneScannerDialog() {
   const [open, setOpen] = useState(false);
@@ -28,12 +29,7 @@ export function PhoneScannerDialog() {
             Keep this dialog open while pairing over the same Wi-Fi or hotspot.
           </DialogDescription>
         </DialogHeader>
-        <iframe
-          title="Phone scanner pairing"
-          src="/scanner?embedded=1"
-          allow="camera"
-          className="min-h-0 w-full flex-1 border-0"
-        />
+        <ScannerWorkspace embedded />
       </DialogContent>
     </Dialog>
   );

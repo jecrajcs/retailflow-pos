@@ -100,18 +100,23 @@ export function ReceiptDialog({
             <div className="text-[10px] text-neutral-600">Tax Invoice / Bill of Supply</div>
           </div>
           <div className="my-1 border-t border-dashed border-neutral-400" />
-          <div className="flex justify-between">
-            <span>{data.invoiceNumber}</span>
-            <span>
+          <div className="receipt-meta">
+            <div className="receipt-invoice">{data.invoiceNumber}</div>
+            <div className="receipt-created-at">
               {new Date(data.createdAt).toLocaleString("en-IN", {
                 dateStyle: "short",
                 timeStyle: "short",
               })}
-            </span>
+            </div>
           </div>
           <div>Customer: {data.customerName ?? "Walk-in"}</div>
           <div className="my-1 border-t border-dashed border-neutral-400" />
-          <table className="w-full">
+          <table className="w-full table-fixed">
+            <colgroup>
+              <col className="w-[48%]" />
+              <col className="w-[24%]" />
+              <col className="w-[28%]" />
+            </colgroup>
             <thead>
               <tr className="text-left text-[10px] uppercase">
                 <th className="pb-0.5">Item</th>
@@ -122,11 +127,11 @@ export function ReceiptDialog({
             <tbody>
               {data.lines.map((l, i) => (
                 <tr key={i}>
-                  <td className="truncate pr-1">{l.name}</td>
+                  <td className="receipt-item-name pr-1">{l.name}</td>
                   <td className="text-right whitespace-nowrap">
                     {l.quantity} {l.uom}
                   </td>
-                  <td className="text-right">{inr(l.total)}</td>
+                  <td className="text-right whitespace-nowrap">{inr(l.total)}</td>
                 </tr>
               ))}
             </tbody>

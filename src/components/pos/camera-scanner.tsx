@@ -75,15 +75,22 @@ export function CameraScannerPanel({
     setCameraState("starting");
     setCameraError("");
     void reader
-      .decodeFromVideoDevice(undefined, videoRef.current, (result) => {
-        if (!result || cancelled) return;
-        const value = result.getText().trim();
-        const now = Date.now();
-        if (!value || !shouldEmitScannedCode(lastCode.current, value, now)) return;
-        lastCode.current = { value, at: now };
-        setCameraState("ready");
-        callbackRef.current(value);
-      })
+      .decodeFromConstraints(
+        {
+          audio: false,
+          video: { facingMode: { ideal: "environment" } },
+        },
+        videoRef.current,
+        (result) => {
+          if (!result || cancelled) return;
+          const value = result.getText().trim();
+          const now = Date.now();
+          if (!value || !shouldEmitScannedCode(lastCode.current, value, now)) return;
+          lastCode.current = { value, at: now };
+          setCameraState("ready");
+          callbackRef.current(value);
+        },
+      )
       .then((nextControls) => {
         controls = nextControls;
         if (!cancelled) setCameraState("ready");
@@ -192,7 +199,9 @@ export function CameraScannerPanel({
         <video
           ref={videoRef}
           muted
+          autoPlay
           playsInline
+          disablePictureInPicture
           className="h-full w-full object-cover"
           aria-label={scanMode === "qr" ? "Live QR code camera" : "Live barcode camera"}
         />

@@ -28,7 +28,6 @@ import {
 export const Route = createFileRoute("/scanner")({ component: BarcodeScannerPage });
 
 function BarcodeScannerPage() {
-  const { profile } = useAccess();
   const [phoneMode] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -39,6 +38,17 @@ function BarcodeScannerPage() {
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("embedded") === "1",
   );
+  return <ScannerWorkspace phoneMode={phoneMode} embedded={embedded} />;
+}
+
+export function ScannerWorkspace({
+  phoneMode = false,
+  embedded = false,
+}: {
+  phoneMode?: boolean;
+  embedded?: boolean;
+}) {
+  const { profile } = useAccess();
   const [cameraActive, setCameraActive] = useState(false);
   const [offer, setOffer] = useState<ScannerPairPayload | null>(null);
   const [answer, setAnswer] = useState<ScannerPairPayload | null>(null);
@@ -315,7 +325,13 @@ function BarcodeScannerPage() {
   }
 
   return (
-    <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
+    <div
+      className={
+        embedded
+          ? "flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+          : "pos-shell flex h-dvh flex-col overflow-hidden bg-background"
+      }
+    >
       {!phoneMode && !embedded && <AppNav active="/scanner" />}
       <main className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto p-3 sm:p-6">
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3">

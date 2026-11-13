@@ -154,6 +154,20 @@ function InventoryPage() {
     saveActiveLocation(id);
   }
 
+  function printInventory() {
+    const body = document.body;
+    body.classList.add("print-inventory");
+    let cleanupTimer = 0;
+    const cleanup = () => {
+      body.classList.remove("print-inventory");
+      window.clearTimeout(cleanupTimer);
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    cleanupTimer = window.setTimeout(cleanup, 60_000);
+    window.print();
+  }
+
   return (
     <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
       <div className="print:hidden">
@@ -209,7 +223,7 @@ function InventoryPage() {
           type="button"
           variant="outline"
           className="print:hidden"
-          onClick={() => window.print()}
+          onClick={printInventory}
           disabled={!rows.length}
         >
           <Printer className="mr-1.5 h-4 w-4" /> Print inventory
@@ -374,6 +388,60 @@ function InventoryPage() {
           ]}
         />
       </main>
+
+      <section id="inventory-print" className="inventory-print" aria-label="Printable inventory">
+        <header>
+          <h1>Inventory — {location?.name ?? "All locations"}</h1>
+          <p>
+            Printed {new Date().toLocaleString("en-IN")} · {rows.length} matching items
+          </p>
+          {(search || statusFilter !== "ALL" || categoryFilter !== "ALL") && (
+            <p>
+              Filters: {search ? `Search “${search}”` : ""}
+              {search && (statusFilter !== "ALL" || categoryFilter !== "ALL") ? " · " : ""}
+              {statusFilter !== "ALL" ? STATUS_META[statusFilter].label : ""}
+              {statusFilter !== "ALL" && categoryFilter !== "ALL" ? " · " : ""}
+              {categoryFilter !== "ALL" ? categoryFilter : ""}
+            </p>
+          )}
+        </header>
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>SKU</th>
+              {allowedLocations.map((locationRow) => (
+                <th key={locationRow.id}>{locationRow.code}</th>
+              ))}
+              <th>Min</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ product, status }) => (
+              <tr key={product.id}>
+                <td>
+                  {product.name}
+                  {product.variant ? ` — ${product.variant}` : ""}
+                </td>
+                <td>{product.sku ?? "—"}</td>
+                {allowedLocations.map((locationRow) => {
+                  const locationStatus = productStatus(product, locationRow.id);
+                  const stock =
+                    locationStatus === "UNASSIGNED"
+                      ? "Not assigned"
+                      : locationStatus === "COUNT"
+                        ? "Count pending"
+                        : `${stockAt(product.id, locationRow.id)} ${product.uom_stock}`;
+                  return <td key={locationRow.id}>{stock}</td>;
+                })}
+                <td>{product.min_stock}</td>
+                <td>{STATUS_META[status].label}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
 
       <IndentDialog
         open={!!indentProduct}
