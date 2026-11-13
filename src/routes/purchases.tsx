@@ -236,6 +236,7 @@ function PurchasesPage() {
   const [ocrText, setOcrText] = useState("");
   const [items, setItems] = useState<PurchaseItemDraft[]>([]);
   const [quickAddIndex, setQuickAddIndex] = useState<number | null>(null);
+  const [quickAddPrefill, setQuickAddPrefill] = useState("");
   const [status, setStatus] = useState<LocalPurchaseReceipt["status"]>("DRAFT");
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState("");
@@ -502,10 +503,13 @@ function PurchasesPage() {
       <QuickAddModal
         open={quickAddIndex !== null}
         onOpenChange={(open) => {
-          if (!open) setQuickAddIndex(null);
+          if (!open) {
+            setQuickAddIndex(null);
+            setQuickAddPrefill("");
+          }
         }}
         locationId={warehouseId}
-        prefill={quickAddItem?.name ?? ""}
+        prefill={quickAddPrefill || quickAddItem?.name || ""}
         {...(quickAddItem?.sku ? { prefillSku: quickAddItem.sku } : {})}
         {...(quickAddItem?.variant ? { prefillVariant: quickAddItem.variant } : {})}
         {...(quickAddItem?.retail_price !== undefined
@@ -534,6 +538,7 @@ function PurchasesPage() {
               ),
             );
           setQuickAddIndex(null);
+          setQuickAddPrefill("");
           void queryClient.invalidateQueries({ queryKey: ["products"] });
         }}
       />
@@ -674,10 +679,6 @@ function PurchasesPage() {
                           <SearchableSelect
                             value={item.product_id || "unmatched"}
                             onValueChange={(productId) => {
-                              if (productId === "__add_new_sku__") {
-                                setQuickAddIndex(index);
-                                return;
-                              }
                               setItems((current) =>
                                 current.map((row, rowIndex) => {
                                   if (rowIndex !== index) return row;
@@ -695,11 +696,15 @@ function PurchasesPage() {
                                 }),
                               );
                             }}
+                            onCreateOption={(query) => {
+                              setQuickAddPrefill(query);
+                              setQuickAddIndex(index);
+                            }}
+                            createOptionLabel={(query) => `Add “${query}” as new SKU / variant`}
                             placeholder="Match product / variant"
                             searchPlaceholder="Search SKU, variant, English/Hindi name…"
                             options={[
                               { value: "unmatched", label: "Choose a product…" },
-                              { value: "__add_new_sku__", label: "Add new SKU / variant…" },
                               ...products.map((product) => ({
                                 value: product.id,
                                 label: `${product.name}${product.variant ? ` · ${product.variant}` : ""}${product.name_hi ? ` · ${product.name_hi}` : ""} · ${product.sku ?? product.barcode ?? "No SKU"}`,

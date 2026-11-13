@@ -54,7 +54,7 @@ function dateKey(value: unknown) {
   return value instanceof Date ? value.toISOString().slice(0, 10) : stringValue(value);
 }
 
-describe("attached RetailFlow workbook source", () => {
+describe("attached DailyPlazaa workbook source", () => {
   const products = sourceRows(
     RETAILFLOW_WORKBOOK_SHEETS.products,
     RETAILFLOW_WORKBOOK_HEADER_ROWS.products,

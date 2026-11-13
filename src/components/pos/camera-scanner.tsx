@@ -95,7 +95,7 @@ export function CameraScannerPanel({
         const detail = error instanceof Error ? error.message : "Camera access was denied.";
         setCameraError(
           detail.includes("secure") || detail.includes("HTTPS")
-            ? "Camera scanning requires this RetailFlow page to be opened over HTTPS or localhost."
+            ? "Camera scanning requires this DailyPlazaa page to be opened over HTTPS or localhost."
             : "Allow camera access in the browser, then try again. A USB barcode scanner can still type into the billing search field.",
         );
       });

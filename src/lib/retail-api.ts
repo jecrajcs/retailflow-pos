@@ -13,7 +13,7 @@ export class RetailApiError extends Error {
 export function userFacingError(error: unknown, fallback: string): string {
   if (error instanceof RetailApiError) {
     if (error.status === 0)
-      return "Could not reach RetailFlow. Check your connection and try again.";
+      return "Could not reach DailyPlazaa. Check your connection and try again.";
     if (error.status === 401) return "Your staff session has ended. Sign in again to continue.";
     if (error.status === 429) return "Too many attempts. Wait a moment, then try again.";
     if (error.status === 503) return error.message || fallback;
@@ -27,7 +27,7 @@ export function userFacingError(error: unknown, fallback: string): string {
         error.message,
       ))
   )
-    return "Could not reach RetailFlow. Check your connection and try again.";
+    return "Could not reach DailyPlazaa. Check your connection and try again.";
   return fallback;
 }
 
@@ -59,17 +59,20 @@ export async function retailApi<T>(
     response = await fetch(path, options);
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error;
-    throw new RetailApiError("Could not reach RetailFlow. Check your connection and try again.", 0);
+    throw new RetailApiError(
+      "Could not reach DailyPlazaa. Check your connection and try again.",
+      0,
+    );
   }
   const payload = (await response.json().catch(() => null)) as { error?: string } | T | null;
   if (!response.ok) {
     const message =
       payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
     throw new RetailApiError(
-      message || `RetailFlow request failed (${response.status}).`,
+      message || `DailyPlazaa request failed (${response.status}).`,
       response.status,
     );
   }
-  if (payload === null) throw new RetailApiError("RetailFlow returned an invalid response.", 500);
+  if (payload === null) throw new RetailApiError("DailyPlazaa returned an invalid response.", 500);
   return payload as T;
 }

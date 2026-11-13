@@ -20,7 +20,7 @@ function pairingCode(overrides: Record<string, unknown> = {}) {
   });
 }
 
-describe("RetailFlow scanner pairing protocol", () => {
+describe("DailyPlazaa scanner pairing protocol", () => {
   it("allows continuous camera scans while suppressing duplicate frames", () => {
     const lastScan = { value: "12345", at: 1_000 };
 

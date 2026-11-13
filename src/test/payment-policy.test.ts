@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   calculatePaymentAllocation,
   suggestCashChange,
+  tenderAfterDenominationTap,
   validateRecordedPaymentSplit,
 } from "@/lib/payment-policy";
+import {
+  DEFAULT_ENABLED_CASH_DENOMINATIONS,
+  parseEnabledCashDenominations,
+} from "@/lib/cash-denominations";
 
 describe("payment allocation", () => {
   it("returns the correct change for a cash and UPI split", () => {
@@ -98,6 +103,16 @@ describe("payment allocation", () => {
     expect(suggestCashChange(26.5).filter((line) => line.count > 0)).toEqual([
       { denomination: 20, count: 1 },
       { denomination: 5, count: 1 },
+    ]);
+    expect(DEFAULT_ENABLED_CASH_DENOMINATIONS).not.toContain(1);
+    expect(DEFAULT_ENABLED_CASH_DENOMINATIONS).not.toContain(2);
+    expect(suggestCashChange(26).filter((line) => line.count > 0)).toEqual([
+      { denomination: 20, count: 1 },
+      { denomination: 5, count: 1 },
+    ]);
+    expect(suggestCashChange(26, [20, 5, 1]).filter((line) => line.count > 0)).toEqual([
+      { denomination: 20, count: 1 },
+      { denomination: 5, count: 1 },
       { denomination: 1, count: 1 },
     ]);
     expect(
@@ -123,5 +138,16 @@ describe("payment allocation", () => {
         { mode: "UPI", amount: 0.5 },
       ]),
     ).toContain("unsupported denomination");
+  });
+
+  it("replaces tender on the first denomination tap and adds on subsequent taps", () => {
+    expect(tenderAfterDenominationTap("40", 20, true)).toBe("20");
+    expect(tenderAfterDenominationTap("20", 5, false)).toBe("25");
+  });
+
+  it("accepts only a non-empty list of supported whole-rupee denominations", () => {
+    expect(parseEnabledCashDenominations([1, 5, 20])).toEqual([20, 5, 1]);
+    expect(parseEnabledCashDenominations([0.5])).toBeNull();
+    expect(parseEnabledCashDenominations([])).toBeNull();
   });
 });

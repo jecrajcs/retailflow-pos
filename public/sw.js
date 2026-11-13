@@ -1,4 +1,5 @@
-const CACHE_PREFIX = "retailflow-shell-";
+const CACHE_PREFIX = "dailyplazaa-shell-";
+const LEGACY_CACHE_PREFIX = "retailflow-shell-";
 const CACHE_NAME = `${CACHE_PREFIX}v1`;
 const SHELL_ROUTES = new Set(["/scanner"]);
 const MAX_CACHED_ASSETS = 180;
@@ -19,7 +20,11 @@ self.addEventListener("activate", (event) => {
       const keys = await caches.keys();
       await Promise.all(
         keys
-          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+          .filter(
+            (key) =>
+              (key.startsWith(CACHE_PREFIX) || key.startsWith(LEGACY_CACHE_PREFIX)) &&
+              key !== CACHE_NAME,
+          )
           .map((key) => caches.delete(key)),
       );
       await self.clients.claim();
@@ -58,7 +63,8 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       (async () => {
         const cache = await caches.open(CACHE_NAME);
-        const cacheKey = new Request(`${url.origin}${pathname}`);
+        const search = url.searchParams.get("mode") === "phone" ? "?mode=phone" : "";
+        const cacheKey = new Request(`${url.origin}${pathname}${search}`);
         try {
           const response = await fetch(request);
           if (response.ok && response.type !== "opaque")
@@ -68,7 +74,7 @@ self.addEventListener("fetch", (event) => {
           const cached = await cache.match(cacheKey);
           if (cached) return cached;
           return new Response(
-            "<main><h1>Scanner is not available offline yet</h1><p>Open RetailFlow Scanner once while online, then retry this page.</p></main>",
+            "<main><h1>Scanner is not available offline yet</h1><p>Open DailyPlazaa Scanner once while online, then retry this page.</p></main>",
             { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } },
           );
         }

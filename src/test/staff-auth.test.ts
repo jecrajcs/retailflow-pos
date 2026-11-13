@@ -240,12 +240,12 @@ describe("staff authentication errors", () => {
     const response = errorResponse(error, "Could not verify the staff session.");
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: "RetailFlow services are temporarily unavailable. Please try again later.",
+      error: "DailyPlazaa services are temporarily unavailable. Please try again later.",
     });
   });
 });
 
-describe("RetailFlow API errors", () => {
+describe("DailyPlazaa API errors", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("preserves HTTP status and server message for authorization failures", async () => {
@@ -276,12 +276,12 @@ describe("RetailFlow API errors", () => {
     expect(
       userFacingError(
         new RetailApiError(
-          "RetailFlow services are temporarily unavailable. Please try again later.",
+          "DailyPlazaa services are temporarily unavailable. Please try again later.",
           503,
         ),
         "Could not sign in. Check your details and connection.",
       ),
-    ).toBe("RetailFlow services are temporarily unavailable. Please try again later.");
+    ).toBe("DailyPlazaa services are temporarily unavailable. Please try again later.");
   });
 
   it("does not expose arbitrary technical exceptions", () => {
@@ -293,10 +293,10 @@ describe("RetailFlow API errors", () => {
   it("shows a clear connection message for network failures", () => {
     expect(
       userFacingError(
-        new RetailApiError("Could not reach RetailFlow. Check your connection and try again.", 0),
+        new RetailApiError("Could not reach DailyPlazaa. Check your connection and try again.", 0),
         "Request failed.",
       ),
-    ).toBe("Could not reach RetailFlow. Check your connection and try again.");
+    ).toBe("Could not reach DailyPlazaa. Check your connection and try again.");
   });
 
   it("distinguishes origin, credential, and service failures", async () => {
@@ -316,7 +316,7 @@ describe("RetailFlow API errors", () => {
     expect(profileFailure.status).toBe(403);
     await expect(profileFailure.json()).resolves.toEqual({
       error:
-        "Your Supabase sign-in succeeded, but this account is not linked to an active RetailFlow staff role. Ask the project administrator to complete POS access setup.",
+        "Your Supabase sign-in succeeded, but this account is not linked to an active DailyPlazaa staff role. Ask the project administrator to complete POS access setup.",
     });
 
     const serviceFailure = posLoginErrorResponse(500);

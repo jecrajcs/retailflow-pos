@@ -771,7 +771,7 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
       toast.error("Could not preview this workbook", {
         description: userFacingError(
           error,
-          "Select the supplied RetailFlow workbook and try again.",
+          "Select the supplied DailyPlazaa workbook and try again.",
         ),
       });
     } finally {
@@ -896,7 +896,7 @@ export function WorkbookImporter({ locations }: { locations: ImportLocation[] })
         <div className="flex items-start gap-3">
           <FileSpreadsheet className="mt-1 h-5 w-5 text-primary" />
           <div>
-            <h2 className="font-semibold">RetailFlow workbook migration</h2>
+            <h2 className="font-semibold">DailyPlazaa workbook migration</h2>
             <p className="text-sm text-muted-foreground">
               Preview source sheets locally, resolve review items, then commit the full batch once.
             </p>

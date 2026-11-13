@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { getBrowserStorage } from "@/lib/browser-storage";
 import { PaymentModal } from "@/components/pos/payment-modal";
 import { CustomerDialog } from "@/components/pos/customer-dialog";
 import { QuickAddModal } from "@/components/pos/quick-add-modal";
@@ -71,13 +72,13 @@ import {
 export const Route = createFileRoute("/billing")({
   head: () => ({
     meta: [
-      { title: "RetailHub POS — Billing" },
+      { title: "DailyPlazaa POS — Billing" },
       {
         name: "description",
         content:
           "POS billing with barcode scanning, customer lookup, quantity pricing, split payments and cash reconciliation.",
       },
-      { property: "og:title", content: "RetailHub POS — Billing" },
+      { property: "og:title", content: "DailyPlazaa POS — Billing" },
       {
         property: "og:description",
         content:
@@ -142,7 +143,7 @@ function PosPage() {
 
   useEffect(() => {
     if (locationId || !allowedLocations.length) return;
-    const savedLocationId = localStorage.getItem(LS_KEY);
+    const savedLocationId = getBrowserStorage(LS_KEY);
     const selected =
       allowedLocations.find((candidate) => candidate.id === savedLocationId) ??
       (allowedLocations.length === 1 ? allowedLocations[0] : undefined);
@@ -205,7 +206,7 @@ function PosPage() {
   useEffect(() => {
     if (draftRestored || salesQuery.isLoading) return;
     let active = true;
-    const storedLocation = localStorage.getItem(LS_KEY);
+    const storedLocation = getBrowserStorage(LS_KEY);
     const existing = sales
       .filter(
         (invoice) =>
@@ -1273,7 +1274,7 @@ function PosPage() {
         customer={customer}
         walkIn={walkIn}
         upiVpa={location?.upi_vpa ?? null}
-        upiPayeeName={location?.name ?? "RetailFlow Store"}
+        upiPayeeName={location?.name ?? "DailyPlazaa Store"}
         onPaid={handlePaid}
       />
       <CustomerDialog

@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { getBrowserStorage } from "@/lib/browser-storage";
 import { DataTable } from "@/components/pos/data-table";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Button } from "@/components/ui/button";
@@ -52,13 +53,13 @@ import {
 export const Route = createFileRoute("/cash-drawer")({
   head: () => ({
     meta: [
-      { title: "RetailHub POS — Cash Drawer" },
+      { title: "DailyPlazaa POS — Cash Drawer" },
       {
         name: "description",
         content:
           "Open and close cash drawer shifts with a full cash in/out history — shop expenses, tea & snacks, vendor payments, change top-ups and reconciliation.",
       },
-      { property: "og:title", content: "RetailHub POS — Cash Drawer" },
+      { property: "og:title", content: "DailyPlazaa POS — Cash Drawer" },
       {
         property: "og:description",
         content:
@@ -88,7 +89,7 @@ function CashDrawerPage() {
   const allowedLocations = locations.filter(
     (entry) => entry.is_active && canAccessLocation(profile, entry.id),
   );
-  const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
+  const [locationId, setLocationId] = useState<string>(() => getBrowserStorage(LS_KEY) ?? "");
   const location =
     allowedLocations.find((l) => l.id === locationId) ??
     (allowedLocations.length === 1 ? allowedLocations[0] : undefined);

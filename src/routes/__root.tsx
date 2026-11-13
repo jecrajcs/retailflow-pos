@@ -14,7 +14,9 @@ import { toast } from "sonner";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
+import { PhoneScannerDialog } from "@/components/pos/phone-scanner-dialog";
 import { AccessBoundary } from "@/lib/access";
+import { LOCAL_E2E_AUTH_ENABLED } from "@/lib/local-e2e";
 import { localStoragePersistentRequest, openLocalDatabase } from "@/lib/local-db";
 
 function NotFoundComponent() {
@@ -83,16 +85,16 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "theme-color", content: "#176b55" },
-      { title: "RetailHub POS" },
+      { title: "DailyPlazaa POS" },
       {
         name: "description",
-        content: "RetailHub POS — fast billing, inventory, cash drawer and manager tools.",
+        content: "DailyPlazaa POS — fast billing, inventory, cash drawer and manager tools.",
       },
-      { name: "author", content: "RetailHub" },
-      { property: "og:title", content: "RetailHub POS" },
+      { name: "author", content: "DailyPlazaa" },
+      { property: "og:title", content: "DailyPlazaa POS" },
       {
         property: "og:description",
-        content: "RetailHub POS — fast billing, inventory, cash drawer and manager tools.",
+        content: "DailyPlazaa POS — fast billing, inventory, cash drawer and manager tools.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -139,7 +141,7 @@ function RootComponent() {
   useEffect(() => {
     let cancelled = false;
     void openLocalDatabase().catch((error: unknown) => {
-      console.error("RetailFlow local POS storage could not be opened", error);
+      console.error("DailyPlazaa local POS storage could not be opened", error);
       if (!cancelled) {
         toast.error("Local POS storage is unavailable", {
           description:
@@ -148,23 +150,25 @@ function RootComponent() {
       }
     });
     void localStoragePersistentRequest().catch((error: unknown) => {
-      console.warn("RetailFlow could not enable persistent local storage", error);
+      console.warn("DailyPlazaa could not enable persistent local storage", error);
     });
-    void import("@/lib/offline-sync")
-      .then(({ startOfflineSync }) => {
-        if (!cancelled) startOfflineSync();
-      })
-      .catch((error: unknown) => {
-        console.error("RetailFlow offline sync could not start", error);
-        if (!cancelled) {
-          toast.error("Offline sync is unavailable", {
-            description: "Saved work remains on this device. Refresh the page and try again.",
-          });
-        }
-      });
+    if (!LOCAL_E2E_AUTH_ENABLED) {
+      void import("@/lib/offline-sync")
+        .then(({ startOfflineSync }) => {
+          if (!cancelled) startOfflineSync();
+        })
+        .catch((error: unknown) => {
+          console.error("DailyPlazaa offline sync could not start", error);
+          if (!cancelled) {
+            toast.error("Offline sync is unavailable", {
+              description: "Saved work remains on this device. Refresh the page and try again.",
+            });
+          }
+        });
+    }
     if ("serviceWorker" in navigator && import.meta.env.PROD) {
       void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((error) => {
-        console.warn("RetailFlow offline app shell could not be registered", error);
+        console.warn("DailyPlazaa offline app shell could not be registered", error);
       });
     }
     return () => {
@@ -177,6 +181,7 @@ function RootComponent() {
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <AccessBoundary>
         <Outlet />
+        <PhoneScannerDialog />
       </AccessBoundary>
       <Toaster position="top-center" richColors />
     </QueryClientProvider>

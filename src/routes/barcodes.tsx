@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Barcode, Check, CircleX, Plus, Printer, ScanBarcode } from "lucide-react";
 import { toast } from "sonner";
 import { AppNav } from "@/components/pos/app-nav";
+import { getBrowserStorage } from "@/lib/browser-storage";
 import { BarcodePreview } from "@/components/pos/barcode-preview";
 import { DataTable, type DataTableColumn } from "@/components/pos/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -43,9 +44,7 @@ function BarcodeReviewPage() {
   const { data: assignments = [] } = useLocationProducts();
   const { data: candidates = [] } = useBarcodeCandidates();
   const allowedLocations = locations.filter((location) => canAccessLocation(profile, location.id));
-  const [locationId, setLocationId] = useState(() =>
-    typeof window === "undefined" ? "" : (window.localStorage.getItem("pos-location-id") ?? ""),
-  );
+  const [locationId, setLocationId] = useState(() => getBrowserStorage("pos-location-id") ?? "");
   const location = allowedLocations.find((item) => item.id === locationId) ?? allowedLocations[0];
   const [productId, setProductId] = useState("");
   const [barcodeType, setBarcodeType] = useState<"MANUFACTURER" | "INTERNAL">("MANUFACTURER");
@@ -206,7 +205,7 @@ function BarcodeReviewPage() {
             </p>
             <h1 className="mt-1 text-2xl font-bold">Barcode review and labels</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Verify manufacturer codes or print clearly marked RetailFlow internal labels.
+              Verify manufacturer codes or print clearly marked DailyPlazaa internal labels.
             </p>
           </div>
           <SearchableSelect
@@ -262,7 +261,7 @@ function BarcodeReviewPage() {
                 }}
                 options={[
                   { value: "MANUFACTURER", label: "Manufacturer barcode" },
-                  { value: "INTERNAL", label: "RetailFlow internal label" },
+                  { value: "INTERNAL", label: "DailyPlazaa internal label" },
                 ]}
               />
             </div>
@@ -295,7 +294,7 @@ function BarcodeReviewPage() {
                 </div>
                 <BarcodePreview
                   value={code}
-                  caption={`${selectedProduct?.name ?? "Product"} · RetailFlow internal`}
+                  caption={`${selectedProduct?.name ?? "Product"} · DailyPlazaa internal`}
                 />
               </div>
             )}

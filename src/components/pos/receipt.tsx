@@ -39,6 +39,25 @@ export function ReceiptDialog({
   const [width, setWidth] = useState<58 | 80>(58);
   if (!data) return null;
 
+  function printReceipt() {
+    const body = document.body;
+    const pageStyle = document.createElement("style");
+    pageStyle.dataset["receiptPrint"] = "true";
+    pageStyle.textContent = "@page { margin: 0; }";
+    let cleanupTimer = 0;
+    const cleanup = () => {
+      body.classList.remove("print-receipt");
+      pageStyle.remove();
+      window.clearTimeout(cleanupTimer);
+      window.removeEventListener("afterprint", cleanup);
+    };
+    body.classList.add("print-receipt");
+    document.head.append(pageStyle);
+    window.addEventListener("afterprint", cleanup);
+    cleanupTimer = window.setTimeout(cleanup, 60_000);
+    window.print();
+  }
+
   const paid = data.payments
     .filter((payment) => payment.mode !== "CREDIT")
     .reduce((sum, payment) => sum + payment.amount, 0);
@@ -66,7 +85,7 @@ export function ReceiptDialog({
               </button>
             ))}
           </div>
-          <Button onClick={() => window.print()} className="gap-1.5">
+          <Button onClick={printReceipt} className="gap-1.5">
             <Printer className="h-4 w-4" /> Print
           </Button>
         </div>

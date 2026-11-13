@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Boxes, ChartNoAxesCombined, MapPin, Plus, Store, Users } from "lucide-react";
+import { Banknote, Boxes, ChartNoAxesCombined, MapPin, Plus, Store, Users } from "lucide-react";
 import { AppNav } from "@/components/pos/app-nav";
 import { DataTable } from "@/components/pos/data-table";
 import { WorkbookImporter } from "@/components/pos/workbook-importer";
@@ -18,6 +18,13 @@ import { refreshLocalReplica } from "@/lib/offline-sync";
 import { inr, useInventory, useLocations, useProducts, useSales, type Location } from "@/lib/pos";
 import { LOCATION_TYPES, type LocationType } from "@/lib/location-policy";
 import { retailApi, userFacingError } from "@/lib/retail-api";
+import {
+  DEFAULT_ENABLED_CASH_DENOMINATIONS,
+  DENOMINATIONS,
+  parseEnabledCashDenominations,
+} from "@/lib/cash-denominations";
+import { getSetting, setSetting } from "@/lib/local-db";
+import { LOCAL_E2E_AUTH_ENABLED } from "@/lib/local-e2e";
 
 export const Route = createFileRoute("/admin")({ component: AdminPage });
 
@@ -65,6 +72,12 @@ function AdminPage() {
   const [savingLocation, setSavingLocation] = useState(false);
   const [savingDefaultWarehouseId, setSavingDefaultWarehouseId] = useState<string | null>(null);
   const [locationError, setLocationError] = useState("");
+  const [enabledDenominations, setEnabledDenominations] = useState(
+    DEFAULT_ENABLED_CASH_DENOMINATIONS,
+  );
+  const [loadingDenominations, setLoadingDenominations] = useState(false);
+  const [savingDenominations, setSavingDenominations] = useState(false);
+  const [denominationError, setDenominationError] = useState("");
 
   const loadLocations = useCallback(async () => {
     if (profile?.role !== "ADMIN") return;
@@ -83,6 +96,41 @@ function AdminPage() {
   useEffect(() => {
     void loadLocations();
   }, [loadLocations]);
+
+  const loadDenominations = useCallback(async () => {
+    if (profile?.role !== "ADMIN") return;
+    setLoadingDenominations(true);
+    try {
+      if (LOCAL_E2E_AUTH_ENABLED) {
+        const saved = await getSetting<unknown>("cash_enabled_denominations");
+        if (saved !== undefined) {
+          const parsed = parseEnabledCashDenominations(saved);
+          if (!parsed) throw new Error("The saved cash denomination setting is invalid.");
+          setEnabledDenominations(parsed);
+        }
+        setDenominationError("");
+        return;
+      }
+      const result = await retailApi<{ enabled_denominations: unknown }>("/api/cash-denominations");
+      const parsed = parseEnabledCashDenominations(result.enabled_denominations);
+      if (!parsed) throw new Error("The server returned an invalid cash denomination setting.");
+      setEnabledDenominations(parsed);
+      setDenominationError("");
+      try {
+        await setSetting("cash_enabled_denominations", parsed);
+      } catch {
+        toast.warning("Cash settings loaded but could not be cached for offline use.");
+      }
+    } catch (error) {
+      setDenominationError(userFacingError(error, "Could not load cash denomination settings."));
+    } finally {
+      setLoadingDenominations(false);
+    }
+  }, [profile?.role]);
+
+  useEffect(() => {
+    void loadDenominations();
+  }, [loadDenominations]);
 
   const activeLocations = locations.filter((location) => location.is_active);
   const todaysSales = sales.filter(
@@ -178,7 +226,7 @@ function AdminPage() {
       );
       await refreshLocalReplica();
       toast.success("Default Warehouse updated", {
-        description: `${result.location.name} will be used when an import has no Warehouse location.` ,
+        description: `${result.location.name} will be used when an import has no Warehouse location.`,
       });
     } catch (error) {
       toast.error("Could not set the default Warehouse", {
@@ -186,6 +234,39 @@ function AdminPage() {
       });
     } finally {
       setSavingDefaultWarehouseId(null);
+    }
+  }
+
+  async function saveCashDenominations() {
+    if (savingDenominations || enabledDenominations.length === 0) return;
+    setSavingDenominations(true);
+    setDenominationError("");
+    try {
+      if (LOCAL_E2E_AUTH_ENABLED) {
+        await setSetting("cash_enabled_denominations", enabledDenominations);
+        toast.success("Cash denominations saved locally for E2E testing");
+        return;
+      }
+      const result = await retailApi<{ enabled_denominations: unknown }>(
+        "/api/cash-denominations",
+        {
+          method: "PUT",
+          json: { enabled_denominations: enabledDenominations },
+        },
+      );
+      const parsed = parseEnabledCashDenominations(result.enabled_denominations);
+      if (!parsed) throw new Error("The server returned an invalid saved denomination setting.");
+      setEnabledDenominations(parsed);
+      try {
+        await setSetting("cash_enabled_denominations", parsed);
+      } catch {
+        toast.warning("Cash settings were saved online but could not be cached for offline use.");
+      }
+      toast.success("Cash denominations updated");
+    } catch (error) {
+      setDenominationError(userFacingError(error, "Could not save cash denomination settings."));
+    } finally {
+      setSavingDenominations(false);
     }
   }
 
@@ -214,7 +295,9 @@ function AdminPage() {
       <main className="mx-auto min-h-0 w-full max-w-[1500px] flex-1 space-y-5 overflow-y-auto p-3 sm:p-5">
         <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4 sm:p-6">
           <div>
-            <p className="text-sm text-muted-foreground">RetailFlow POS · Network administration</p>
+            <p className="text-sm text-muted-foreground">
+              DailyPlazaa POS · Network administration
+            </p>
             <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Admin console</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Manage stores and warehouses, provision location-scoped Managers, and review network
@@ -288,6 +371,7 @@ function AdminPage() {
             <TabsTrigger value="locations">Locations</TabsTrigger>
             <TabsTrigger value="staff">Staff access</TabsTrigger>
             <TabsTrigger value="import">Data import</TabsTrigger>
+            <TabsTrigger value="cash">Cash denominations</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="space-y-4 pt-3">
             <section className="grid gap-3 md:grid-cols-3">
@@ -476,6 +560,75 @@ function AdminPage() {
           </TabsContent>
           <TabsContent value="import" className="pt-3">
             <WorkbookImporter locations={locations.filter((location) => location.is_active)} />
+          </TabsContent>
+          <TabsContent value="cash" className="pt-3">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Banknote className="h-4 w-4" /> Enabled cash denominations
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  This setting applies to cash tender shortcuts and suggested change across all
+                  stores. ₹1 and ₹2 are temporarily disabled by default; enable them here when
+                  needed.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {denominationError && (
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 p-3 text-sm text-destructive"
+                  >
+                    <span>{denominationError}</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void loadDenominations()}
+                      disabled={loadingDenominations}
+                    >
+                      {loadingDenominations ? "Refreshing…" : "Retry"}
+                    </Button>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                  {DENOMINATIONS.map((denomination) => (
+                    <label
+                      key={denomination}
+                      className="flex items-center gap-2 rounded-lg border bg-background p-3 text-sm"
+                    >
+                      <Checkbox
+                        checked={enabledDenominations.includes(denomination)}
+                        onCheckedChange={(checked) =>
+                          setEnabledDenominations((current) => {
+                            const next = new Set(current);
+                            if (checked === true) next.add(denomination);
+                            else next.delete(denomination);
+                            return DENOMINATIONS.filter((value) => next.has(value));
+                          })
+                        }
+                        disabled={savingDenominations || loadingDenominations}
+                      />
+                      ₹{denomination}
+                    </label>
+                  ))}
+                </div>
+                {enabledDenominations.length === 0 && (
+                  <p className="text-sm text-destructive">
+                    Enable at least one denomination before saving.
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  onClick={() => void saveCashDenominations()}
+                  disabled={
+                    savingDenominations || loadingDenominations || enabledDenominations.length === 0
+                  }
+                >
+                  {savingDenominations ? "Saving…" : "Save cash settings"}
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
         <p className="text-xs text-muted-foreground">

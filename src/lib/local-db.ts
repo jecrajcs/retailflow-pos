@@ -110,7 +110,17 @@ export function openLocalDatabase(): Promise<IDBDatabase | null> {
   if (databasePromise) return databasePromise;
 
   databasePromise = new Promise((resolve) => {
-    const request = window.indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION);
+    let request: IDBOpenDBRequest;
+    try {
+      request = window.indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION);
+    } catch (error) {
+      console.warn(
+        "Local POS database is unavailable; this session will use temporary memory storage.",
+        error,
+      );
+      resolve(null);
+      return;
+    }
     request.onupgradeneeded = () => {
       const db = request.result;
       for (const store of LOCAL_STORES) {

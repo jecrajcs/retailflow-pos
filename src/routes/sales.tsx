@@ -56,7 +56,7 @@ function SalesPage() {
       const location = locations.find((entry) => entry.id === selected.location_id);
       setReceipt({
         invoiceNumber: selected.invoice_number,
-        locationName: location?.name ?? "RetailFlow Store",
+        locationName: location?.name ?? "DailyPlazaa Store",
         customerName: customers.find((entry) => entry.id === selected.customer_id)?.name ?? null,
         lines: invoiceItems.map((item) => ({
           name:

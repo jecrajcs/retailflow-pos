@@ -1,4 +1,8 @@
-import { DENOMINATIONS } from "@/lib/cash-denominations";
+import {
+  DEFAULT_ENABLED_CASH_DENOMINATIONS,
+  DENOMINATIONS,
+  type CashDenomination,
+} from "@/lib/cash-denominations";
 
 export const CASH_DENOMINATIONS = DENOMINATIONS;
 
@@ -23,9 +27,20 @@ export type RecordedPaymentLine = PaymentAllocationLine & {
   change_denominations?: Record<string, number>;
 };
 
-export function suggestCashChange(amount: number) {
+export function tenderAfterDenominationTap(
+  currentAmount: string,
+  denomination: CashDenomination,
+  replaceCurrent: boolean,
+) {
+  return String(replaceCurrent ? denomination : (Number(currentAmount) || 0) + denomination);
+}
+
+export function suggestCashChange(
+  amount: number,
+  denominations: readonly CashDenomination[] = DEFAULT_ENABLED_CASH_DENOMINATIONS,
+) {
   let remaining = Math.max(0, Math.round(amount * 100) / 100);
-  return CASH_DENOMINATIONS.map((denomination) => {
+  return denominations.map((denomination) => {
     const count = Math.floor((remaining + 0.0001) / denomination);
     remaining = Math.round((remaining - count * denomination) * 100) / 100;
     return { denomination, count };

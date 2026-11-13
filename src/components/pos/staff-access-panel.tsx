@@ -129,7 +129,7 @@ export function StaffAccessPanel({
       });
       if (result.temporary_password) {
         setNewCredential({
-          login: result.username || result.login || (email.trim() || phone.trim()),
+          login: result.username || result.login || email.trim() || phone.trim(),
           temporary_password: result.temporary_password,
           credential_verified: result.credential_verified === true,
         });
@@ -159,7 +159,9 @@ export function StaffAccessPanel({
   }
 
   const allowedRoles =
-    mode === "admin" ? (["MANAGER", "CASHIER", "ADMIN", "WAREHOUSE"] as const) : (["CASHIER"] as const);
+    mode === "admin"
+      ? (["MANAGER", "CASHIER", "ADMIN", "WAREHOUSE"] as const)
+      : (["CASHIER"] as const);
   const canEdit = mode === "admin" ? profile?.role === "ADMIN" : profile?.role === "MANAGER";
   if (!canEdit) return null;
 
@@ -204,7 +206,7 @@ export function StaffAccessPanel({
           {newCredential.credential_verified ? (
             <p className="text-xs text-muted-foreground">
               Supabase Auth accepted this credential. The user must change it before opening
-              RetailFlow.
+              DailyPlazaa.
             </p>
           ) : (
             <p role="alert" className="text-xs text-warning">

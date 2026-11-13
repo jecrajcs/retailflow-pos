@@ -69,7 +69,7 @@ function PublicDashboardPage() {
     <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-6 bg-background p-4 sm:p-8">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-sm text-muted-foreground">RetailFlow POS · Public overview</p>
+          <p className="text-sm text-muted-foreground">DailyPlazaa POS · Public overview</p>
           <h1 className="mt-1 text-3xl font-bold tracking-tight">Today at a glance</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Store-wide totals only. Sign in to view operational details or use POS tools.
@@ -193,7 +193,7 @@ function StaffDashboardPage() {
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4 sm:p-6">
           <div>
             <p className="text-sm text-muted-foreground">
-              RetailFlow POS ·{" "}
+              DailyPlazaa POS ·{" "}
               {new Date().toLocaleDateString("en-IN", {
                 weekday: "long",
                 day: "numeric",

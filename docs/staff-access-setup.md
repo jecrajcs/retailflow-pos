@@ -1,20 +1,25 @@
 # Staff accounts and login
 
-RetailFlow uses Supabase Auth for staff credentials and sessions. POS roles, activation, mandatory password changes, and location assignments are stored separately in `public.users` and `public.staff_location_access`. `public.users.user_id` is the same UUID as `auth.users.id`; Supabase-managed `auth.*` tables are not part of RetailFlow migrations.
+DailyPlazaa uses Supabase Auth for staff credentials and sessions. POS roles, activation, mandatory password changes, and location assignments are stored separately in `public.users` and `public.staff_location_access`. `public.users.user_id` is the same UUID as `auth.users.id`; Supabase-managed `auth.*` tables are not part of the app migrations.
 
 The public dashboard exposes only aggregate totals. Operational pages and APIs require an active staff profile, and server APIs enforce role and location scope. See [access-control.md](./access-control.md).
 
 ## Database setup
 
-The baseline migration is [`20260625000000_retailflow_supabase_auth_baseline.sql`](../supabase/migrations/20260625000000_retailflow_supabase_auth_baseline.sql). It is intentionally destructive to the old RetailFlow schema: it drops the app-owned tables and functions from the previous SQL migrations, then creates the current schema. It does **not** drop Supabase-managed Auth, Storage, or system schemas. The later [`20261109000000_manager_scoped_cashier_access.sql`](../supabase/migrations/20261109000000_manager_scoped_cashier_access.sql) migration is forward-only and enables Managers to provision Cashiers only within their assigned locations.
+The baseline migration is [`20260625000000_retailflow_supabase_auth_baseline.sql`](../supabase/migrations/20260625000000_retailflow_supabase_auth_baseline.sql). It is intentionally destructive to the old schema: it drops the app-owned tables and functions from the previous SQL migrations, then creates the current schema. It does **not** drop Supabase-managed Auth, Storage, or system schemas. Later migrations are forward-only; they add Manager-scoped Cashier provisioning, cash denomination settings, and server-backed offline PIN verifiers.
 
-1. Back up anything you may need. This reset removes RetailFlow business records, staff profiles, role/location assignments, and the old Better Auth tables. It does not remove Supabase Auth accounts.
-2. Run the entire baseline migration once from the Supabase SQL editor or apply it through the configured Supabase migration workflow. Do not run it against a database whose RetailFlow data you need to keep; do not re-run it after setup because it drops and recreates the RetailFlow schema. If the baseline has already been run, do not run it again.
+1. Back up anything you may need. This reset removes app business records, staff profiles, role/location assignments, and the old Better Auth tables. It does not remove Supabase Auth accounts.
+2. Run the entire baseline migration once from the Supabase SQL editor or apply it through the configured Supabase migration workflow. Do not run it against a database whose data you need to keep; do not re-run it after setup because it drops and recreates the app schema. If the baseline has already been run, do not run it again.
 3. Apply `20261109000000_manager_scoped_cashier_access.sql` after the baseline. This migration replaces the staff-profile RPC without dropping existing data. It is required for Manager-managed Cashier accounts; it does not replace or re-run the baseline.
-4. Configure server-only `SUPABASE_SERVICE_ROLE_KEY` and the server `SUPABASE_URL`. The browser/build also needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`; the server login proxy uses `SUPABASE_PUBLISHABLE_KEY`. Never expose the service-role key in browser variables, source control, or chat.
-5. If staff will sign in by mobile number, enable/configure the Supabase Auth phone provider and SMS delivery. Phone users must be confirmed according to the project’s Auth settings.
+4. Apply the remaining forward migrations, including `20261113120000_cash_denomination_settings.sql` and `20261113130000_staff_offline_pin_verifiers.sql`.
+5. Configure server-only `SUPABASE_SERVICE_ROLE_KEY` and the server `SUPABASE_URL`. The browser/build also needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`; the server login proxy uses `SUPABASE_PUBLISHABLE_KEY`. Never expose the service-role key in browser variables, source control, or chat.
+6. If staff will sign in by mobile number, enable/configure the Supabase Auth phone provider and SMS delivery. Phone users must be confirmed according to the project’s Auth settings.
 
-The app and the migration do not drop the Supabase Auth user you created in Lovable. Supabase Auth remains the source of credentials; the profile table only grants RetailFlow POS access. The shared sign-in screen accepts the email or confirmed mobile number and password for every role. A successful Supabase Auth login must also match an active `public.users` profile to enter the POS.
+The app and the migration do not drop the Supabase Auth user you created in Lovable. Supabase Auth remains the source of credentials; the profile table only grants DailyPlazaa POS access. The shared sign-in screen accepts the email or confirmed mobile number and password for every role. A successful Supabase Auth login must also match an active `public.users` profile to enter the POS.
+
+### Local UI/E2E mode without Supabase credentials
+
+When local Supabase authentication is unavailable, run `VITE_LOCAL_E2E_AUTH=true npm run dev` to expose a clearly labeled local E2E Admin option on the sign-in page. This bypass is guarded by Vite's development-only `import.meta.env.DEV` flag; production builds cannot enable it. It skips staff authentication and background sync. Local-first changes remain in this browser, but server-backed APIs still require Supabase and are not mocked. It does not test real authentication or cross-device synchronization. Do not use this mode with production data.
 
 ## Link the first Admin
 
@@ -30,10 +35,10 @@ There is no `/first-admin` route. Create the initial account manually through **
 1. Sign in online as the linked Admin and open **Admin → Locations**. Create and activate at least one store or warehouse; location codes must be unique.
 2. Open **Admin → Staff access**. Create a Manager and assign one or more active locations. Admin profiles do not need location assignments.
 3. A Manager signs in to `/manager` and can create or update Cashier accounts only for locations assigned to that Manager. Manager accounts cannot create or edit other Manager/Admin accounts or Cashiers whose assignments extend outside their scope.
-4. RetailFlow creates the Supabase Auth user and a corresponding POS profile. A temporary password is shown once; share it securely. The staff member must set a personal password before using operational screens.
-5. Verify a Cashier sees only assigned locations, a Manager can use management workflows only within assigned locations, and the Admin can manage all locations. A location can be deactivated only after its cash shifts are closed, staff assignments are removed/reassigned, and inventory sync alerts are resolved. Deactivating a profile immediately blocks RetailFlow APIs even if its Supabase Auth account still exists.
+4. DailyPlazaa creates the Supabase Auth user and a corresponding POS profile. A temporary password is shown once; share it securely. The staff member must set a personal password and enroll an offline device PIN before using operational screens.
+5. Verify a Cashier sees only assigned locations, a Manager can use management workflows only within assigned locations, and the Admin can manage all locations. A location can be deactivated only after its cash shifts are closed, staff assignments are removed/reassigned, and inventory sync alerts are resolved. Deactivating a profile immediately blocks DailyPlazaa APIs even if its Supabase Auth account still exists.
 
-Staff sign-in, provisioning, password changes, and server synchronization require a connection. After a successful online sign-in, the device caches the access profile so POS work can continue offline. Offline logout locks the device immediately, preserves pending bills/outbox work, and revokes the Supabase session when connectivity returns. Legacy outbox operations without a verified staff owner are moved to review.
+Staff sign-in, provisioning, password changes, device PIN enrollment, and server synchronization require a connection. The offline PIN is 6–8 digits and is re-verified against the staff password online; only a salted PBKDF2 verifier is stored by the server and cached for that authenticated device. The PIN itself is never sent or stored. Offline PIN attempts are recorded on the device; after five failures, online password sign-in is required. Because an offline device cannot contact the server, local storage reset can bypass that device-only lockout. After a successful online sign-in, the device caches the access profile so POS work can continue offline. Offline logout locks the device immediately, preserves pending bills/outbox work, and revokes the Supabase session when connectivity returns. Legacy outbox operations without a verified staff owner are moved to review.
 
 ## Verification boundary
 
@@ -41,4 +46,4 @@ The repository test suite verifies route matching and local policy rules, and th
 
 ## Product pricing and barcode data
 
-New products receive a local SKU and an internal Code 128 barcode derived from that SKU. Scanned supplier/barcodes can replace the generated value. This barcode is for RetailFlow's own catalog and is not a GS1-issued EAN. Manager product forms and the Excel template accept quantity breaks such as `6:68,12:64` (minimum quantity:unit price). Retail price applies below the first break; higher quantity breaks must not exceed the retail price or go below the floor price. Billing recalculates the unit price when quantity crosses a break.
+New products receive a local SKU and an internal Code 128 barcode derived from that SKU. Scanned supplier/barcodes can replace the generated value. This barcode is for DailyPlazaa's own catalog and is not a GS1-issued EAN. Manager product forms and the Excel template accept quantity breaks such as `6:68,12:64` (minimum quantity:unit price). Retail price applies below the first break; higher quantity breaks must not exceed the retail price or go below the floor price. Billing recalculates the unit price when quantity crosses a break.

@@ -1,6 +1,6 @@
 {
-  "name": "RetailFlow POS",
-  "short_name": "RetailFlow",
+  "name": "DailyPlazaa POS",
+  "short_name": "DailyPlazaa",
   "description": "Offline-first retail point of sale",
   "start_url": "/",
   "display": "standalone",
@@ -9,7 +9,7 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/icons/retailflow.svg",
+      "src": "/icons/dailyplazaa.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

@@ -92,14 +92,13 @@ export function createWebSerialScannerAdapter(baudRate = 9600): ScannerAdapter {
 }
 
 const PAIR_TTL_MS = 5 * 60 * 1000;
-const SCANNER_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
 export function parseScannerPairPayload(value: string, expectedRole?: ScannerPairPayload["role"]) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("This QR code is not a RetailFlow scanner pairing code.");
+    throw new Error("This QR code is not a DailyPlazaa scanner pairing code.");
   }
   if (!parsed || typeof parsed !== "object") throw new Error("Invalid scanner pairing code.");
   const payload = parsed as Partial<ScannerPairPayload>;
@@ -130,11 +129,18 @@ function waitForIceGathering(peer: RTCPeerConnection) {
   return new Promise<void>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       peer.removeEventListener("icegatheringstatechange", onStateChange);
-      reject(
-        new Error(
-          "The device network could not prepare a pairing connection. Try a shared Wi-Fi or hotspot with local device communication enabled.",
-        ),
-      );
+      const hasCandidate = peer.localDescription?.sdp
+        .split(/\r?\n/)
+        .some((line) => line.startsWith("a=candidate:"));
+      if (hasCandidate) {
+        resolve();
+      } else {
+        reject(
+          new Error(
+            "The device network did not provide a usable pairing address. Try a shared Wi-Fi or hotspot with local device communication enabled.",
+          ),
+        );
+      }
     }, 12000);
     const onStateChange = () => {
       if (peer.iceGatheringState !== "complete") return;
@@ -153,22 +159,27 @@ function newSessionId() {
 }
 
 export async function createScannerOffer(onChannel: (channel: RTCDataChannel) => void) {
-  const peer = new RTCPeerConnection({ iceServers: SCANNER_ICE_SERVERS });
+  const peer = new RTCPeerConnection();
   const channel = peer.createDataChannel("retailflow-barcode", { ordered: true });
   onChannel(channel);
-  const offer = await peer.createOffer();
-  await peer.setLocalDescription(offer);
-  await waitForIceGathering(peer);
-  const payload: ScannerPairPayload = {
-    app: "retailflow-scanner",
-    version: 1,
-    role: "offer",
-    session: newSessionId(),
-    createdAt: Date.now(),
-    sdp: peer.localDescription?.sdp ?? "",
-  };
-  if (!payload.sdp) throw new Error("Could not create the local pairing code.");
-  return { peer, payload };
+  try {
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    await waitForIceGathering(peer);
+    const payload: ScannerPairPayload = {
+      app: "retailflow-scanner",
+      version: 1,
+      role: "offer",
+      session: newSessionId(),
+      createdAt: Date.now(),
+      sdp: peer.localDescription?.sdp ?? "",
+    };
+    if (!payload.sdp) throw new Error("Could not create the local pairing code.");
+    return { peer, payload };
+  } catch (error) {
+    peer.close();
+    throw error;
+  }
 }
 
 export async function acceptScannerOffer(
@@ -176,19 +187,24 @@ export async function acceptScannerOffer(
   onChannel: (channel: RTCDataChannel) => void,
 ) {
   const offer = parseScannerPairPayload(value, "offer");
-  const peer = new RTCPeerConnection({ iceServers: SCANNER_ICE_SERVERS });
+  const peer = new RTCPeerConnection();
   peer.ondatachannel = (event) => onChannel(event.channel);
-  await peer.setRemoteDescription({ type: "offer", sdp: offer.sdp });
-  const answer = await peer.createAnswer();
-  await peer.setLocalDescription(answer);
-  await waitForIceGathering(peer);
-  const payload: ScannerPairPayload = {
-    ...offer,
-    role: "answer",
-    sdp: peer.localDescription?.sdp ?? "",
-  };
-  if (!payload.sdp) throw new Error("Could not create the phone reply code.");
-  return { peer, payload };
+  try {
+    await peer.setRemoteDescription({ type: "offer", sdp: offer.sdp });
+    const answer = await peer.createAnswer();
+    await peer.setLocalDescription(answer);
+    await waitForIceGathering(peer);
+    const payload: ScannerPairPayload = {
+      ...offer,
+      role: "answer",
+      sdp: peer.localDescription?.sdp ?? "",
+    };
+    if (!payload.sdp) throw new Error("Could not create the phone reply code.");
+    return { peer, payload };
+  } catch (error) {
+    peer.close();
+    throw error;
+  }
 }
 
 export async function acceptScannerAnswer(

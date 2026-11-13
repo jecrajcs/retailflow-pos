@@ -36,7 +36,14 @@ import {
 import { retailApi, RetailApiError, userFacingError } from "@/lib/retail-api";
 import { pageAccessClass } from "@/lib/access-policy";
 import { summarizeIdleSales } from "@/lib/idle-analytics";
+import { getBrowserStorage, removeBrowserStorage, setBrowserStorage } from "@/lib/browser-storage";
+import {
+  deriveOfflinePinVerifier,
+  isOfflinePinVerifier,
+  type OfflinePinVerifier,
+} from "@/lib/offline-pin";
 import { toast } from "sonner";
+import { LOCAL_E2E_AUTH_ENABLED } from "@/lib/local-e2e";
 
 const IdleSalesChart = lazy(() =>
   import("@/components/pos/idle-sales-chart").then((module) => ({
@@ -49,7 +56,7 @@ export const ACTIVE_LOCATION_KEY = "pos-location-id";
 
 export function saveActiveLocation(locationId: string) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(ACTIVE_LOCATION_KEY, locationId);
+  setBrowserStorage(ACTIVE_LOCATION_KEY, locationId);
   window.dispatchEvent(new CustomEvent("retailflow:location-change", { detail: { locationId } }));
 }
 
@@ -64,6 +71,18 @@ export interface UserAccessProfile {
   location_ids: string[];
   cached_at: string;
 }
+
+const LOCAL_E2E_PROFILE: UserAccessProfile = {
+  user_id: "00000000-0000-4000-8000-000000000001",
+  display_name: "Local E2E Admin",
+  username: "local-e2e",
+  email: null,
+  phone: null,
+  must_change_password: false,
+  role: "ADMIN",
+  location_ids: [],
+  cached_at: new Date().toISOString(),
+};
 
 function roleCanOpenPath(role: AccessRole, path: string) {
   if (role === "CASHIER") return ["/billing", "/cash-drawer", "/scanner"].includes(path);
@@ -102,11 +121,7 @@ const AccessContext = createContext<AccessContextValue | null>(null);
 const PENDING_LOGOUT_KEY = "retailflow-staff-logout-pending";
 
 function hasPendingLogoutMarker() {
-  try {
-    return typeof window !== "undefined" && window.localStorage.getItem(PENDING_LOGOUT_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return getBrowserStorage(PENDING_LOGOUT_KEY) === "1";
 }
 
 async function logoutIsPending() {
@@ -150,13 +165,7 @@ export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
     if (error) throw new Error(`Could not clear the local staff session: ${error.message}`);
     await deleteLocal("settings", "active_access_profile");
     await deleteLocal("settings", "staff_logout_pending");
-    try {
-      window.localStorage.removeItem(PENDING_LOGOUT_KEY);
-    } catch {
-      throw new Error(
-        "Logout completed, but this browser could not clear its local logout marker.",
-      );
-    }
+    removeBrowserStorage(PENDING_LOGOUT_KEY);
     return null;
   }
   const cached = await cachedProfile();
@@ -179,6 +188,7 @@ export async function loadAccessProfile(): Promise<UserAccessProfile | null> {
 
 export function AccessBoundary({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const search = useRouterState({ select: (state) => state.location.search });
   const navigate = useNavigate();
   const [profile, setProfile] = useState<UserAccessProfile | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -187,6 +197,12 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
   const [accessError, setAccessError] = useState("");
 
   const refresh = useCallback(async () => {
+    if (LOCAL_E2E_AUTH_ENABLED) {
+      setLogoutPending(false);
+      setAccessError("");
+      setLoaded(true);
+      return null;
+    }
     try {
       const next = await loadAccessProfile();
       const pending = await logoutIsPending();
@@ -213,7 +229,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
   }, []);
 
   const acceptSignedInProfile = useCallback(async (next: UserAccessProfile) => {
-    await setSetting("active_access_profile", next);
+    if (!LOCAL_E2E_AUTH_ENABLED) await setSetting("active_access_profile", next);
     setProfile(next);
     setLogoutPending(false);
     setAccessError("");
@@ -258,6 +274,12 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
   }, [profile, pathname, navigate]);
 
   const signOut = useCallback(async () => {
+    if (LOCAL_E2E_AUTH_ENABLED) {
+      setProfile(null);
+      setLogoutPending(false);
+      setAccessError("");
+      return;
+    }
     if (profile?.role === "CASHIER") {
       const openShift = (await getAllLocal<KeyedRecord>("cash_sessions")).find(
         (session) =>
@@ -295,7 +317,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
         }
       }
     } else if (profile?.role === "CASHIER") {
-      toast.error("Reconnect before signing out so RetailFlow can verify the closed shift.");
+      toast.error("Reconnect before signing out so DailyPlazaa can verify the closed shift.");
       return;
     }
     setProfile(null);
@@ -304,7 +326,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
     setLoaded(true);
     let markerSaved = false;
     try {
-      window.localStorage.setItem(PENDING_LOGOUT_KEY, "1");
+      setBrowserStorage(PENDING_LOGOUT_KEY, "1");
       markerSaved = true;
     } catch {
       // IndexedDB remains the fallback if local storage is unavailable.
@@ -342,13 +364,7 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
         );
       await deleteLocal("settings", "active_access_profile");
       await deleteLocal("settings", "staff_logout_pending");
-      try {
-        window.localStorage.removeItem(PENDING_LOGOUT_KEY);
-      } catch {
-        throw new Error(
-          "Server logout completed, but the local logout marker could not be cleared.",
-        );
-      }
+      removeBrowserStorage(PENDING_LOGOUT_KEY);
       setLogoutPending(false);
       window.dispatchEvent(new CustomEvent("retailflow:session-change"));
     } catch (error) {
@@ -370,7 +386,13 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
         Loading this device’s access profile…
       </div>
     );
-  if (!profile && pageAccessClass(pathname) === "public")
+  const phoneCompanion =
+    pathname === "/scanner" &&
+    typeof search === "object" &&
+    search !== null &&
+    "mode" in search &&
+    search.mode === "phone";
+  if (!profile && (pageAccessClass(pathname) === "public" || phoneCompanion))
     return <AccessContext.Provider value={value}>{children}</AccessContext.Provider>;
   if (!profile)
     return (
@@ -390,6 +412,11 @@ export function AccessBoundary({ children }: { children: ReactNode }) {
     );
   return (
     <AccessContext.Provider value={value}>
+      {LOCAL_E2E_AUTH_ENABLED && (
+        <div className="pointer-events-none fixed bottom-2 left-2 z-[200] rounded-md border border-amber-300 bg-amber-100 px-3 py-2 text-xs font-semibold text-amber-950 shadow">
+          Local E2E auth bypass — local-first workflows only; server APIs still need Supabase.
+        </div>
+      )}
       <CashierShiftGate profile={profile}>
         <StaffIdleScreen profile={profile} online={online}>
           {children}
@@ -417,9 +444,7 @@ function CashierShiftGate({
       const sessions = await getAllLocal<KeyedRecord>("cash_sessions");
       if (!active) return;
       const savedLocation =
-        typeof window === "undefined"
-          ? ""
-          : (window.localStorage.getItem(ACTIVE_LOCATION_KEY) ?? "");
+        typeof window === "undefined" ? "" : (getBrowserStorage(ACTIVE_LOCATION_KEY) ?? "");
       const requiredLocation = profile.location_ids.includes(savedLocation)
         ? savedLocation
         : profile.location_ids.length === 1
@@ -483,14 +508,6 @@ const EMPTY_IDLE_STATS: IdleStats = {
   salesTrend: [],
 };
 
-function pinDigest(pin: string, salt: string) {
-  return crypto.subtle
-    .digest("SHA-256", new TextEncoder().encode(`${salt}:${pin}`))
-    .then((digest) =>
-      Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
-    );
-}
-
 function StaffIdleScreen({
   profile,
   online,
@@ -503,7 +520,7 @@ function StaffIdleScreen({
   const [idle, setIdle] = useState(false);
   const [showUnlock, setShowUnlock] = useState(false);
   const [stats, setStats] = useState(EMPTY_IDLE_STATS);
-  const [savedPin, setSavedPin] = useState<{ salt: string; hash: string } | null>(null);
+  const [savedPin, setSavedPin] = useState<OfflinePinVerifier | null>(null);
   const [password, setPassword] = useState("");
   const [pin, setPin] = useState("");
   const [pinConfirmation, setPinConfirmation] = useState("");
@@ -513,6 +530,7 @@ function StaffIdleScreen({
   const idleRef = useRef(false);
   const lastActivity = useRef(Date.now());
   const pinSettingKey = `staff_device_resume_pin:${profile.user_id}`;
+  const pinAttemptsKey = `staff_device_resume_pin_attempts:${profile.user_id}`;
 
   useEffect(() => {
     let timer = 0;
@@ -546,16 +564,37 @@ function StaffIdleScreen({
     document.addEventListener("visibilitychange", checkInactivity);
     timer = window.setTimeout(enterIdle, 5 * 60 * 1000);
     const checkTimer = window.setInterval(checkInactivity, 10000);
-    void getSetting<{ salt: string; hash: string }>(pinSettingKey).then((value) =>
-      setSavedPin(value ?? null),
-    );
+    let active = true;
+    const loadPin = async () => {
+      if (LOCAL_E2E_AUTH_ENABLED) return;
+      const local = await getSetting<unknown>(pinSettingKey);
+      if (active && isOfflinePinVerifier(local)) setSavedPin(local);
+      if (!navigator.onLine) return;
+      try {
+        const result = await retailApi<{ verifier: OfflinePinVerifier | null }>(
+          "/api/staff-offline-pin",
+        );
+        if (!active) return;
+        if (result.verifier && isOfflinePinVerifier(result.verifier)) {
+          await setSetting(pinSettingKey, result.verifier);
+          setSavedPin(result.verifier);
+        } else {
+          await deleteLocal("settings", pinSettingKey);
+          setSavedPin(null);
+        }
+      } catch (error) {
+        console.warn("Could not refresh the server-backed device PIN", error);
+      }
+    };
+    void loadPin();
     return () => {
+      active = false;
       window.clearTimeout(timer);
       window.clearInterval(checkTimer);
       events.forEach((eventName) => window.removeEventListener(eventName, resetActivity));
       document.removeEventListener("visibilitychange", checkInactivity);
     };
-  }, [profile.user_id, pinSettingKey]);
+  }, [online, profile.user_id, pinSettingKey]);
 
   useEffect(() => {
     if (showUnlock) resumeFormRef.current?.querySelector("input")?.focus();
@@ -577,9 +616,7 @@ function StaffIdleScreen({
         ]);
       if (!active) return;
       const selected =
-        typeof window === "undefined"
-          ? ""
-          : (window.localStorage.getItem(ACTIVE_LOCATION_KEY) ?? "");
+        typeof window === "undefined" ? "" : (getBrowserStorage(ACTIVE_LOCATION_KEY) ?? "");
       const available =
         profile.role === "ADMIN"
           ? locations.map((row) => String(row["id"] ?? ""))
@@ -674,7 +711,9 @@ function StaffIdleScreen({
     setWorking(true);
     setMessage("");
     try {
-      if (online) {
+      if (LOCAL_E2E_AUTH_ENABLED) {
+        setMessage("");
+      } else if (online) {
         if (!password) throw new Error("Enter this staff account’s password to resume.");
         const { data: previous } = await supabase.auth.getSession();
         const result = await retailApi<{
@@ -693,19 +732,33 @@ function StaffIdleScreen({
           else await supabase.auth.signOut({ scope: "local" });
           throw new Error("Use the credentials for the staff member who opened this screen.");
         }
+        await deleteLocal("settings", pinAttemptsKey);
       } else {
         if (!/^\d{6,8}$/.test(pin)) throw new Error("Enter the 6 to 8 digit device PIN.");
-        if (!savedPin) {
-          if (pin !== pinConfirmation) throw new Error("The device PIN entries do not match.");
-          const salt = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-            byte.toString(16).padStart(2, "0"),
-          ).join("");
-          const stored = { salt, hash: await pinDigest(pin, salt) };
-          await setSetting(pinSettingKey, stored);
-          setSavedPin(stored);
-        } else if ((await pinDigest(pin, savedPin.salt)) !== savedPin.hash) {
-          throw new Error("That device PIN is incorrect.");
+        if (!savedPin)
+          throw new Error(
+            "No device PIN is available. Connect online and set one before going offline.",
+          );
+        const storedAttempts = await getSetting<number>(pinAttemptsKey);
+        const attempts =
+          typeof storedAttempts === "number" && Number.isInteger(storedAttempts)
+            ? Math.max(0, storedAttempts)
+            : 0;
+        if (attempts >= 5)
+          throw new Error(
+            "Too many incorrect PIN attempts. Connect online and sign in with your password.",
+          );
+        const verifier = await deriveOfflinePinVerifier(pin, savedPin.salt, savedPin.iterations);
+        if (verifier !== savedPin.verifier) {
+          const nextAttempts = attempts + 1;
+          await setSetting(pinAttemptsKey, nextAttempts);
+          throw new Error(
+            nextAttempts >= 5
+              ? "Too many incorrect PIN attempts. Connect online and sign in with your password."
+              : "That device PIN is incorrect.",
+          );
         }
+        await deleteLocal("settings", pinAttemptsKey);
       }
       idleRef.current = false;
       lastActivity.current = Date.now();
@@ -715,6 +768,34 @@ function StaffIdleScreen({
       setPinConfirmation("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not verify this staff member.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function enrollOfflinePin() {
+    if (working) return;
+    setWorking(true);
+    setMessage("");
+    try {
+      if (!online) throw new Error("Connect to the internet before setting a device PIN.");
+      if (!password) throw new Error("Enter your staff password to set a device PIN.");
+      if (!/^\d{6,8}$/.test(pin)) throw new Error("Choose a device PIN with 6 to 8 digits.");
+      if (pin !== pinConfirmation) throw new Error("The device PIN entries do not match.");
+      const result = await retailApi<{ ok: boolean; verifier: OfflinePinVerifier }>(
+        "/api/staff-offline-pin",
+        { method: "POST", json: { password, pin } },
+      );
+      if (!isOfflinePinVerifier(result.verifier))
+        throw new Error("The server returned an invalid device PIN verifier.");
+      await setSetting(pinSettingKey, result.verifier);
+      await deleteLocal("settings", pinAttemptsKey);
+      setSavedPin(result.verifier);
+      setPin("");
+      setPinConfirmation("");
+      setMessage("Device PIN saved for offline resume.");
+    } catch (error) {
+      setMessage(userFacingError(error, "Could not set the device PIN."));
     } finally {
       setWorking(false);
     }
@@ -732,16 +813,20 @@ function StaffIdleScreen({
           onKeyDown={() => setShowUnlock(true)}
           tabIndex={-1}
         >
-          <div className="retailflow-lock-glow" aria-hidden="true" />
+          <div className="retailflow-lock-glow" aria-hidden="true">
+            <span className="retailflow-lock-mountains" />
+            <span className="retailflow-lock-river" />
+            <span className="retailflow-lock-shooting-star" />
+          </div>
           <div
             aria-hidden={showUnlock}
             inert={showUnlock}
-            className={`relative mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-5 transition-all duration-200 ${showUnlock ? "pointer-events-none scale-[0.99] opacity-20 blur-sm" : ""}`}
+            className={`relative z-10 mx-auto flex min-h-full max-w-6xl flex-col justify-center gap-5 transition-all duration-200 ${showUnlock ? "pointer-events-none scale-[0.99] opacity-20 blur-sm" : ""}`}
           >
             <header className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <p className="text-sm uppercase tracking-[0.25em] text-emerald-200/80">
-                  RetailFlow · {profile.role.toLowerCase()}
+                  DailyPlazaa · {profile.role.toLowerCase()}
                 </p>
                 <h1 className="mt-1 text-3xl font-semibold sm:text-4xl">Store at a glance</h1>
               </div>
@@ -833,52 +918,86 @@ function StaffIdleScreen({
                   className="space-y-3"
                 >
                   {online ? (
-                    <div className="space-y-1">
-                      <Label htmlFor="idle-password" className="text-white/80">
-                        Staff password
-                      </Label>
-                      <Input
-                        id="idle-password"
-                        type="password"
-                        autoComplete="current-password"
-                        placeholder="Enter your password"
-                        value={password}
-                        onChange={(event) => setPassword(event.target.value)}
-                      />
-                    </div>
-                  ) : (
                     <>
-                      <p className="flex items-center gap-2 text-xs text-white/65">
-                        <WifiOff className="h-3.5 w-3.5" />
-                        Offline resume uses this device’s PIN.
-                      </p>
                       <div className="space-y-1">
-                        <Label htmlFor="idle-pin" className="text-white/80">
-                          {savedPin ? "Device PIN" : "Create a 6 to 8 digit device PIN"}
+                        <Label htmlFor="idle-password" className="text-white/80">
+                          Staff password
                         </Label>
                         <Input
-                          id="idle-pin"
+                          id="idle-password"
+                          type="password"
+                          autoComplete="current-password"
+                          placeholder="Enter your password"
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
+                        />
+                      </div>
+                      <section className="space-y-2 rounded-lg border border-white/15 p-3">
+                        <div>
+                          <p className="text-sm font-medium">Offline device PIN</p>
+                          <p className="text-xs text-white/60">
+                            {savedPin
+                              ? "A PIN is configured. You can update it while online."
+                              : "Set a PIN while online so it is available for offline resume."}
+                          </p>
+                        </div>
+                        <Input
+                          aria-label="New device PIN"
                           type="password"
                           inputMode="numeric"
                           autoComplete="off"
+                          maxLength={8}
+                          placeholder="6 to 8 digits"
                           value={pin}
                           onChange={(event) => setPin(event.target.value)}
                         />
-                      </div>
-                      {!savedPin && (
+                        <Input
+                          aria-label="Confirm device PIN"
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={8}
+                          placeholder="Confirm device PIN"
+                          value={pinConfirmation}
+                          onChange={(event) => setPinConfirmation(event.target.value)}
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full"
+                          disabled={working}
+                          onClick={() => void enrollOfflinePin()}
+                        >
+                          {savedPin ? "Update offline PIN" : "Set up offline PIN"}
+                        </Button>
+                      </section>
+                    </>
+                  ) : (
+                    <>
+                      {savedPin ? (
                         <div className="space-y-1">
-                          <Label htmlFor="idle-pin-confirm" className="text-white/80">
-                            Confirm device PIN
+                          <p className="flex items-center gap-2 text-xs text-white/65">
+                            <WifiOff className="h-3.5 w-3.5" />
+                            Offline resume uses the server-enrolled PIN stored on this device.
+                          </p>
+                          <Label htmlFor="idle-pin" className="text-white/80">
+                            Device PIN
                           </Label>
                           <Input
-                            id="idle-pin-confirm"
+                            id="idle-pin"
                             type="password"
                             inputMode="numeric"
                             autoComplete="off"
-                            value={pinConfirmation}
-                            onChange={(event) => setPinConfirmation(event.target.value)}
+                            maxLength={8}
+                            value={pin}
+                            onChange={(event) => setPin(event.target.value)}
                           />
                         </div>
+                      ) : (
+                        <p className="text-sm text-white/75">
+                          No device PIN is enrolled. Reconnect and set one before using offline
+                          resume.
+                        </p>
                       )}
                     </>
                   )}
@@ -887,7 +1006,7 @@ function StaffIdleScreen({
                       {message}
                     </p>
                   )}
-                  <Button className="w-full" disabled={working}>
+                  <Button className="w-full" disabled={working || (!online && !savedPin)}>
                     {working ? "Verifying…" : "Resume POS"}
                   </Button>
                 </form>
@@ -925,6 +1044,8 @@ function ChangePasswordScreen({
 }) {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [offlinePin, setOfflinePin] = useState("");
+  const [offlinePinConfirmation, setOfflinePinConfirmation] = useState("");
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [changed, setChanged] = useState(false);
@@ -940,12 +1061,20 @@ function ChangePasswordScreen({
       setMessage("The passwords do not match.");
       return;
     }
+    if (!/^\d{6,8}$/.test(offlinePin)) {
+      setMessage("Choose an offline device PIN with 6 to 8 digits.");
+      return;
+    }
+    if (offlinePin !== offlinePinConfirmation) {
+      setMessage("The device PIN entries do not match.");
+      return;
+    }
     setWorking(true);
     setMessage("");
     try {
       await retailApi<{ ok: boolean }>("/api/staff-password", {
         method: "POST",
-        json: { password },
+        json: { password, offline_pin: offlinePin },
       });
       setChanged(true);
     } catch (error) {
@@ -986,8 +1115,8 @@ function ChangePasswordScreen({
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {changed
-              ? "Your new password is active. Continue into RetailFlow or return to sign in and verify your new credentials."
-              : "Use a personal password before opening RetailFlow. The one-time password cannot be used again after this step."}
+              ? "Your new password is active. Continue into DailyPlazaa or return to sign in and verify your new credentials."
+              : "Use a personal password before opening DailyPlazaa. The one-time password cannot be used again after this step."}
           </p>
         </div>
         {changed ? (
@@ -996,7 +1125,7 @@ function ChangePasswordScreen({
               Password updated successfully.
             </p>
             <Button type="button" className="w-full" onClick={() => void continueToPos()}>
-              Continue to RetailFlow
+              Continue to DailyPlazaa
             </Button>
             <Button
               type="button"
@@ -1033,6 +1162,34 @@ function ChangePasswordScreen({
                 required
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="first-offline-pin">Offline device PIN</Label>
+              <Input
+                id="first-offline-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Choose 6 to 8 digits"
+                maxLength={8}
+                required
+                value={offlinePin}
+                onChange={(event) => setOfflinePin(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="confirm-offline-pin">Confirm offline device PIN</Label>
+              <Input
+                id="confirm-offline-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Confirm your device PIN"
+                maxLength={8}
+                required
+                value={offlinePinConfirmation}
+                onChange={(event) => setOfflinePinConfirmation(event.target.value)}
               />
             </div>
             {message && (
@@ -1112,6 +1269,15 @@ function SignInScreen({
     }
   }
 
+  async function continueAsLocalE2EAdmin() {
+    if (!LOCAL_E2E_AUTH_ENABLED || working || logoutPending) return;
+    await onSignedIn(LOCAL_E2E_PROFILE);
+    window.dispatchEvent(
+      new CustomEvent("retailflow:session-change", { detail: { profile: LOCAL_E2E_PROFILE } }),
+    );
+    await navigate({ to: "/admin" });
+  }
+
   return (
     <main className="grid min-h-dvh place-items-center bg-muted/40 p-4">
       <form
@@ -1122,12 +1288,21 @@ function SignInScreen({
           <LockKeyhole className="h-6 w-6" />
         </div>
         <div>
-          <h1 className="text-xl font-bold">Sign in to RetailFlow</h1>
+          <h1 className="text-xl font-bold">Sign in to DailyPlazaa</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Sign in with your email, username or confirmed mobile number and password. Your account
-            also needs an active RetailFlow role profile.
+            also needs an active DailyPlazaa role profile.
           </p>
         </div>
+        {LOCAL_E2E_AUTH_ENABLED && (
+          <p
+            role="status"
+            className="rounded-lg border border-amber-300 bg-amber-100 p-3 text-sm text-amber-950"
+          >
+            Local E2E auth bypass is enabled. Local-first flows work without sign-in; server APIs
+            still require Supabase.
+          </p>
+        )}
         {!online && (
           <p className="flex items-center gap-2 rounded-lg bg-warning/10 p-3 text-sm">
             <WifiOff className="h-4 w-4" /> Offline. Sign in on this device while online once to
@@ -1172,8 +1347,19 @@ function SignInScreen({
         <Button className="w-full" disabled={!online || working || logoutPending}>
           {working ? "Signing in…" : "Sign in"}
         </Button>
+        {LOCAL_E2E_AUTH_ENABLED && (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            disabled={working || logoutPending}
+            onClick={() => void continueAsLocalE2EAdmin()}
+          >
+            Continue as local E2E Admin
+          </Button>
+        )}
         <p className="text-xs text-muted-foreground">
-          One sign-in form works for every role. An active RetailFlow profile and location
+          One sign-in form works for every role. An active DailyPlazaa profile and location
           assignments are required for POS access.
         </p>
       </form>

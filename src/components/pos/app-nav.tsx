@@ -18,7 +18,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getBrowserStorage } from "@/lib/browser-storage";
 import { useAccess, canAccessLocation } from "@/lib/access";
+import { openPhoneScannerDialog } from "@/lib/phone-scanner-events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,7 +42,6 @@ const links: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: "/sales", label: "Sales", icon: ChartNoAxesCombined },
   { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/barcodes", label: "Barcodes", icon: Barcode },
-  { to: "/scanner", label: "Scanner", icon: ScanLine },
   { to: "/purchases", label: "Purchases", icon: ClipboardList },
   { to: "/cash-drawer", label: "Cash Drawer", icon: Vault },
   { to: "/manager", label: "Manager", icon: PackageSearch },
@@ -51,7 +52,7 @@ export function AppNav({ active }: { active: string }) {
   const { data: locations = [] } = useLocations();
   const [locationId, setLocationId] = useState("");
   useEffect(() => {
-    const read = () => setLocationId(window.localStorage.getItem("pos-location-id") ?? "");
+    const read = () => setLocationId(getBrowserStorage("pos-location-id") ?? "");
     read();
     window.addEventListener("retailflow:location-change", read);
     window.addEventListener("storage", read);
@@ -66,8 +67,8 @@ export function AppNav({ active }: { active: string }) {
   const shiftOpen = sessions.some((session) => session.status === "OPEN");
   const visibleLinks = links.filter(({ to }) => {
     if (!profile) return false;
-    if (profile.role === "CASHIER") return ["/billing", "/cash-drawer", "/scanner"].includes(to);
-    if (profile.role === "WAREHOUSE") return ["/inventory", "/barcodes", "/scanner"].includes(to);
+    if (profile.role === "CASHIER") return ["/billing", "/cash-drawer"].includes(to);
+    if (profile.role === "WAREHOUSE") return ["/inventory", "/barcodes"].includes(to);
     if (profile.role === "MANAGER")
       return [
         "/",
@@ -77,18 +78,10 @@ export function AppNav({ active }: { active: string }) {
         "/cash-drawer",
         "/manager",
         "/barcodes",
-        "/scanner",
       ].includes(to);
-    return [
-      "/",
-      "/admin",
-      "/sales",
-      "/inventory",
-      "/purchases",
-      "/manager",
-      "/barcodes",
-      "/scanner",
-    ].includes(to);
+    return ["/", "/admin", "/sales", "/inventory", "/purchases", "/manager", "/barcodes"].includes(
+      to,
+    );
   });
   return (
     <>
@@ -99,9 +92,9 @@ export function AppNav({ active }: { active: string }) {
             className="mr-2 flex shrink-0 items-center gap-2 text-sm font-bold tracking-tight sm:mr-3"
           >
             <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary font-display text-xs text-primary-foreground">
-              R
+              D
             </span>
-            Retail<span className="text-primary">Hub</span>
+            <span className="text-primary">DailyPlazaa</span>
           </Link>
           <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
             {visibleLinks.map(({ to, label, icon: Icon }) => (
@@ -120,6 +113,17 @@ export function AppNav({ active }: { active: string }) {
               </Link>
             ))}
           </nav>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            title="Connect a phone scanner"
+            aria-label="Connect a phone scanner"
+            onClick={openPhoneScannerDialog}
+          >
+            <ScanLine className="h-4 w-4" />
+          </Button>
           {profile && (
             <div className="ml-auto flex shrink-0 items-center gap-2 border-l pl-2 sm:pl-3">
               <UsernameProfileDialog />
@@ -159,7 +163,7 @@ export function AppNav({ active }: { active: string }) {
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>
-                  Quick guide · {links.find((link) => link.to === active)?.label ?? "RetailFlow"}
+                  Quick guide · {links.find((link) => link.to === active)?.label ?? "DailyPlazaa"}
                 </DialogTitle>
                 <DialogDescription>
                   Short steps for this screen. Close the guide at any time and reopen it from the

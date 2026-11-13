@@ -28,6 +28,8 @@ export function SearchableSelect({
   emptyMessage = "No matches found.",
   className,
   disabled = false,
+  onCreateOption,
+  createOptionLabel,
 }: {
   options: SearchableOption[];
   value: string;
@@ -37,10 +39,13 @@ export function SearchableSelect({
   emptyMessage?: string;
   className?: string;
   disabled?: boolean;
+  onCreateOption?: (query: string) => void;
+  createOptionLabel?: (query: string) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const selected = options.find((option) => option.value === value);
+  const createQuery = search.trim();
   const filtered = useMemo(
     () =>
       options.filter((option) =>
@@ -83,7 +88,23 @@ export function SearchableSelect({
             />
           </div>
           <CommandList className="max-h-64">
-            {!filtered.length && <CommandEmpty>{emptyMessage}</CommandEmpty>}
+            {!filtered.length &&
+              (onCreateOption && createQuery ? (
+                <CommandItem
+                  value={`create:${createQuery}`}
+                  onSelect={() => {
+                    onCreateOption(createQuery);
+                    setOpen(false);
+                    setSearch("");
+                  }}
+                >
+                  <span className="truncate">
+                    {createOptionLabel?.(createQuery) ?? `Add “${createQuery}”`}
+                  </span>
+                </CommandItem>
+              ) : (
+                <CommandEmpty>{emptyMessage}</CommandEmpty>
+              ))}
             {visible.map((option) => (
               <CommandItem
                 key={option.value}

@@ -1,6 +1,7 @@
 # Roadmap
 
-## RetailHub POS operational improvements
+## DailyPlazaa POS operational improvements
+
 - [ ] Require explicit billing location; keyboard customer selection with family balance and change/clear controls
 - [ ] Prefilled quick-add on barcode/SKU miss; bilingual fuzzy typeahead; bill date and hold/switch tabs
 - [ ] Flat/percentage invoice discount with floor-price protection

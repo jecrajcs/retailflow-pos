@@ -6,6 +6,7 @@ import { Camera, Check, Copy, Link2, Radio, ScanBarcode, Smartphone, Wifi } from
 import { toast } from "sonner";
 import { useAccess } from "@/lib/access";
 import { AppNav } from "@/components/pos/app-nav";
+import { openPhoneScannerDialog } from "@/lib/phone-scanner-events";
 import { CameraScannerPanel } from "@/components/pos/camera-scanner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,16 @@ export const Route = createFileRoute("/scanner")({ component: BarcodeScannerPage
 
 function BarcodeScannerPage() {
   const { profile } = useAccess();
-  const [phoneMode, setPhoneMode] = useState(false);
+  const [phoneMode] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mode") === "phone",
+  );
+  const [embedded] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("embedded") === "1",
+  );
   const [cameraActive, setCameraActive] = useState(false);
   const [offer, setOffer] = useState<ScannerPairPayload | null>(null);
   const [answer, setAnswer] = useState<ScannerPairPayload | null>(null);
@@ -46,8 +56,8 @@ function BarcodeScannerPage() {
   const serialAdapterRef = useRef<ScannerAdapter | null>(null);
 
   useEffect(() => {
-    setPhoneMode(new URLSearchParams(window.location.search).get("mode") === "phone");
     setCaps(scannerCapabilities());
+    if (!phoneMode && !embedded) return;
     if (typeof BroadcastChannel !== "undefined") {
       broadcastRef.current = new BroadcastChannel("retailflow-pos-scanner");
       broadcastRef.current.onmessage = (event: MessageEvent<unknown>) => {
@@ -83,7 +93,13 @@ function BarcodeScannerPage() {
       broadcastRef.current?.close();
       void serialAdapterRef.current?.disconnect();
     };
-  }, []);
+  }, [embedded, phoneMode]);
+
+  useEffect(() => {
+    if (phoneMode || embedded) return;
+    const timer = window.setTimeout(openPhoneScannerDialog, 0);
+    return () => window.clearTimeout(timer);
+  }, [embedded, phoneMode]);
 
   function attachChannel(channel: RTCDataChannel, isDesktop: boolean) {
     channelRef.current = channel;
@@ -279,20 +295,39 @@ function BarcodeScannerPage() {
           ? "Connection issue"
           : "Not paired";
 
+  if (!phoneMode && !embedded) {
+    return (
+      <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
+        <AppNav active="/scanner" />
+        <main className="m-auto max-w-lg space-y-3 rounded-xl border bg-card p-6 text-center">
+          <Smartphone className="mx-auto h-8 w-8 text-primary" />
+          <h1 className="text-xl font-semibold">Phone scanner</h1>
+          <p className="text-sm text-muted-foreground">
+            Pairing is available in a dialog from every POS screen. Keep it open while connecting
+            the phone on the same Wi-Fi or hotspot.
+          </p>
+          <Button type="button" onClick={openPhoneScannerDialog}>
+            Open scanner dialog
+          </Button>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="pos-shell flex h-dvh flex-col overflow-hidden bg-background">
-      {!phoneMode && <AppNav active="/scanner" />}
+      {!phoneMode && !embedded && <AppNav active="/scanner" />}
       <main className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto p-3 sm:p-6">
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-              <ScanBarcode className="h-4 w-4" /> RetailFlow scanner
+              <ScanBarcode className="h-4 w-4" /> DailyPlazaa scanner
             </p>
             <h1 className="mt-1 text-2xl font-bold">
               {phoneMode ? "Phone scanner" : "Barcode scanning"}
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Scan product barcodes in RetailFlow. Pairing uses a short-lived QR exchange and a
+              Scan product barcodes in DailyPlazaa. Pairing uses a short-lived QR exchange and a
               local peer connection. Only decoded values and low-resolution review photos requested
               by staff or sent after a failed photo decode cross between devices.
             </p>
@@ -401,13 +436,12 @@ function BarcodeScannerPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                  Open the phone companion in RetailFlow, scan the POS QR with its camera, then scan
-                  the reply QR from the phone here. Both devices must be on the same Wi-Fi or
+                  Open the phone companion in DailyPlazaa, scan the POS QR with its camera, then
+                  scan the reply QR from the phone here. Both devices must be on the same Wi-Fi or
                   hotspot with local device communication enabled. Pairing expires after five
                   minutes. Bluetooth keyboard-wedge scanners work directly; Bluetooth-only phone
-                  camera transfer is not supported by this browser app. Pairing uses Google's public
-                  STUN service to improve hotspot connectivity; restrictive networks may still
-                  require a relay service.
+                  camera transfer is not supported by this browser app. Pairing connects directly
+                  over the local network and does not depend on a public STUN or relay server.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={() => void startDesktopPairing()}>
@@ -510,7 +544,7 @@ function BarcodeScannerPage() {
                 <Capability
                   label="Phone camera"
                   available={caps.camera}
-                  detail="RetailFlow phone companion; no additional app install."
+                  detail="DailyPlazaa phone companion; no additional app install."
                 />
                 <Capability
                   label="Keyboard wedge scanner"

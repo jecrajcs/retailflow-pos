@@ -1,9 +1,11 @@
-# RetailFlow POS
+# DailyPlazaa POS
 
 अब आप प्रोजेक्ट बनाना स्टार्ट कीजिए, पूरा एंड टू एंड विद पॉस, विद बैकएंड, विद एवरीथिंग... एक बेसिक सिस्टम जहाँ पे मैं सीधा का सीधा जाके... स्कैन या बारकोड से स्कैन कर सकूँ या फिर... अ... सीधा सीधा प्रोडक्ट ऐड कर सकूँ पर... पॉस बनाने का, बिलिंग बनाने का, कस्टमर एडिशन सब चीज़ करना स्टार्ट कर सकूँ।
 
 Requirements based on our confirmed architecture:
+
 1. Complete PostgreSQL / Supabase schema for Hub-and-Spoke Retail:
+
 - locations (Central Warehouse, Outlet 1 Retail, Outlet 2 Retail, Outlet 3 Wholesale/Retail, Ecommerce Virtual Outlet)
 - products (id, name, barcode/sku, hsn, purchase_cost, mrp, sale_price, uom_purchase, uom_stock, uom_sale, conversion_factor, min_stock, is_loose, enrichment_status)
 - inventory (product_id, location_id, quantity_on_hand, reserved_qty)
@@ -16,6 +18,7 @@ Requirements based on our confirmed architecture:
 - stock_adjustments (id, product_id, location_id, quantity, reason: PEST/TORN/EXPIRED/SPOILAGE, returnable_to_vendor, cost_loss)
 
 2. Frontend UI Screens:
+
 - Single-Screen Fast POS Billing: Top store selector, keyboard shortcuts, barcode auto-focus input, invoice item grid, customer search/add without mandatory phone, visual quick-item tiles, and multi-location stock badge on each item with 1-click indent request.
 - On-the-fly quick item addition modal (name, price, UOM in 5s) directly from POS.
 - Payment modal: Split payment (Cash, UPI QR, Card, Customer Credit) with instant invoice-linked reconciliation.

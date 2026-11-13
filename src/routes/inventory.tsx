@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { getBrowserStorage } from "@/lib/browser-storage";
 import { DataTable } from "@/components/pos/data-table";
 import { IndentDialog } from "@/components/pos/indent-dialog";
 import { Button } from "@/components/ui/button";
@@ -44,13 +45,13 @@ import { canAccessLocation, saveActiveLocation, useAccess } from "@/lib/access";
 export const Route = createFileRoute("/inventory")({
   head: () => ({
     meta: [
-      { title: "RetailHub POS — Inventory" },
+      { title: "DailyPlazaa POS — Inventory" },
       {
         name: "description",
         content:
           "Full catalog stock across warehouse and outlets — rack locations, min stock limits, reorder status and one-click transfer requests.",
       },
-      { property: "og:title", content: "RetailHub POS — Inventory" },
+      { property: "og:title", content: "DailyPlazaa POS — Inventory" },
       {
         property: "og:description",
         content:
@@ -91,7 +92,7 @@ function InventoryPage() {
   const { data: inventory = [] } = useInventory();
   const { data: locationProducts = [] } = useLocationProducts();
 
-  const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
+  const [locationId, setLocationId] = useState<string>(() => getBrowserStorage(LS_KEY) ?? "");
   const location =
     allowedLocations.find((l) => l.id === locationId) ??
     allowedLocations.find((l) => l.type !== "WAREHOUSE") ??

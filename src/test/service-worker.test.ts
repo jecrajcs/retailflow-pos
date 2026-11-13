@@ -104,6 +104,6 @@ describe("offline scanner service worker", () => {
     const apiResponse = respond(new Request(`${origin}/api/retail-sync`));
     expect(apiResponse).toBeUndefined();
     expect(worker.fetchMock).toHaveBeenCalledTimes(1);
-    expect(worker.stores.get("retailflow-shell-v1")?.size).toBe(1);
+    expect(worker.stores.get("dailyplazaa-shell-v1")?.size).toBe(1);
   });
 });

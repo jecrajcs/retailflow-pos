@@ -1,4 +1,4 @@
--- Destructive baseline reset. This drops only RetailFlow-owned public objects
+-- Destructive baseline reset. This drops only app-owned public objects
 -- from the previous SQL migrations; Supabase-managed auth.*, storage, and
 -- system schemas are preserved.
 BEGIN;

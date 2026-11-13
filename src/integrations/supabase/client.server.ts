@@ -2,7 +2,7 @@
 // Server-side Supabase client with service role key - bypasses RLS.
 // Use this for admin operations in server functions and server routes only.
 // Browser data stays in the local replica; server endpoints must authorize a
-// RetailFlow staff session and role before using this service-role client.
+// DailyPlazaa staff session and role before using this service-role client.
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "./types";
 

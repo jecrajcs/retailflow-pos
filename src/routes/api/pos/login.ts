@@ -33,7 +33,7 @@ export function posProfileRequiredErrorResponse() {
   return jsonResponse(
     {
       error:
-        "Your Supabase sign-in succeeded, but this account is not linked to an active RetailFlow staff role. Ask the project administrator to complete POS access setup.",
+        "Your Supabase sign-in succeeded, but this account is not linked to an active DailyPlazaa staff role. Ask the project administrator to complete POS access setup.",
     },
     403,
   );

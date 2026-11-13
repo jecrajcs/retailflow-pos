@@ -1,10 +1,10 @@
-# RetailFlow POS बातचीत का सारांश
+# DailyPlazaa POS बातचीत का सारांश
 
 > **दस्तावेज़ का दायरा:** यह उपलब्ध chat context, implementation notes और session checkpoints के आधार पर तैयार किया गया विषयवार पुनर्निर्मित सारांश है। यह पूरी बातचीत का शब्दशः transcript नहीं है; कुछ शुरुआती messages summarized थे। इसमें कोई password, password hash, cookie, Supabase key या auth secret शामिल नहीं है।
 
 ## 1. प्रोजेक्ट और शुरुआती अनुरोध
 
-उपयोगकर्ता ने RetailFlow POS प्रोजेक्ट को हिंदी में समझाने और फिर अधूरे काम पूरे करने को कहा। सहमत product scope:
+उपयोगकर्ता ने DailyPlazaa POS प्रोजेक्ट को हिंदी में समझाने और फिर अधूरे काम पूरे करने को कहा। सहमत product scope:
 
 - Billing और receipts
 - Inventory, stock movement, transfer और adjustment
@@ -23,11 +23,11 @@ Customer/e-commerce login इस scope से बाहर रखा गया�
 
 - **Better Auth** को self-hosted application server पर चलने वाली authentication library के रूप में उपयोग करना।
 - **Supabase PostgreSQL** को application data और app-managed auth records का database बनाए रखना।
-- Staff identity, role, active state और location access को RetailFlow के staff profile में रखना।
+- Staff identity, role, active state और location access को DailyPlazaa के staff profile में रखना।
 - Password को केवल Better Auth-compatible one-way hash के रूप में store करना; plaintext password या recoverable password नहीं।
 - Authentication secret और Supabase server key को server-only environment variables में रखना।
 
-इसका अर्थ: Better Auth इस setup में कोई अलग hosted auth service नहीं है। यह project में install की गई third-party library है, जिसे RetailFlow server चलाता और configure करता है।
+इसका अर्थ: Better Auth इस setup में कोई अलग hosted auth service नहीं है। यह project में install की गई third-party library है, जिसे DailyPlazaa server चलाता और configure करता है।
 
 ## 3. Auth configuration और error handling
 

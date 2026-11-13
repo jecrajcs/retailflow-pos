@@ -14,6 +14,12 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { cn } from "@/lib/utils";
 import {
+  DEFAULT_ENABLED_CASH_DENOMINATIONS,
+  parseEnabledCashDenominations,
+} from "@/lib/cash-denominations";
+import { getSetting, setSetting } from "@/lib/local-db";
+import { LOCAL_E2E_AUTH_ENABLED } from "@/lib/local-e2e";
+import {
   createPosInvoice,
   inr,
   type CartLine,
@@ -22,11 +28,11 @@ import {
   type PaymentMode,
   type PaymentSplitInput,
 } from "@/lib/pos";
-import { userFacingError } from "@/lib/retail-api";
+import { retailApi, userFacingError } from "@/lib/retail-api";
 import {
   calculatePaymentAllocation,
-  CASH_DENOMINATIONS,
   suggestCashChange,
+  tenderAfterDenominationTap,
 } from "@/lib/payment-policy";
 
 const MODES: Array<{ value: PaymentMode; label: string; icon: typeof Banknote }> = [
@@ -40,6 +46,7 @@ interface Split {
   mode: PaymentMode;
   amount: string;
   tendered: string;
+  denominationEntryStarted?: boolean;
 }
 
 export function PaymentModal({
@@ -90,13 +97,77 @@ export function PaymentModal({
   const [changeNotes, setChangeNotes] = useState<Array<{ denomination: number; count: number }>>(
     [],
   );
+  const [enabledDenominations, setEnabledDenominations] = useState(
+    DEFAULT_ENABLED_CASH_DENOMINATIONS,
+  );
+  const [denominationError, setDenominationError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    const loadDenominations = async () => {
+      try {
+        const cached = await getSetting<unknown>("cash_enabled_denominations");
+        if (cached !== undefined && cached !== null) {
+          const parsed = parseEnabledCashDenominations(cached);
+          if (!parsed) throw new Error("The saved cash denomination setting is invalid.");
+          if (active) setEnabledDenominations(parsed);
+        }
+      } catch (error) {
+        if (active)
+          setDenominationError(
+            userFacingError(error, "Saved cash denomination settings could not be read."),
+          );
+      }
+
+      if (LOCAL_E2E_AUTH_ENABLED) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        if (active)
+          setDenominationError(
+            "Offline: using saved cash denominations, or defaults if none are saved.",
+          );
+        return;
+      }
+
+      try {
+        const result = await retailApi<{ enabled_denominations: unknown }>(
+          "/api/cash-denominations",
+        );
+        const parsed = parseEnabledCashDenominations(result.enabled_denominations);
+        if (!parsed) throw new Error("The server returned an invalid cash denomination setting.");
+        if (active) {
+          setEnabledDenominations(parsed);
+          setDenominationError("");
+        }
+        try {
+          await setSetting("cash_enabled_denominations", parsed);
+        } catch (error) {
+          if (active)
+            setDenominationError(
+              userFacingError(
+                error,
+                "The cash settings loaded, but could not be saved for offline use on this device.",
+              ),
+            );
+        }
+      } catch (error) {
+        if (active)
+          setDenominationError(
+            `${userFacingError(error, "Could not refresh cash denomination settings.")} Using saved settings or defaults.`,
+          );
+      }
+    };
+    void loadDenominations();
+    return () => {
+      active = false;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (open) {
-      setSplits([{ mode: "CASH", amount: String(total.toFixed(2)), tendered: "" }]);
+      setSplits([{ mode: "CASH", amount: "", tendered: "" }]);
       setBusy(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const allocation = useMemo(() => calculatePaymentAllocation(total, splits), [total, splits]);
@@ -111,7 +182,10 @@ export function PaymentModal({
     0,
   );
 
-  useEffect(() => setChangeNotes(suggestCashChange(change)), [change]);
+  useEffect(
+    () => setChangeNotes(suggestCashChange(change, enabledDenominations)),
+    [change, enabledDenominations],
+  );
 
   const upiAmount = splits
     .filter((s) => s.mode === "UPI")
@@ -220,7 +294,7 @@ export function PaymentModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-h-[90dvh] w-[calc(100vw-1rem)] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Collect payment</DialogTitle>
           <DialogDescription>
@@ -228,6 +302,18 @@ export function PaymentModal({
             change.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+          <div className="text-xs font-medium uppercase text-muted-foreground">Customer</div>
+          <div className="mt-0.5 truncate font-semibold">
+            {walkIn ? "Walk-in" : customer?.name || customer?.mobile}
+          </div>
+          {!walkIn && customer?.credit_limit ? (
+            <div className="text-xs text-muted-foreground">
+              Credit limit {inr(customer.credit_limit)}
+            </div>
+          ) : null}
+        </div>
 
         <div className="grid grid-cols-3 gap-2 text-center">
           <div className="rounded-lg border bg-muted/40 p-2">
@@ -274,10 +360,14 @@ export function PaymentModal({
           </div>
         </div>
 
-        <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
-          Customer: <strong>{walkIn ? "Walk-in" : customer?.name || customer?.mobile}</strong>
-          {!walkIn && customer?.credit_limit ? ` · credit limit ${inr(customer.credit_limit)}` : ""}
-        </div>
+        {denominationError && (
+          <p
+            role="status"
+            className="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs"
+          >
+            {denominationError}
+          </p>
+        )}
 
         <div className="space-y-2">
           {splits.map((s, i) => {
@@ -304,7 +394,9 @@ export function PaymentModal({
                     type="number"
                     className="min-w-0 text-right"
                     value={s.amount}
-                    onChange={(e) => updateSplit(i, { amount: e.target.value })}
+                    onChange={(e) =>
+                      updateSplit(i, { amount: e.target.value, denominationEntryStarted: false })
+                    }
                     aria-label={s.mode === "CASH" ? "Cash tendered" : `${s.mode} payment amount`}
                     placeholder={s.mode === "CASH" ? "Cash received" : "Amount applied"}
                   />
@@ -320,12 +412,19 @@ export function PaymentModal({
                 </div>
                 {s.mode === "CASH" && (
                   <div className="flex flex-wrap items-center gap-1.5 pl-0 sm:pl-11">
-                    {CASH_DENOMINATIONS.map((n) => (
+                    {enabledDenominations.map((n) => (
                       <button
                         key={n}
-                        onClick={() =>
-                          updateSplit(i, { amount: String((Number(s.amount) || 0) + n) })
-                        }
+                        onClick={() => {
+                          updateSplit(i, {
+                            amount: tenderAfterDenominationTap(
+                              s.amount,
+                              n,
+                              !s.denominationEntryStarted,
+                            ),
+                            denominationEntryStarted: true,
+                          });
+                        }}
                         className="rounded-md border bg-card px-2 py-1 text-xs font-medium tabular-nums hover:border-primary/40 hover:bg-accent"
                       >
                         +₹{n}
@@ -337,6 +436,7 @@ export function PaymentModal({
                           amount: String(
                             Math.max(total - nonCashPaid - creditAllocated, 0).toFixed(2),
                           ),
+                          denominationEntryStarted: false,
                         })
                       }
                       className="rounded-md border bg-primary/10 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/15"

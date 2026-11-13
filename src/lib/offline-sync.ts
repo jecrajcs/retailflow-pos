@@ -11,6 +11,7 @@ import {
   type OutboxOperation,
 } from "@/lib/local-db";
 import { mergeReplicaRows } from "@/lib/replica-merge-policy";
+import { LOCAL_E2E_AUTH_ENABLED } from "@/lib/local-e2e";
 
 type SyncResult = { synced: number; pending: number; failed: number };
 
@@ -54,6 +55,7 @@ function emitSyncStatus(detail: Record<string, unknown>) {
 
 /** Refreshes the local replica in the background. It never gates screen rendering. */
 export async function refreshLocalReplica() {
+  if (LOCAL_E2E_AUTH_ENABLED) return;
   if (!online()) return;
   try {
     let snapshot: { tables: Record<string, KeyedRecord[]> };
@@ -194,6 +196,12 @@ async function markRecordStatus(
 }
 
 export function syncOutbox(): Promise<SyncResult> {
+  if (LOCAL_E2E_AUTH_ENABLED)
+    return getPendingOperations().then((operations) => ({
+      synced: 0,
+      pending: operations.length,
+      failed: 0,
+    }));
   if (syncPromise) return syncPromise;
   syncPromise = (async () => {
     if (!online()) return { synced: 0, pending: (await getPendingOperations()).length, failed: 0 };
@@ -282,7 +290,7 @@ export function syncOutbox(): Promise<SyncResult> {
         retryAttempt = 0;
         window.setTimeout(() => {
           void syncOutbox().catch((error) =>
-            console.error("RetailFlow queued sync could not continue", error),
+            console.error("DailyPlazaa queued sync could not continue", error),
           );
         }, 0);
       } else {
@@ -292,7 +300,7 @@ export function syncOutbox(): Promise<SyncResult> {
         retryTimer = window.setTimeout(() => {
           retryTimer = null;
           void syncOutbox().catch((error) =>
-            console.error("RetailFlow queued sync retry failed", error),
+            console.error("DailyPlazaa queued sync retry failed", error),
           );
         }, delay);
       }
@@ -305,19 +313,21 @@ export function syncOutbox(): Promise<SyncResult> {
 }
 
 export function startOfflineSync() {
-  if (started || typeof window === "undefined") return;
+  if (LOCAL_E2E_AUTH_ENABLED || started || typeof window === "undefined") return;
   started = true;
   void refreshLocalReplica()
     .then(() => syncOutbox())
-    .catch((error) => console.error("RetailFlow offline sync could not start", error));
+    .catch((error) => console.error("DailyPlazaa offline sync could not start", error));
   const onOnline = () => {
     void refreshLocalReplica()
       .then(() => syncOutbox())
-      .catch((error) => console.error("RetailFlow reconnect sync failed", error));
+      .catch((error) => console.error("DailyPlazaa reconnect sync failed", error));
   };
   const onVisible = () => {
     if (document.visibilityState === "visible" && online()) {
-      void syncOutbox().catch((error) => console.error("RetailFlow background sync failed", error));
+      void syncOutbox().catch((error) =>
+        console.error("DailyPlazaa background sync failed", error),
+      );
     }
   };
   window.addEventListener("online", onOnline);
@@ -327,7 +337,7 @@ export function startOfflineSync() {
     window.setTimeout(() => {
       void refreshLocalReplica()
         .then(() => syncOutbox())
-        .catch((error) => console.error("RetailFlow session sync failed", error));
+        .catch((error) => console.error("DailyPlazaa session sync failed", error));
     }, 0);
   });
 }

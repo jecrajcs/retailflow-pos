@@ -1,4 +1,4 @@
--- Forward-only RetailFlow stabilization. Published migrations remain unchanged.
+-- Forward-only DailyPlazaa stabilization. Published migrations remain unchanged.
 
 ALTER TABLE public.cash_drawer_sessions
   ADD COLUMN opened_by_id uuid REFERENCES public.users(user_id),

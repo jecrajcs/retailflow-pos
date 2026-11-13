@@ -250,7 +250,7 @@ export function QuickAddModal({
             </div>
           )}
 
-          <div className={`grid gap-2 ${managerMode ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
+          <div className="grid gap-2">
             <div className="space-y-1">
               <Label htmlFor="qa-variant">Variant</Label>
               <Input
@@ -260,28 +260,6 @@ export function QuickAddModal({
                 placeholder="Size, shade, pack"
               />
             </div>
-            {managerMode && (
-              <>
-                <div className="space-y-1">
-                  <Label htmlFor="qa-category">Category</Label>
-                  <Input
-                    id="qa-category"
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    placeholder="e.g. Personal care"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="qa-subcategory">Subcategory</Label>
-                  <Input
-                    id="qa-subcategory"
-                    value={subcategory}
-                    onChange={(e) => setSubcategory(e.target.value)}
-                    placeholder="e.g. Shampoo"
-                  />
-                </div>
-              </>
-            )}
           </div>
 
           {managerMode && sku && (

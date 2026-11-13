@@ -20,6 +20,7 @@ import { Route as PurchasesRouteImport } from './routes/purchases'
 import { Route as SalesRouteImport } from './routes/sales'
 import { Route as ScannerRouteImport } from './routes/scanner'
 import { Route as ApiBarcodeCandidateRouteImport } from './routes/api/barcode-candidate'
+import { Route as ApiCashDenominationsRouteImport } from './routes/api/cash-denominations'
 import { Route as ApiCashSessionOverrideRouteImport } from './routes/api/cash-session-override'
 import { Route as ApiCategoryReviewRouteImport } from './routes/api/category-review'
 import { Route as ApiPublicOverviewRouteImport } from './routes/api/public-overview'
@@ -28,6 +29,7 @@ import { Route as ApiRetailSnapshotRouteImport } from './routes/api/retail-snaps
 import { Route as ApiRetailSyncRouteImport } from './routes/api/retail-sync'
 import { Route as ApiRetailWorkbookImportRouteImport } from './routes/api/retail-workbook-import'
 import { Route as ApiStaffRouteImport } from './routes/api/staff'
+import { Route as ApiStaffOfflinePinRouteImport } from './routes/api/staff-offline-pin'
 import { Route as ApiStaffPasswordRouteImport } from './routes/api/staff-password'
 import { Route as ApiStaffSessionRouteImport } from './routes/api/staff-session'
 import { Route as ApiStaffUsernameRouteImport } from './routes/api/staff-username'
@@ -90,6 +92,11 @@ const ApiBarcodeCandidateRoute = ApiBarcodeCandidateRouteImport.update({
   path: '/api/barcode-candidate',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiCashDenominationsRoute = ApiCashDenominationsRouteImport.update({
+  id: '/api/cash-denominations',
+  path: '/api/cash-denominations',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiCashSessionOverrideRoute = ApiCashSessionOverrideRouteImport.update({
   id: '/api/cash-session-override',
   path: '/api/cash-session-override',
@@ -128,6 +135,11 @@ const ApiRetailWorkbookImportRoute = ApiRetailWorkbookImportRouteImport.update({
 const ApiStaffRoute = ApiStaffRouteImport.update({
   id: '/api/staff',
   path: '/api/staff',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStaffOfflinePinRoute = ApiStaffOfflinePinRouteImport.update({
+  id: '/api/staff-offline-pin',
+  path: '/api/staff-offline-pin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiStaffPasswordRoute = ApiStaffPasswordRouteImport.update({
@@ -173,6 +185,7 @@ export interface FileRoutesByFullPath {
   '/sales': typeof SalesRoute
   '/scanner': typeof ScannerRoute
   '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
+  '/api/cash-denominations': typeof ApiCashDenominationsRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
@@ -181,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/api/retail-sync': typeof ApiRetailSyncRoute
   '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
+  '/api/staff-offline-pin': typeof ApiStaffOfflinePinRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
   '/api/staff-username': typeof ApiStaffUsernameRoute
@@ -200,6 +214,7 @@ export interface FileRoutesByTo {
   '/sales': typeof SalesRoute
   '/scanner': typeof ScannerRoute
   '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
+  '/api/cash-denominations': typeof ApiCashDenominationsRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
@@ -208,6 +223,7 @@ export interface FileRoutesByTo {
   '/api/retail-sync': typeof ApiRetailSyncRoute
   '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
+  '/api/staff-offline-pin': typeof ApiStaffOfflinePinRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
   '/api/staff-username': typeof ApiStaffUsernameRoute
@@ -228,6 +244,7 @@ export interface FileRoutesById {
   '/sales': typeof SalesRoute
   '/scanner': typeof ScannerRoute
   '/api/barcode-candidate': typeof ApiBarcodeCandidateRoute
+  '/api/cash-denominations': typeof ApiCashDenominationsRoute
   '/api/cash-session-override': typeof ApiCashSessionOverrideRoute
   '/api/category-review': typeof ApiCategoryReviewRoute
   '/api/public-overview': typeof ApiPublicOverviewRoute
@@ -236,6 +253,7 @@ export interface FileRoutesById {
   '/api/retail-sync': typeof ApiRetailSyncRoute
   '/api/retail-workbook-import': typeof ApiRetailWorkbookImportRoute
   '/api/staff': typeof ApiStaffRoute
+  '/api/staff-offline-pin': typeof ApiStaffOfflinePinRoute
   '/api/staff-password': typeof ApiStaffPasswordRoute
   '/api/staff-session': typeof ApiStaffSessionRoute
   '/api/staff-username': typeof ApiStaffUsernameRoute
@@ -257,6 +275,7 @@ export interface FileRouteTypes {
     | '/sales'
     | '/scanner'
     | '/api/barcode-candidate'
+    | '/api/cash-denominations'
     | '/api/cash-session-override'
     | '/api/category-review'
     | '/api/public-overview'
@@ -265,6 +284,7 @@ export interface FileRouteTypes {
     | '/api/retail-sync'
     | '/api/retail-workbook-import'
     | '/api/staff'
+    | '/api/staff-offline-pin'
     | '/api/staff-password'
     | '/api/staff-session'
     | '/api/staff-username'
@@ -284,6 +304,7 @@ export interface FileRouteTypes {
     | '/sales'
     | '/scanner'
     | '/api/barcode-candidate'
+    | '/api/cash-denominations'
     | '/api/cash-session-override'
     | '/api/category-review'
     | '/api/public-overview'
@@ -292,6 +313,7 @@ export interface FileRouteTypes {
     | '/api/retail-sync'
     | '/api/retail-workbook-import'
     | '/api/staff'
+    | '/api/staff-offline-pin'
     | '/api/staff-password'
     | '/api/staff-session'
     | '/api/staff-username'
@@ -311,6 +333,7 @@ export interface FileRouteTypes {
     | '/sales'
     | '/scanner'
     | '/api/barcode-candidate'
+    | '/api/cash-denominations'
     | '/api/cash-session-override'
     | '/api/category-review'
     | '/api/public-overview'
@@ -319,6 +342,7 @@ export interface FileRouteTypes {
     | '/api/retail-sync'
     | '/api/retail-workbook-import'
     | '/api/staff'
+    | '/api/staff-offline-pin'
     | '/api/staff-password'
     | '/api/staff-session'
     | '/api/staff-username'
@@ -339,6 +363,7 @@ export interface RootRouteChildren {
   SalesRoute: typeof SalesRoute
   ScannerRoute: typeof ScannerRoute
   ApiBarcodeCandidateRoute: typeof ApiBarcodeCandidateRoute
+  ApiCashDenominationsRoute: typeof ApiCashDenominationsRoute
   ApiCashSessionOverrideRoute: typeof ApiCashSessionOverrideRoute
   ApiCategoryReviewRoute: typeof ApiCategoryReviewRoute
   ApiPublicOverviewRoute: typeof ApiPublicOverviewRoute
@@ -347,6 +372,7 @@ export interface RootRouteChildren {
   ApiRetailSyncRoute: typeof ApiRetailSyncRoute
   ApiRetailWorkbookImportRoute: typeof ApiRetailWorkbookImportRoute
   ApiStaffRoute: typeof ApiStaffRoute
+  ApiStaffOfflinePinRoute: typeof ApiStaffOfflinePinRoute
   ApiStaffPasswordRoute: typeof ApiStaffPasswordRoute
   ApiStaffSessionRoute: typeof ApiStaffSessionRoute
   ApiStaffUsernameRoute: typeof ApiStaffUsernameRoute
@@ -434,6 +460,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiBarcodeCandidateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/cash-denominations': {
+      id: '/api/cash-denominations'
+      path: '/api/cash-denominations'
+      fullPath: '/api/cash-denominations'
+      preLoaderRoute: typeof ApiCashDenominationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/cash-session-override': {
       id: '/api/cash-session-override'
       path: '/api/cash-session-override'
@@ -488,6 +521,13 @@ declare module '@tanstack/react-router' {
       path: '/api/staff'
       fullPath: '/api/staff'
       preLoaderRoute: typeof ApiStaffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/staff-offline-pin': {
+      id: '/api/staff-offline-pin'
+      path: '/api/staff-offline-pin'
+      fullPath: '/api/staff-offline-pin'
+      preLoaderRoute: typeof ApiStaffOfflinePinRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/staff-password': {
@@ -547,6 +587,7 @@ const rootRouteChildren: RootRouteChildren = {
   SalesRoute: SalesRoute,
   ScannerRoute: ScannerRoute,
   ApiBarcodeCandidateRoute: ApiBarcodeCandidateRoute,
+  ApiCashDenominationsRoute: ApiCashDenominationsRoute,
   ApiCashSessionOverrideRoute: ApiCashSessionOverrideRoute,
   ApiCategoryReviewRoute: ApiCategoryReviewRoute,
   ApiPublicOverviewRoute: ApiPublicOverviewRoute,
@@ -555,6 +596,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRetailSyncRoute: ApiRetailSyncRoute,
   ApiRetailWorkbookImportRoute: ApiRetailWorkbookImportRoute,
   ApiStaffRoute: ApiStaffRoute,
+  ApiStaffOfflinePinRoute: ApiStaffOfflinePinRoute,
   ApiStaffPasswordRoute: ApiStaffPasswordRoute,
   ApiStaffSessionRoute: ApiStaffSessionRoute,
   ApiStaffUsernameRoute: ApiStaffUsernameRoute,

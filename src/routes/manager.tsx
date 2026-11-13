@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner";
 
 import { AppNav } from "@/components/pos/app-nav";
+import { getBrowserStorage } from "@/lib/browser-storage";
 import { DataTable } from "@/components/pos/data-table";
 import { WorkbookImporter } from "@/components/pos/workbook-importer";
 import { Button } from "@/components/ui/button";
@@ -68,12 +69,12 @@ import { refreshLocalReplica } from "@/lib/offline-sync";
 export const Route = createFileRoute("/manager")({
   head: () => ({
     meta: [
-      { title: "RetailHub POS — Manager" },
+      { title: "DailyPlazaa POS — Manager" },
       {
         name: "description",
         content: "Catalog enrichment queue, stock transfer requests and damage/expiry write-offs.",
       },
-      { property: "og:title", content: "RetailHub POS — Manager" },
+      { property: "og:title", content: "DailyPlazaa POS — Manager" },
       {
         property: "og:description",
         content: "Catalog enrichment queue, stock transfer requests and damage/expiry write-offs.",
@@ -159,7 +160,8 @@ function ManagerPage() {
   const { data: products = [] } = useProducts();
   const { data: purchases = [] } = usePurchases();
   const allowedLocations = locations.filter((item) => canAccessLocation(profile, item.id));
-  const [locationId, setLocationId] = useState<string>(() => localStorage.getItem(LS_KEY) ?? "");
+  const [locationId, setLocationId] = useState<string>(() => getBrowserStorage(LS_KEY) ?? "");
+  const [busyTransferRows, setBusyTransferRows] = useState<Record<string, boolean>>({});
   const location = allowedLocations.find((l) => l.id === locationId) ?? allowedLocations[0];
   const { data: allTransfers = [] } = useStockTransfers();
   const { data: allTransferItems = [] } = useTransferItems();
@@ -203,6 +205,7 @@ function ManagerPage() {
       if (action === "dispatch") await setTransferStatus(id, "IN_TRANSIT");
       else await receiveTransfer(id);
     },
+    onMutate: ({ id }) => setBusyTransferRows((rows) => ({ ...rows, [id]: true })),
     onSuccess: (_, vars) => {
       toast.success(vars.action === "dispatch" ? "Marked in transit" : "Stock received");
       void queryClient.invalidateQueries({ queryKey: ["transfers"] });
@@ -212,6 +215,12 @@ function ManagerPage() {
     onError: (e) =>
       toast.error("Action failed", {
         description: userFacingError(e, "The inventory action could not be completed."),
+      }),
+    onSettled: (_data, _error, variables) =>
+      setBusyTransferRows((rows) => {
+        const next = { ...rows };
+        delete next[variables.id];
+        return next;
       }),
   });
 
@@ -410,7 +419,7 @@ function ManagerPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={statusMut.isPending}
+                            disabled={busyTransferRows[row.id] === true}
                             onClick={() => statusMut.mutate({ id: row.id, action: "dispatch" })}
                           >
                             Dispatch
@@ -420,7 +429,7 @@ function ManagerPage() {
                         canAccessLocation(profile, row.to_location_id) && (
                           <Button
                             size="sm"
-                            disabled={statusMut.isPending}
+                            disabled={busyTransferRows[row.id] === true}
                             onClick={() => statusMut.mutate({ id: row.id, action: "receive" })}
                           >
                             Receive
@@ -1402,7 +1411,7 @@ function CategoryReviewQueue({
   locations: Array<{ id: string; name: string }>;
   onReviewed: () => void;
 }) {
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyRows, setBusyRows] = useState<Record<string, boolean>>({});
 
   async function review(row: CategoryReview, status: "APPROVED" | "REJECTED") {
     const reason =
@@ -1410,7 +1419,7 @@ function CategoryReviewQueue({
         ? (window.prompt(`Why should “${row.name}” be returned?`)?.trim() ?? "")
         : "";
     if (status === "REJECTED" && reason.length < 5) return;
-    setBusyId(row.id);
+    setBusyRows((rows) => ({ ...rows, [row.id]: true }));
     try {
       await retailApi("/api/category-review", {
         method: "POST",
@@ -1428,7 +1437,11 @@ function CategoryReviewQueue({
         description: userFacingError(error, "Refresh the review queue and try again."),
       });
     } finally {
-      setBusyId(null);
+      setBusyRows((rows) => {
+        const next = { ...rows };
+        delete next[row.id];
+        return next;
+      });
     }
   }
 
@@ -1475,15 +1488,15 @@ function CategoryReviewQueue({
             <div className="flex gap-1">
               <Button
                 size="sm"
-                disabled={busyId !== null}
+                disabled={busyRows[row.id] === true}
                 onClick={() => void review(row, "APPROVED")}
               >
-                Approve
+                {busyRows[row.id] ? "Saving…" : "Approve"}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={busyId !== null}
+                disabled={busyRows[row.id] === true}
                 onClick={() => void review(row, "REJECTED")}
               >
                 Return
@@ -1501,6 +1514,7 @@ function CategoryReviewQueue({
 function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArchive: boolean }) {
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [busyRows, setBusyRows] = useState<Record<string, boolean>>({});
 
   const saveMut = useMutation({
     mutationFn: async (p: Product) => {
@@ -1533,10 +1547,17 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
         review_reason: null,
       });
     },
+    onMutate: (product) => setBusyRows((rows) => ({ ...rows, [product.id]: true })),
     onSuccess: () => {
       toast.success("Product completed");
       void queryClient.invalidateQueries({ queryKey: ["products"] });
     },
+    onSettled: (_data, _error, product) =>
+      setBusyRows((rows) => {
+        const next = { ...rows };
+        delete next[product.id];
+        return next;
+      }),
     onError: (e) =>
       toast.error("Save failed", {
         description: userFacingError(e, "The product changes could not be saved."),
@@ -1549,10 +1570,17 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
       if (reason.length < 5) throw new Error("Enter a clear reason of at least five characters.");
       await updateProductProfile(p.id, { review_status: "REJECTED", review_reason: reason });
     },
+    onMutate: (product) => setBusyRows((rows) => ({ ...rows, [product.id]: true })),
     onSuccess: () => {
       toast.success("SKU returned for correction");
       void queryClient.invalidateQueries({ queryKey: ["products"] });
     },
+    onSettled: (_data, _error, product) =>
+      setBusyRows((rows) => {
+        const next = { ...rows };
+        delete next[product.id];
+        return next;
+      }),
     onError: (error) =>
       toast.error("Could not reject SKU", {
         description: userFacingError(error, "Check the reason and try again."),
@@ -1842,10 +1870,11 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
                   variant="outline"
                   onClick={() => rejectMut.mutate(p)}
                   disabled={
-                    rejectMut.isPending || (drafts[p.id]?.["review_reason"] ?? "").trim().length < 5
+                    busyRows[p.id] === true ||
+                    (drafts[p.id]?.["review_reason"] ?? "").trim().length < 5
                   }
                 >
-                  Reject with reason
+                  {busyRows[p.id] ? "Saving…" : "Reject with reason"}
                 </Button>
               </div>
             ),
@@ -1857,8 +1886,12 @@ function EnrichmentQueue({ products, canArchive }: { products: Product[]; canArc
             sortable: false,
             cell: (p) => (
               <div className="flex gap-1">
-                <Button size="sm" onClick={() => saveMut.mutate(p)} disabled={saveMut.isPending}>
-                  Approve
+                <Button
+                  size="sm"
+                  onClick={() => saveMut.mutate(p)}
+                  disabled={busyRows[p.id] === true}
+                >
+                  {busyRows[p.id] ? "Saving…" : "Approve"}
                 </Button>
                 {canArchive && (
                   <Button size="sm" variant="destructive" onClick={() => void archive(p)}>

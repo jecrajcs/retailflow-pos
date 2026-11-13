@@ -15,10 +15,10 @@ BEGIN
     SELECT 1 FROM public.users
     WHERE role = 'ADMIN' AND is_active = true
   ) THEN
-    RAISE EXCEPTION 'An active RetailFlow Admin profile already exists';
+    RAISE EXCEPTION 'An active DailyPlazaa Admin profile already exists';
   END IF;
   IF EXISTS (SELECT 1 FROM public.users WHERE user_id = v_auth_user_id) THEN
-    RAISE EXCEPTION 'This Auth user already has a RetailFlow staff profile';
+    RAISE EXCEPTION 'This Auth user already has a DailyPlazaa staff profile';
   END IF;
 
   INSERT INTO public.users (user_id, display_name, email, phone, role, is_active)
